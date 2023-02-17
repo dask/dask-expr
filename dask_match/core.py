@@ -315,9 +315,10 @@ class IO(API):
     pass
 
 
-class ReadParquet(IO):
-    _parameters = ["filename", "columns", "filters"]
-    _defaults = {"columns": None, "filters": None}
+def ReadParquet(*args, **kwargs):
+    from dask_match.io.parquet import ReadParquet
+
+    return ReadParquet(*args, **kwargs)
 
 
 class ReadCSV(IO):
