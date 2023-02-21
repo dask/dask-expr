@@ -1,5 +1,9 @@
+import os
+
 import pandas as pd
 import pytest
+from dask.dataframe.utils import assert_eq
+from dask.utils import M
 
 from dask_match import ReadCSV, ReadParquet, from_pandas, optimize
 
@@ -9,13 +13,16 @@ def test_basic():
     y = ReadCSV("myfile.csv", usecols=("a", "d", "e"))
 
     z = x + y
-    result = z[("a", "b", "d")].sum(skipna=False)
-    assert result.skipna is False
+    result = z[("a", "b", "d")].sum(skipna="foo")
+    assert result.skipna == "foo"
     assert result.operands[0].columns == ("a", "b", "d")
 
+    x + 1
+    1 + x
 
-df = ReadParquet("myfile.parquet", columns=("a", "b", "c"))
-df_bc = ReadParquet("myfile.parquet", columns=("b", "c"))
+
+df = ReadParquet("myfile.parquet", columns=["a", "b", "c"])
+df_bc = ReadParquet("myfile.parquet", columns=["b", "c"])
 
 
 @pytest.mark.parametrize(
@@ -33,24 +40,29 @@ df_bc = ReadParquet("myfile.parquet", columns=("b", "c"))
         ),
         (
             # Compound
-            3 * (df + df)[("b", "c")],
+            3 * (df + df)[["b", "c"]],
             6 * df_bc,
         ),
         (
             # Traverse Sum
-            df.sum()[("b", "c")],
+            df.sum()[["b", "c"]],
             df_bc.sum(),
         ),
         (
             # Respect Sum keywords
-            df.sum(numeric_only=True)[("b", "c")],
+            df.sum(numeric_only=True)[["b", "c"]],
             df_bc.sum(numeric_only=True),
         ),
+        # (
+        #     # Traverse Max
+        #     df.max()[["b", "c"]],
+        #     df_bc.max(),
+        # ),
     ],
 )
 def test_optimize(input, expected):
     result = optimize(input)
-    assert result == expected
+    assert str(result) == str(expected)
 
 
 def test_meta_divisions_name():
@@ -59,8 +71,8 @@ def test_meta_divisions_name():
     assert list(df.columns) == list(a.columns)
     assert df.npartitions == 2
 
-    assert df["x"].sum()._meta == 0
-    assert df["x"].sum().npartitions == 1
+    assert df.x.sum()._meta == 0
+    assert df.x.sum().npartitions == 1
 
     assert "mul" in df._name
     assert "sum" in df.sum()._name
@@ -81,8 +93,139 @@ def test_dask():
     df = pd.DataFrame({"x": range(100), "y": range(100)})
     df["y"] = df.y * 10.0
 
-    ddf = from_pandas(df, npartitions=1)
-    assert (ddf["x"] + ddf["y"]).npartitions == 1
-    z = (ddf["x"] + ddf["y"]).sum()
+    ddf = from_pandas(df, npartitions=10)
+    assert (ddf.x + ddf.y).npartitions == 10
+    z = (ddf.x + ddf.y).sum()
 
     assert z.compute() == (df.x + df.y).sum()
+
+
+@pytest.mark.parametrize(
+    "func",
+    [
+        M.max,
+        M.min,
+        M.sum,
+        M.count,
+        pytest.param(
+            M.mean,
+            marks=pytest.mark.skip(reason="scalars don't work yet"),
+        ),
+        lambda df: df.size,
+    ],
+)
+def test_reductions(func):
+    df = pd.DataFrame({"x": range(100), "y": range(100)})
+    df["y"] = df.y * 10.0
+    ddf = from_pandas(df, npartitions=10)
+
+    assert_eq(func(ddf).compute(), func(df))
+    assert_eq(func(ddf.x).compute(), func(df.x))
+
+
+def test_mode():
+    df = pd.DataFrame({"x": [1, 2, 3, 1, 2]})
+    ddf = from_pandas(df, npartitions=3)
+
+    assert_eq(ddf.x.mode().compute(), df.x.mode())
+
+
+@pytest.mark.parametrize(
+    "func",
+    [
+        lambda df: df.x > 10,
+        lambda df: df.x + 20 > df.y,
+        lambda df: 10 < df.x,
+        lambda df: 10 <= df.x,
+        lambda df: 10 == df.x,
+        lambda df: df.x < df.y,
+        lambda df: df.x > df.y,
+        lambda df: df.x == df.y,
+        lambda df: df.x != df.y,
+    ],
+)
+def test_conditionals(func):
+    df = pd.DataFrame({"x": range(100), "y": range(100)})
+    df["y"] = df.y * 2.0
+    ddf = from_pandas(df, npartitions=10)
+
+    assert_eq(func(df), func(ddf).compute())
+
+
+@pytest.mark.xfail(reason="TODO: Debug this")
+def test_predicate_pushdown(tmpdir):
+    from dask_match.io.parquet import ReadParquet as ReadPq
+
+    fn = os.path.join(str(tmpdir), "myfile.parquet")
+    pd.DataFrame(
+        {
+            "a": [1, 2, 3, 4, 5] * 10,
+            "b": [0] * 50,
+            "c": range(50),
+        }
+    ).to_parquet(fn)
+
+    df = ReadParquet(fn, columns=("a", "b", "c"))
+    x = df[df.a == 5][df.c > 20]["b"]
+    y = optimize(x)
+    assert isinstance(df, ReadPq)
+    assert ("==", "a", 5) in y.filters or ("==", 5, "a") in y.filters
+    assert (">", "c", 20) in y.filters
+    assert y.columns == "b"
+
+
+@pytest.mark.parametrize(
+    "func",
+    [
+        lambda df: df.astype(int),
+        lambda df: df.apply(lambda row, x, y=10: row * x + y, x=2),
+        lambda df: df[df.x > 5],
+    ],
+)
+def test_blockwise(func):
+    df = pd.DataFrame({"x": range(20), "y": range(20)})
+    df["y"] = df.y * 2.0
+    ddf = from_pandas(df, npartitions=3)
+
+    assert_eq(func(df), func(ddf).compute())
+
+
+def test_repr():
+    df = pd.DataFrame({"x": range(20), "y": range(20)})
+    df = from_pandas(df, npartitions=1)
+
+    assert "+ 1" in str(df + 1)
+    assert "+ 1" in repr(df + 1)
+
+    s = (df["x"] + 1).sum(skipna=False)
+    assert '["x"]' in s or "['x']" in s
+    assert "+ 1" in s
+    assert "sum(skipna=False)" in s
+
+    assert "ReadParquet" in ReadParquet("filename")
+
+
+def test_columns_traverse_filters():
+    df = pd.DataFrame({"x": range(20), "y": range(20), "z": range(20)})
+    df = from_pandas(df, npartitions=2)
+
+    expr = df[df.x > 5].y
+    result = optimize(expr)
+    expected = df.y[df.x > 5]
+
+    assert str(result) == str(expected)
+
+
+def test_persist():
+    df = pd.DataFrame({"x": range(20), "y": range(20), "z": range(20)})
+    ddf = from_pandas(df, npartitions=2)
+
+    a = ddf + 2
+    b = a.persist()
+
+    assert_eq(a.compute(), b.compute())
+    assert len(a.__dask_graph__()) > len(b.__dask_graph__())
+
+    assert len(b.__dask_graph__()) == b.npartitions
+
+    assert_eq(b.y.sum().compute(), (df + 2).y.sum())

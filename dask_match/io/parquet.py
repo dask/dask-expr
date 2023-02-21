@@ -1,5 +1,5 @@
 from __future__ import annotations
-from functools import cached_property
+from functools import cached_property, partial
 
 from fsspec.utils import stringify_path
 
@@ -12,14 +12,22 @@ from dask.dataframe.io.parquet.core import (
 )
 from dask.dataframe.io.parquet.utils import _split_user_options
 from dask.utils import natural_sort_key
+from matchpy import (
+    CustomConstraint,
+    Pattern,
+    ReplacementRule,
+    Wildcard,
+)
 
-from dask_match.core import IO
+from dask_match.core import IO, LE, LT, GE, GT, EQ, NE, Filter
 
 
 NONE_LABEL = "__null_dask_index__"
 
 
 class ReadParquet(IO):
+    """Read a parquet dataset"""
+
     _parameters = [
         "path",
         "columns",
@@ -58,20 +66,138 @@ class ReadParquet(IO):
         "kwargs": {},
     }
 
+    @staticmethod
+    def normalize(
+        path=None,
+        columns=None,
+        filters=None,
+        categories=None,
+        index=None,
+        storage_options=None,
+        engine="auto",
+        use_nullable_dtypes=False,
+        calculate_divisions=False,
+        ignore_metadata_file=False,
+        metadata_task_size=None,
+        split_row_groups="infer",
+        blocksize="default",
+        aggregate_files=None,
+        parquet_file_extension=(".parq", ".parquet", ".pq"),
+        filesystem=None,
+        **kwargs,
+    ):
+        if isinstance(columns, (str, int)):
+            columns = [columns]
+        elif isinstance(columns, tuple):
+            columns = list(columns)
+
+        if use_nullable_dtypes:
+            use_nullable_dtypes = dask.config.get("dataframe.dtype_backend")
+
+        if isinstance(engine, str):
+            engine = get_engine(engine)
+
+        if hasattr(path, "name"):
+            path = stringify_path(path)
+
+        return (
+            path,
+            columns,
+            filters,
+            categories,
+            index,
+            storage_options,
+            engine,
+            use_nullable_dtypes,
+            calculate_divisions,
+            ignore_metadata_file,
+            metadata_task_size,
+            split_row_groups,
+            blocksize,
+            aggregate_files,
+            parquet_file_extension,
+            filesystem,
+            kwargs,
+        ), {}
+
+    @classmethod
+    def _replacement_rules(cls):
+        _ = Wildcard.dot()
+        a, b, c, d, e, f = map(Wildcard.dot, "abcdef")
+
+        # Column projection
+        yield ReplacementRule(
+            Pattern(ReadParquet(a, columns=b, filters=c)[d]),
+            lambda a, b, c, d: ReadParquet(a, columns=d, filters=c),
+        )
+
+        # Predicate pushdown to parquet
+        for op in [LE, LT, GE, GT, EQ, NE]:
+
+            def predicate_pushdown(a, b, c, d, e, op=None):
+                return ReadParquet(
+                    a, columns=b, filters=(c or []) + [(op._operator_repr, d, e)]
+                )
+
+            yield ReplacementRule(
+                Pattern(
+                    Filter(
+                        ReadParquet(a, columns=b, filters=c),
+                        op(ReadParquet(a, columns=_, filters=c)[d], e),
+                    )
+                ),
+                partial(predicate_pushdown, op=op),
+            )
+
+            def predicate_pushdown(a, b, c, d, e, op=None):
+                return ReadParquet(
+                    a, columns=b, filters=(c or []) + [(op._operator_repr, e, d)]
+                )
+
+            yield ReplacementRule(
+                Pattern(
+                    Filter(
+                        ReadParquet(a, columns=b, filters=c),
+                        op(e, ReadParquet(a, columns=_, filters=c)[d]),
+                    )
+                ),
+                partial(predicate_pushdown, op=op),
+            )
+
+            def predicate_pushdown(a, b, c, d, e, op=None):
+                return ReadParquet(
+                    a, columns=b, filters=(c or []) + [(op._operator_repr, d, e)]
+                )
+
+            yield ReplacementRule(
+                Pattern(
+                    Filter(
+                        ReadParquet(a, columns=b, filters=c),
+                        op(ReadParquet(a, columns=d, filters=_), e),
+                    ),
+                    CustomConstraint(lambda d: isinstance(d, str)),
+                ),
+                partial(predicate_pushdown, op=op),
+            )
+
+            def predicate_pushdown(a, b, c, d, e, op=None):
+                return ReadParquet(
+                    a, columns=b, filters=(c or []) + [(op._operator_repr, e, d)]
+                )
+
+            yield ReplacementRule(
+                Pattern(
+                    Filter(
+                        ReadParquet(a, columns=b, filters=c),
+                        op(e, ReadParquet(a, columns=d, filters=_)),
+                    ),
+                    CustomConstraint(lambda d: isinstance(d, str)),
+                ),
+                partial(predicate_pushdown, op=op),
+            )
+
     @cached_property
     def _dataset_info(self):
-
-        if self.use_nullable_dtypes:
-            self.use_nullable_dtypes = dask.config.get("dataframe.dtype_backend")
-
-        if isinstance(self.columns, str):
-            self.columns = [self.columns]
-
-        if isinstance(self.engine, str):
-            self.engine = get_engine(self.engine)
-
-        if hasattr(self.path, "name"):
-            self.path = stringify_path(self.path)
 
         # Process and split user options
         (
@@ -99,7 +225,7 @@ class ReadParquet(IO):
         if self.index and isinstance(self.index, str):
             self.index = [self.index]
 
-        if self.split_row_groups in ("infer", "auto"):
+        if self.split_row_groups in ("infer", "adaptive"):
             # Using blocksize to plan partitioning
             if self.blocksize == "default":
                 if hasattr(self.engine, "default_blocksize"):
