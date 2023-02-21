@@ -107,17 +107,13 @@ class API(Operation, DaskMethodsMixin, metaclass=_APIMeta):
 
     def __getattr__(self, key):
         if key not in ("__name__",):
-            try:
-                if key in type(self)._parameters:
-                    idx = type(self)._parameters.index(key)
-                    return self.operands[idx]
-                elif key in dir(type(self)):
-                    return object.__getattribute__(self, key)
-                elif key in self.columns:
-                    return self[key]
-            except:
-                import pdb; pdb.set_trace()
-                pass
+            if key in type(self)._parameters:
+                idx = type(self)._parameters.index(key)
+                return self.operands[idx]
+            elif key in dir(type(self)):
+                return object.__getattribute__(self, key)
+            elif key in self.columns:
+                return self[key]
         return object.__getattribute__(self, key)
 
     def __setattr__(self, key, value):
