@@ -1,6 +1,7 @@
 import os
 
 import pandas as pd
+import numpy as np
 import pytest
 from dask.dataframe.utils import assert_eq
 from dask.utils import M
@@ -159,7 +160,7 @@ def test_predicate_pushdown(tmpdir):
     original = pd.DataFrame(
         {
             "a": [1, 2, 3, 4, 5] * 10,
-            "b": [0] * 50,
+            "b": [0, 1, 2, 3, 4] * 10,
             "c": range(50),
         }
     )
@@ -170,9 +171,15 @@ def test_predicate_pushdown(tmpdir):
     x = df[df.a == 5][df.c > 20]["b"]
     y = optimize(x)
     assert isinstance(y, ReadParquet)
-    assert ("==", "a", 5) in y.filters or ("==", 5, "a") in y.filters
-    assert (">", "c", 20) in y.filters
-    assert y.columns == "b"
+    assert ("a", "==", 5) in y.filters or ("a", "==", 5) in y.filters
+    assert ("c", ">", 20) in y.filters
+    assert y.columns == ["b"]
+
+    # Check computed result
+    y_result = y.compute()
+    assert list(y_result.columns) == ["b"]
+    assert len(y_result["b"]) == 6
+    assert all(y_result["b"] == 4)
 
 
 @pytest.mark.parametrize(

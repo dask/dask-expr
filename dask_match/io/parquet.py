@@ -19,6 +19,15 @@ from dask_match.core import EQ, GE, GT, IO, LE, LT, NE, Filter
 NONE_LABEL = "__null_dask_index__"
 
 
+def _list_columns(columns):
+    # Simple utility to convert columns to list
+    if isinstance(columns, (str, int)):
+        columns = [columns]
+    elif isinstance(columns, tuple):
+        columns = list(columns)
+    return columns
+
+
 class ReadParquet(IO):
     """Read a parquet dataset"""
 
@@ -70,15 +79,18 @@ class ReadParquet(IO):
         # Column projection
         yield ReplacementRule(
             Pattern(ReadParquet(a, columns=b, filters=c)[d]),
-            lambda a, b, c, d: ReadParquet(a, columns=d, filters=c),
+            lambda a, b, c, d: ReadParquet(a, columns=_list_columns(d), filters=c),
         )
+
+        # Simple dict to make sure field comes first in filter
+        flip_op = {LE: GE, LT: GT, GE: LE, GT: LT}
 
         # Predicate pushdown to parquet
         for op in [LE, LT, GE, GT, EQ, NE]:
 
             def predicate_pushdown(a, b, c, d, e, op=None):
                 return ReadParquet(
-                    a, columns=b, filters=(c or []) + [(op._operator_repr, d, e)]
+                    a, columns=_list_columns(b), filters=(c or []) + [(d, op._operator_repr, e)]
                 )
 
             yield ReplacementRule(
@@ -93,7 +105,7 @@ class ReadParquet(IO):
 
             def predicate_pushdown(a, b, c, d, e, op=None):
                 return ReadParquet(
-                    a, columns=b, filters=(c or []) + [(op._operator_repr, e, d)]
+                    a, columns=_list_columns(b), filters=(c or []) + [(d, op._operator_repr, e)]
                 )
 
             yield ReplacementRule(
@@ -103,12 +115,12 @@ class ReadParquet(IO):
                         op(e, ReadParquet(a, columns=_, filters=_)[d]),
                     )
                 ),
-                partial(predicate_pushdown, op=op),
+                partial(predicate_pushdown, op=flip_op.get(op, op)),
             )
 
             def predicate_pushdown(a, b, c, d, e, op=None):
                 return ReadParquet(
-                    a, columns=b, filters=(c or []) + [(op._operator_repr, d, e)]
+                    a, columns=_list_columns(b), filters=(c or []) + [(d, op._operator_repr, e)]
                 )
 
             yield ReplacementRule(
@@ -124,7 +136,7 @@ class ReadParquet(IO):
 
             def predicate_pushdown(a, b, c, d, e, op=None):
                 return ReadParquet(
-                    a, columns=b, filters=(c or []) + [(op._operator_repr, e, d)]
+                    a, columns=_list_columns(b), filters=(c or []) + [(d, op._operator_repr, e)]
                 )
 
             yield ReplacementRule(
@@ -135,7 +147,7 @@ class ReadParquet(IO):
                     ),
                     CustomConstraint(lambda d: isinstance(d, str)),
                 ),
-                partial(predicate_pushdown, op=op),
+                partial(predicate_pushdown, op=flip_op.get(op, op)),
             )
 
     @cached_property
@@ -291,11 +303,6 @@ def read_parquet(
     filesystem="fsspec",
     **kwargs,
 ):
-    if isinstance(columns, (str, int)):
-        columns = [columns]
-    elif isinstance(columns, tuple):
-        columns = list(columns)
-
     if use_nullable_dtypes:
         use_nullable_dtypes = dask.config.get("dataframe.dtype_backend")
 
@@ -304,7 +311,7 @@ def read_parquet(
 
     return ReadParquet(
         path,
-        columns=columns,
+        columns=_list_columns(columns),
         filters=filters,
         categories=categories,
         index=index,
