@@ -157,15 +157,17 @@ def test_predicate_pushdown(tmpdir):
     from dask_match.io.parquet import ReadParquet
 
     fn = os.path.join(str(tmpdir), "myfile.parquet")
-    pd.DataFrame(
+    original = pd.DataFrame(
         {
             "a": [1, 2, 3, 4, 5] * 10,
             "b": [0] * 50,
             "c": range(50),
         }
-    ).to_parquet(fn)
+    )
+    original.to_parquet(fn)
 
-    df = read_parquet(fn, columns=("a", "b", "c"))
+    df = read_parquet(fn)
+    assert_eq(df, original)
     x = df[df.a == 5][df.c > 20]["b"]
     y = optimize(x)
     assert isinstance(df, ReadParquet)
