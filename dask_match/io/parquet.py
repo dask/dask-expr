@@ -84,6 +84,10 @@ class ReadParquet(IO):
 
             return pd.Index(_list_columns(self.input_columns))
 
+    @property
+    def input_index(self):
+        return self.operands[self._parameters.index("index")]
+
     @classmethod
     def _replacement_rules(cls):
         _ = Wildcard.dot()
@@ -186,12 +190,15 @@ class ReadParquet(IO):
         paths = sorted(paths, key=natural_sort_key)  # numeric rather than glob ordering
 
         auto_index_allowed = False
-        if self.index is None:
+        if self.input_index is None:
             # User is allowing auto-detected index
             auto_index_allowed = True
-        if self.index and isinstance(self.index, str):
-            self.index = [self.index]
+        if self.input_index and isinstance(self.input_index, str):
+            index = [self.input_index]
+        else:
+            index = self.input_index
 
+        blocksize = self.blocksize
         if self.split_row_groups in ("infer", "adaptive"):
             # Using blocksize to plan partitioning
             if self.blocksize == "default":
@@ -207,7 +214,7 @@ class ReadParquet(IO):
             paths,
             fs,
             self.categories,
-            self.index,
+            index,
             self.calculate_divisions,
             self.filters,
             self.split_row_groups,
@@ -225,9 +232,9 @@ class ReadParquet(IO):
 
         # Infer meta, accounting for index and columns arguments.
         meta = self.engine._create_dd_meta(dataset_info, self.use_nullable_dtypes)
-        self.index = [self.index] if isinstance(self.index, str) else self.index
+        index = [index] if isinstance(index, str) else index
         meta, index, columns = set_index_columns(
-            meta, self.index, self.input_columns, auto_index_allowed
+            meta, index, self.input_columns, auto_index_allowed
         )
         if meta.index.name == NONE_LABEL:
             meta.index.name = None

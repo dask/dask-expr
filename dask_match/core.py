@@ -110,6 +110,10 @@ class Expr(Operation, DaskMethodsMixin, metaclass=_ExprMeta):
         else:
             return object.__getattribute__(self, key)
 
+    @property
+    def index(self):
+        return Index(self)
+
     def __setattr__(self, key, value):
         if key in type(self)._parameters:
             idx = type(self)._parameters.index(key)
@@ -426,6 +430,26 @@ class Projection(Elemwise):
         if " " in base:
             base = "(" + base + ")"
         return f"{base}[{repr(self.columns)}]"
+
+
+class Index(Elemwise):
+    """Column Selection"""
+
+    _parameters = ["frame"]
+    operation = getattr
+
+    def _divisions(self):
+        return self.frame.divisions
+
+    @property
+    def _meta(self):
+        return self.frame._meta.index
+
+    def _layer(self):
+        return {
+            (self._name, i): (getattr, (self.frame._name, i), "index")
+            for i in range(self.npartitions)
+        }
 
 
 class Binop(Elemwise):
