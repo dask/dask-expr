@@ -71,6 +71,19 @@ class ReadParquet(IO):
     def engine(self):
         return get_engine("pyarrow")
 
+    @property
+    def input_columns(self):
+        return self.operands[self._parameters.index("columns")]
+
+    @property
+    def columns(self):
+        if self.input_columns is None:
+            return self._meta.columns
+        else:
+            import pandas as pd
+
+            return pd.Index(_list_columns(self.input_columns))
+
     @classmethod
     def _replacement_rules(cls):
         _ = Wildcard.dot()
@@ -214,7 +227,7 @@ class ReadParquet(IO):
         meta = self.engine._create_dd_meta(dataset_info, self.use_nullable_dtypes)
         self.index = [self.index] if isinstance(self.index, str) else self.index
         meta, index, columns = set_index_columns(
-            meta, self.index, self.columns, auto_index_allowed
+            meta, self.index, self.input_columns, auto_index_allowed
         )
         if meta.index.name == NONE_LABEL:
             meta.index.name = None
