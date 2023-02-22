@@ -119,15 +119,15 @@ def test_reductions(func):
     df["y"] = df.y * 10.0
     ddf = from_pandas(df, npartitions=10)
 
-    assert_eq(func(ddf).compute(), func(df))
-    assert_eq(func(ddf.x).compute(), func(df.x))
+    assert_eq(func(ddf), func(df))
+    assert_eq(func(ddf.x), func(df.x))
 
 
 def test_mode():
     df = pd.DataFrame({"x": [1, 2, 3, 1, 2]})
     ddf = from_pandas(df, npartitions=3)
 
-    assert_eq(ddf.x.mode().compute(), df.x.mode())
+    assert_eq(ddf.x.mode(), df.x.mode())
 
 
 @pytest.mark.parametrize(
@@ -149,7 +149,7 @@ def test_conditionals(func):
     df["y"] = df.y * 2.0
     ddf = from_pandas(df, npartitions=10)
 
-    assert_eq(func(df), func(ddf).compute())
+    assert_eq(func(df), func(ddf))
 
 
 @pytest.mark.xfail(reason="TODO: Debug this")
@@ -187,7 +187,7 @@ def test_blockwise(func):
     df["y"] = df.y * 2.0
     ddf = from_pandas(df, npartitions=3)
 
-    assert_eq(func(df), func(ddf).compute())
+    assert_eq(func(df), func(ddf))
 
 
 def test_repr():
@@ -223,9 +223,9 @@ def test_persist():
     a = ddf + 2
     b = a.persist()
 
-    assert_eq(a.compute(), b.compute())
+    assert_eq(a, b)
     assert len(a.__dask_graph__()) > len(b.__dask_graph__())
 
     assert len(b.__dask_graph__()) == b.npartitions
 
-    assert_eq(b.y.sum().compute(), (df + 2).y.sum())
+    assert_eq(b.y.sum(), (df + 2).y.sum())
