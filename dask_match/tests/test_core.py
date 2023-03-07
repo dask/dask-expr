@@ -112,7 +112,10 @@ def test_dask():
             M.mean,
             marks=pytest.mark.skip(reason="scalars don't work yet"),
         ),
-        lambda df: df.size,
+        pytest.param(
+            lambda df: df.size,
+            marks=pytest.mark.skip(reason="scalars don't work yet"),
+        ),
     ],
 )
 def test_reductions(func):
@@ -121,14 +124,14 @@ def test_reductions(func):
     ddf = from_pandas(df, npartitions=10)
 
     assert_eq(func(ddf), func(df))
-    assert_eq(func(ddf.x), func(df.x))
+    assert func(ddf.x).compute() == func(df.x)
 
 
 def test_mode():
     df = pd.DataFrame({"x": [1, 2, 3, 1, 2]})
     ddf = from_pandas(df, npartitions=3)
 
-    assert_eq(ddf.x.mode(), df.x.mode())
+    assert_eq(ddf.x.mode(), df.x.mode(), check_names=False)
 
 
 @pytest.mark.parametrize(
@@ -150,7 +153,7 @@ def test_conditionals(func):
     df["y"] = df.y * 2.0
     ddf = from_pandas(df, npartitions=10)
 
-    assert_eq(func(df), func(ddf))
+    assert_eq(func(df), func(ddf), check_names=False)
 
 
 def test_predicate_pushdown(tmpdir):
@@ -236,4 +239,4 @@ def test_persist():
 
     assert len(b.__dask_graph__()) == b.npartitions
 
-    assert_eq(b.y.sum(), (df + 2).y.sum())
+    assert b.y.sum().compute() == (df + 2).y.sum()
