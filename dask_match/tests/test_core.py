@@ -9,21 +9,41 @@ from dask.utils import M
 from dask_match import ReadCSV, from_pandas, optimize, read_parquet
 
 
-def test_basic():
-    x = read_parquet("myfile.parquet", columns=("a", "b", "c"))
-    y = ReadCSV("myfile.csv", usecols=("a", "d", "e"))
+def _make_file(dir, format="parquet", df=None): 
+    fn = os.path.join(str(dir), f"myfile.{format}")
+    if df is None:
+        df = pd.DataFrame({c: range(10) for c in "abcde"})
+    if format == "csv":
+        df.to_csv(fn)
+    elif format == "parquet":
+        df.to_parquet(fn)
+    else:
+        ValueError(f"{format} not a supported format")
+    return fn
+
+
+def test_basic(tmpdir):
+    fn_pq = _make_file(tmpdir, format="parquet")
+    fn_csv = _make_file(tmpdir, format="csv")
+
+    x = read_parquet(fn_pq, columns=("a", "b", "c"))
+    y = ReadCSV(fn_csv, usecols=("a", "d", "e"))
 
     z = x + y
     result = z[("a", "b", "d")].sum(skipna="foo")
-    assert result.skipna == "foo"
+    assert result.operand("skipna") == "foo"
     assert result.operands[0].columns == ("a", "b", "d")
 
     x + 1
     1 + x
 
 
-df = read_parquet("myfile.parquet", columns=["a", "b", "c"])
-df_bc = read_parquet("myfile.parquet", columns=["b", "c"])
+def df(fn):
+    return read_parquet(fn, columns=["a", "b", "c"])
+
+
+def df_bc(fn):
+    return read_parquet(fn, columns=["b", "c"])
 
 
 @pytest.mark.parametrize(
@@ -31,39 +51,35 @@ df_bc = read_parquet("myfile.parquet", columns=["b", "c"])
     [
         (
             # Add -> Mul
-            df + df,
-            2 * df,
+            lambda fn: df(fn) + df(fn),
+            lambda fn: 2 * df(fn),
         ),
         (
             # Column projection
-            df[["b", "c"]],
-            read_parquet("myfile.parquet", columns=["b", "c"]),
+            lambda fn: df(fn)[["b", "c"]],
+            lambda fn: read_parquet(fn, columns=["b", "c"]),
         ),
         (
             # Compound
-            3 * (df + df)[["b", "c"]],
-            6 * df_bc,
+            lambda fn: 3 * (df(fn) + df(fn))[["b", "c"]],
+            lambda fn: 6 * df_bc(fn),
         ),
         (
             # Traverse Sum
-            df.sum()[["b", "c"]],
-            df_bc.sum(),
+            lambda fn: df(fn).sum()[["b", "c"]],
+            lambda fn: df_bc(fn).sum(),
         ),
         (
             # Respect Sum keywords
-            df.sum(numeric_only=True)[["b", "c"]],
-            df_bc.sum(numeric_only=True),
+            lambda fn: df(fn).sum(numeric_only=True)[["b", "c"]],
+            lambda fn: df_bc(fn).sum(numeric_only=True),
         ),
-        # (
-        #     # Traverse Max
-        #     df.max()[["b", "c"]],
-        #     df_bc.max(),
-        # ),
     ],
 )
-def test_optimize(input, expected):
-    result = optimize(input)
-    assert str(result) == str(expected)
+def test_optimize(tmpdir, input, expected):
+    fn = _make_file(tmpdir, format="parquet")
+    result = optimize(input(fn))
+    assert str(result) == str(expected(fn))
 
 
 def test_meta_divisions_name():
@@ -159,23 +175,23 @@ def test_conditionals(func):
 def test_predicate_pushdown(tmpdir):
     from dask_match.io.parquet import ReadParquet
 
-    fn = os.path.join(str(tmpdir), "myfile.parquet")
     original = pd.DataFrame(
         {
             "a": [1, 2, 3, 4, 5] * 10,
             "b": [0, 1, 2, 3, 4] * 10,
             "c": range(50),
+            "d": [6, 7] * 25,
+            "e": [8, 9] * 25,
         }
     )
-    original.to_parquet(fn)
-
+    fn = _make_file(tmpdir, format="parquet", df=original)
     df = read_parquet(fn)
     assert_eq(df, original)
     x = df[df.a == 5][df.c > 20]["b"]
     y = optimize(x)
     assert isinstance(y, ReadParquet)
-    assert ("a", "==", 5) in y.filters or ("a", "==", 5) in y.filters
-    assert ("c", ">", 20) in y.filters
+    assert ("a", "==", 5) in y.operand("filters") or ("a", "==", 5) in y.operand("filters")
+    assert ("c", ">", 20) in y.operand("filters")
     assert y.columns == ["b"]
 
     # Check computed result

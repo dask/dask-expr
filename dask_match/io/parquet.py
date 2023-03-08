@@ -72,21 +72,13 @@ class ReadParquet(IO):
         return get_engine("pyarrow")
 
     @property
-    def input_columns(self):
-        return self.operands[self._parameters.index("columns")]
-
-    @property
     def columns(self):
-        if self.input_columns is None:
+        if self.operand("columns") is None:
             return self._meta.columns
         else:
             import pandas as pd
 
-            return pd.Index(_list_columns(self.input_columns))
-
-    @property
-    def input_index(self):
-        return self.operands[self._parameters.index("index")]
+            return pd.Index(_list_columns(self.operand("columns")))
 
     @classmethod
     def _replacement_rules(cls):
@@ -176,32 +168,32 @@ class ReadParquet(IO):
             read_options,
             open_file_options,
             other_options,
-        ) = _split_user_options(**self.kwargs)
+        ) = _split_user_options(**self.operand("kwargs"))
 
         # Extract global filesystem and paths
         fs, paths, dataset_options, open_file_options = self.engine.extract_filesystem(
-            self.path,
-            self.filesystem,
+            self.operand("path"),
+            self.operand("filesystem"),
             dataset_options,
             open_file_options,
-            self.storage_options,
+            self.operand("storage_options"),
         )
         read_options["open_file_options"] = open_file_options
         paths = sorted(paths, key=natural_sort_key)  # numeric rather than glob ordering
 
         auto_index_allowed = False
-        if self.input_index is None:
+        if self.operand("index") is None:
             # User is allowing auto-detected index
             auto_index_allowed = True
-        if self.input_index and isinstance(self.input_index, str):
-            index = [self.input_index]
+        if self.operand("index") and isinstance(self.operand("index"), str):
+            index = [self.operand("index")]
         else:
-            index = self.input_index
+            index = self.operand("index")
 
-        blocksize = self.blocksize
-        if self.split_row_groups in ("infer", "adaptive"):
+        blocksize = self.operand("blocksize")
+        if self.operand("split_row_groups") in ("infer", "adaptive"):
             # Using blocksize to plan partitioning
-            if self.blocksize == "default":
+            if self.operand("blocksize") == "default":
                 if hasattr(self.engine, "default_blocksize"):
                     blocksize = self.engine.default_blocksize()
                 else:
@@ -213,16 +205,16 @@ class ReadParquet(IO):
         dataset_info = self.engine._collect_dataset_info(
             paths,
             fs,
-            self.categories,
+            self.operand("categories"),
             index,
-            self.calculate_divisions,
-            self.filters,
-            self.split_row_groups,
+            self.operand("calculate_divisions"),
+            self.operand("filters"),
+            self.operand("split_row_groups"),
             blocksize,
-            self.aggregate_files,
-            self.ignore_metadata_file,
-            self.metadata_task_size,
-            self.parquet_file_extension,
+            self.operand("aggregate_files"),
+            self.operand("ignore_metadata_file"),
+            self.operand("metadata_task_size"),
+            self.operand("parquet_file_extension"),
             {
                 "read": read_options,
                 "dataset": dataset_options,
@@ -231,10 +223,10 @@ class ReadParquet(IO):
         )
 
         # Infer meta, accounting for index and columns arguments.
-        meta = self.engine._create_dd_meta(dataset_info, self.use_nullable_dtypes)
+        meta = self.engine._create_dd_meta(dataset_info, self.operand("use_nullable_dtypes"))
         index = [index] if isinstance(index, str) else index
         meta, index, columns = set_index_columns(
-            meta, index, self.input_columns, auto_index_allowed
+            meta, index, self.operand("columns"), auto_index_allowed
         )
         if meta.index.name == NONE_LABEL:
             meta.index.name = None
@@ -285,7 +277,7 @@ class ReadParquet(IO):
                 meta,
                 dataset_info["columns"],
                 dataset_info["index"],
-                self.use_nullable_dtypes,
+                self.operand("use_nullable_dtypes"),
                 {},  # All kwargs should now be in `common_kwargs`
                 common_kwargs,
             )
