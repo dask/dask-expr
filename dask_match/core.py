@@ -5,8 +5,9 @@ import operator
 from collections.abc import Iterator
 
 import toolz
+from tlz import first
 from dask.base import DaskMethodsMixin, named_schedulers, normalize_token, tokenize
-from dask.dataframe.core import _concat, is_dataframe_like
+from dask.dataframe.core import _concat, is_dataframe_like, is_series_like, is_index_like
 from dask.utils import M, apply, funcname
 from matchpy import (
     Arity,
@@ -59,7 +60,7 @@ class _ExprMeta(_OperationMeta):
 _defer_to_matchpy = False
 
 
-class Expr(Operation, DaskMethodsMixin, metaclass=_ExprMeta):
+class Expr(Operation, metaclass=_ExprMeta):
     """Primary class for all Expressions
 
     This mostly includes Dask protocols and various Pandas-like method
@@ -70,11 +71,6 @@ class Expr(Operation, DaskMethodsMixin, metaclass=_ExprMeta):
     associative = False
     _parameters = []
     _defaults = {}
-
-    __dask_scheduler__ = staticmethod(
-        named_schedulers.get("threads", named_schedulers["sync"])
-    )
-    __dask_optimize__ = staticmethod(lambda dsk, keys, **kwargs: dsk)
 
     @classmethod
     def _replacement_rules(cls) -> Iterator[ReplacementRule]:
@@ -98,14 +94,14 @@ class Expr(Operation, DaskMethodsMixin, metaclass=_ExprMeta):
         return str(self)
 
     def __getattr__(self, key):
-        if key == "__name__":
+        try:
             return object.__getattribute__(self, key)
-        elif key in dir(type(self)):
-            return object.__getattribute__(self, key)
-        elif is_dataframe_like(self._meta) and key in self._meta.columns:
-            return self[key]
-        else:
-            return object.__getattribute__(self, key)
+        except AttributeError as err:
+            # TODO: Remove `parameter` API and uncomment
+            # if key in type(self)._parameters:
+            #     idx = type(self)._parameters.index(key)
+            #     return self.operands[idx]
+            raise err
 
     def operand(self, key):
         return self.operands[type(self)._parameters.index(key)]
@@ -201,10 +197,6 @@ class Expr(Operation, DaskMethodsMixin, metaclass=_ExprMeta):
     def count(self, numeric_only=None):
         return Count(self, numeric_only)
 
-    @property
-    def size(self):
-        return Size(self)
-
     def astype(self, dtypes):
         return AsType(self, dtypes)
 
@@ -217,10 +209,6 @@ class Expr(Operation, DaskMethodsMixin, metaclass=_ExprMeta):
             idx = self._parameters.index("divisions")
             return self.operands[idx]
         return tuple(self._divisions())
-
-    @property
-    def dask(self):
-        return self.__dask_graph__()
 
     @property
     def known_divisions(self):
@@ -285,12 +273,6 @@ class Expr(Operation, DaskMethodsMixin, metaclass=_ExprMeta):
 
     def __dask_keys__(self):
         return [(self._name, i) for i in range(self.npartitions)]
-
-    def __dask_postcompute__(self):
-        return _concat, ()
-
-    def __dask_postpersist__(self):
-        return from_graph, (self._meta, self.divisions, self._name)
 
 
 class Blockwise(Expr):
@@ -428,7 +410,7 @@ class Projection(Elemwise):
         return f"{base}[{repr(self.columns)}]"
 
 
-class Index(Elemwise):
+class ProjectIndex(Elemwise):
     """Column Selection"""
 
     _parameters = ["frame"]
@@ -569,10 +551,34 @@ class IO(Expr):
 
 class ReadCSV(IO):
     _parameters = ["filename", "usecols", "header"]
-    _defaults = {"usecols": None, "header": None}
+    _defaults = {"usecols": None, "header": "infer"}
+
+    @functools.cached_property
+    def _ddf(self):
+        # Temporary hack to simplify logic
+        import dask.dataframe as dd
+
+        path = self.operand("filename")
+        usecols = self.operand("usecols")
+        header = self.operand("header")
+        return dd.read_csv(path, usecols=usecols, header=header)
+
+    @property
+    def _meta(self):
+        return self._ddf._meta
+
+    def _divisions(self):
+        return self._ddf.divisions
+
+    def _layer(self):
+        return self._ddf.dask.to_dict()
 
 
-class from_pandas(IO):
+def read_csv(*args, **kwargs):
+    return new_collection(ReadCSV(*args, **kwargs))
+
+
+class FromPandas(IO):
     """The only way today to get a real dataframe"""
 
     _parameters = ["frame", "npartitions"]
@@ -599,7 +605,11 @@ class from_pandas(IO):
     __repr__ = __str__
 
 
-class from_graph(IO):
+def from_pandas(*args, **kwargs):
+    return new_collection(FromPandas(*args, **kwargs))
+
+
+class FromGraph(IO):
     """A DataFrame created from an opaque Dask task graph
 
     This is used in persist, for example, and would also be used in any
@@ -612,12 +622,16 @@ class from_graph(IO):
         return self.operand("layer")
 
 
+def from_graph(*args, **kwargs):
+    return new_collection(FromGraph(*args, **kwargs))
+
+
 @normalize_token.register(Expr)
 def normalize_expression(expr):
     return expr._name
 
 
-def optimize(expr):
+def optimize(collection):
     """High level query optimization
 
     Today we just use MatchPy's term rewriting system, leveraging the
@@ -632,6 +646,7 @@ def optimize(expr):
     `_defer_to_matchpy` global.  Please forgive us our sins, as we forgive
     those who sin against us.
     """
+    expr = collection.expr
     last = None
     global _defer_to_matchpy
 
@@ -642,7 +657,188 @@ def optimize(expr):
             expr = replace_all(expr, replacement_rules)
     finally:
         _defer_to_matchpy = False
-    return expr
+    return new_collection(expr)
 
 
 from dask_match.reductions import Count, Max, Min, Mode, Size, Sum
+
+
+#
+# Utilities to wrap Expr API
+# (Helps limits boiler-plate code)
+#
+
+def _wrap_expr_api(*args, wrap_api=None, **kwargs):
+    # Use Expr API, but convert to/from Expr objects
+    assert wrap_api is not None
+    result = wrap_api(
+        *[arg.expr if isinstance(arg, Base) else arg for arg in args],
+        **kwargs,
+    )
+    if isinstance(result, Expr):
+        return new_collection(result)
+    return result
+
+def _wrap_expr_op(self, other, op=None):
+    # Wrap expr operator
+    assert op is not None
+    if isinstance(other, Base):
+        other = other.expr
+    return new_collection(getattr(self.expr, op)(other))
+
+
+#
+# Collection classes
+#
+
+class Base(DaskMethodsMixin):
+    """Base class for Expr-backed Collections"""
+
+    __dask_scheduler__ = staticmethod(
+        named_schedulers.get("threads", named_schedulers["sync"])
+    )
+    __dask_optimize__ = staticmethod(lambda dsk, keys, **kwargs: dsk)
+
+    def __init__(self, expr):
+        self.__expr = expr
+
+    @property
+    def expr(self):
+        return self.__expr
+
+    def __dask_graph__(self):
+        return self.expr.__dask_graph__()
+
+    def __dask_keys__(self):
+        return self.expr.__dask_keys__()
+
+    @property
+    def dask(self):
+        return self.__dask_graph__()
+
+    def __dask_postcompute__(self):
+        return _concat, ()
+
+    def __dask_postpersist__(self):
+        return from_graph, (self._meta, self.divisions, self._name)
+
+    def __getattr__(self, key):
+        try:
+            # Prioritize `Base` attributes
+            return object.__getattribute__(self, key)
+        except AttributeError as err:
+            try:
+                # Fall back to `expr` API
+                # (Making sure to convert to/from Expr)
+                val = getattr(self.expr, key)
+                if callable(val):
+                    return functools.partial(_wrap_expr_api, wrap_api=val)
+                return val
+            except AttributeError:
+                # Raise original error
+                raise err
+
+
+# Add operator attributes
+for op in [
+    "__add__",
+    "__radd__",
+    "__sub__",
+    "__rsub__",
+    "__mul__",
+    "__rmul__",
+    "__truediv__",
+    "__rtruediv__",
+    "__lt__",
+    "__rlt__",
+    "__gt__",
+    "__rgt__",
+    "__le__",
+    "__rle__",
+    "__ge__",
+    "__rge__",
+    "__eq__",
+    "__ne__",
+]:
+    setattr(Base, op, functools.partialmethod(_wrap_expr_op, op=op))
+
+
+class DataFrame(Base):
+    """DataFrame-like Expr Collection"""
+
+    @property
+    def index(self):
+        return new_collection(ProjectIndex(self.expr))
+
+    @property
+    def size(self):
+        return new_collection(Size(self.expr))
+
+    def __getattr__(self, key):
+        try:
+            return super().__getattr__(key)
+        except AttributeError as err:
+            # Check if key is in columns if key
+            # is not a normal attribute
+            if key in self.expr._meta.columns:
+                return Series(self.expr[key])
+            raise err
+
+    def __getitem__(self, other):
+        if isinstance(other, Base):
+            return new_collection(self.expr.__getitem__(other.expr))
+        return new_collection(self.expr.__getitem__(other))
+
+    def __repr__(self):
+        return f"<dask_match.core.DataFrame: expr={self.expr}>"
+
+
+class Series(Base):
+    """Series-like Expr Collection"""
+
+    @property
+    def index(self):
+        return new_collection(ProjectIndex(self.expr))
+
+    @property
+    def size(self):
+        return new_collection(Size(self.expr))
+
+    def __getitem__(self, other):
+        if isinstance(other, Base):
+            return new_collection(self.expr.__getitem__(other.expr))
+        return new_collection(self.expr.__getitem__(other))
+
+    def __repr__(self):
+        return f"<dask_match.core.Series: expr={self.expr}>"
+
+
+class Index(Series):
+    """Index-like Expr Collection"""
+
+    def __repr__(self):
+        return f"<dask_match.core.Index: expr={self.expr}>"
+
+
+class Scalar(Base):
+    """Scalar Expr Collection"""
+
+    def __repr__(self):
+        return f"<dask_match.core.Scalar: expr={self.expr}>"
+
+    def __dask_postcompute__(self):
+        return first, ()
+
+
+def new_collection(expr):
+    """Create new collection from an expr"""
+
+    meta = expr._meta
+    if is_dataframe_like(meta):
+        return DataFrame(expr)
+    elif is_series_like(meta):
+        return Series(expr)
+    elif is_index_like(meta):
+        return Index(expr)
+    else:
+        return Scalar(expr)

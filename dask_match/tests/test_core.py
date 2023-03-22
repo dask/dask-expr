@@ -6,7 +6,7 @@ import pytest
 from dask.dataframe.utils import assert_eq
 from dask.utils import M
 
-from dask_match import ReadCSV, from_pandas, optimize, read_parquet
+from dask_match import read_csv, from_pandas, optimize, read_parquet
 
 
 def _make_file(dir, format="parquet", df=None): 
@@ -27,12 +27,12 @@ def test_basic(tmpdir):
     fn_csv = _make_file(tmpdir, format="csv")
 
     x = read_parquet(fn_pq, columns=("a", "b", "c"))
-    y = ReadCSV(fn_csv, usecols=("a", "d", "e"))
+    y = read_csv(fn_csv, usecols=("a", "d", "e"))
 
     z = x + y
-    result = z[("a", "b", "d")].sum(skipna="foo")
-    assert result.operand("skipna") == "foo"
-    assert result.operands[0].columns == ("a", "b", "d")
+    result = z[["a", "b", "d"]].sum(skipna=False)
+    assert result.operand("skipna") == False
+    assert result.operands[0].columns == ["a", "b", "d"]
 
     x + 1
     1 + x
@@ -79,7 +79,7 @@ def df_bc(fn):
 def test_optimize(tmpdir, input, expected):
     fn = _make_file(tmpdir, format="parquet")
     result = optimize(input(fn))
-    assert str(result) == str(expected(fn))
+    assert str(result.expr) == str(expected(fn).expr)
 
 
 def test_meta_divisions_name():
@@ -124,10 +124,7 @@ def test_dask():
         M.min,
         M.sum,
         M.count,
-        pytest.param(
-            M.mean,
-            marks=pytest.mark.skip(reason="scalars don't work yet"),
-        ),
+        M.mean,
         pytest.param(
             lambda df: df.size,
             marks=pytest.mark.skip(reason="scalars don't work yet"),
@@ -189,9 +186,9 @@ def test_predicate_pushdown(tmpdir):
     assert_eq(df, original)
     x = df[df.a == 5][df.c > 20]["b"]
     y = optimize(x)
-    assert isinstance(y, ReadParquet)
-    assert ("a", "==", 5) in y.operand("filters") or ("a", "==", 5) in y.operand("filters")
-    assert ("c", ">", 20) in y.operand("filters")
+    assert isinstance(y.expr, ReadParquet)
+    assert ("a", "==", 5) in y.expr.operand("filters") or ("a", "==", 5) in y.expr.operand("filters")
+    assert ("c", ">", 20) in y.expr.operand("filters")
     assert y.columns == ["b"]
 
     # Check computed result
@@ -224,12 +221,10 @@ def test_repr():
     assert "+ 1" in str(df + 1)
     assert "+ 1" in repr(df + 1)
 
-    s = (df["x"] + 1).sum(skipna=False)
+    s = (df["x"] + 1).sum(skipna=False).expr
     assert '["x"]' in s or "['x']" in s
     assert "+ 1" in s
     assert "sum(skipna=False)" in s
-
-    assert "ReadParquet" in read_parquet("filename")
 
 
 def test_columns_traverse_filters():

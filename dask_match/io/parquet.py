@@ -14,7 +14,7 @@ from dask.utils import natural_sort_key
 from fsspec.utils import stringify_path
 from matchpy import CustomConstraint, Pattern, ReplacementRule, Wildcard
 
-from dask_match.core import EQ, GE, GT, IO, LE, LT, NE, Filter
+from dask_match.core import EQ, GE, GT, IO, LE, LT, NE, Filter, new_collection
 
 NONE_LABEL = "__null_dask_index__"
 
@@ -321,21 +321,23 @@ def read_parquet(
     if hasattr(path, "name"):
         path = stringify_path(path)
 
-    return ReadParquet(
-        path,
-        columns=_list_columns(columns),
-        filters=filters,
-        categories=categories,
-        index=index,
-        storage_options=storage_options,
-        use_nullable_dtypes=use_nullable_dtypes,
-        calculate_divisions=calculate_divisions,
-        ignore_metadata_file=ignore_metadata_file,
-        metadata_task_size=metadata_task_size,
-        split_row_groups=split_row_groups,
-        blocksize=blocksize,
-        aggregate_files=aggregate_files,
-        parquet_file_extension=parquet_file_extension,
-        filesystem=filesystem,
-        **kwargs,
+    return new_collection(
+        ReadParquet(
+            path,
+            columns=_list_columns(columns),
+            filters=filters,
+            categories=categories,
+            index=index,
+            storage_options=storage_options,
+            use_nullable_dtypes=use_nullable_dtypes,
+            calculate_divisions=calculate_divisions,
+            ignore_metadata_file=ignore_metadata_file,
+            metadata_task_size=metadata_task_size,
+            split_row_groups=split_row_groups,
+            blocksize=blocksize,
+            aggregate_files=aggregate_files,
+            parquet_file_extension=parquet_file_extension,
+            filesystem=filesystem,
+            **kwargs,
+        )
     )
