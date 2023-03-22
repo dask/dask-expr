@@ -1,5 +1,4 @@
 import functools
-import math
 import numbers
 import operator
 from collections.abc import Iterator
@@ -545,99 +544,6 @@ class NE(Binop):
     _operator_repr = "!="
 
 
-class IO(Expr):
-    pass
-
-
-class ReadCSV(IO):
-    _parameters = ["filename", "usecols", "header"]
-    _defaults = {"usecols": None, "header": "infer"}
-
-    @functools.cached_property
-    def _ddf(self):
-        # Temporary hack to simplify logic
-        import dask.dataframe as dd
-
-        return dd.read_csv(
-            self.filename,
-            usecols=self.usecols,
-            header=self.header,
-        )
-
-    @property
-    def _meta(self):
-        return self._ddf._meta
-
-    def _divisions(self):
-        return self._ddf.divisions
-
-    def _layer(self):
-        return self._ddf.dask.to_dict()
-
-
-def read_csv(*args, **kwargs):
-    return new_collection(ReadCSV(*args, **kwargs))
-
-
-class FromPandas(IO):
-    """The only way today to get a real dataframe"""
-
-    _parameters = ["frame", "npartitions"]
-    _defaults = {"npartitions": 1}
-
-    @property
-    def _meta(self):
-        return self.frame.head(0)
-
-    def _divisions(self):
-        return [None] * (self.npartitions + 1)
-
-    def _layer(self):
-        chunksize = int(math.ceil(len(self.frame) / self.npartitions))
-        locations = list(range(0, len(self.frame), chunksize)) + [len(self.frame)]
-        return {
-            (self._name, i): self.frame.iloc[start:stop]
-            for i, (start, stop) in enumerate(zip(locations[:-1], locations[1:]))
-        }
-
-    def __str__(self):
-        return "df"
-
-    __repr__ = __str__
-
-
-def from_pandas(*args, **kwargs):
-    return new_collection(FromPandas(*args, **kwargs))
-
-
-class FromGraph(IO):
-    """A DataFrame created from an opaque Dask task graph
-
-    This is used in persist, for example, and would also be used in any
-    conversion from legacy dataframes.
-    """
-
-    _parameters = ["layer", "_meta", "divisions", "_name"]
-
-    @property
-    def _meta(self):
-        return self.operand("_meta")
-
-    def _divisions(self):
-        return self.operand("divisions")
-
-    @property
-    def _name(self):
-        return self.operand("_name")
-
-    def _layer(self):
-        return self.operand("layer")
-
-
-def from_graph(*args, **kwargs):
-    return new_collection(FromGraph(*args, **kwargs))
-
-
 @normalize_token.register(Expr)
 def normalize_expression(expr):
     return expr._name
@@ -736,6 +642,8 @@ class Base(DaskMethodsMixin):
         return _concat, ()
 
     def __dask_postpersist__(self):
+        from dask_match.io.io import from_graph
+
         return from_graph, (self._meta, self.divisions, self._name)
 
     def __getattr__(self, key):
