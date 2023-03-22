@@ -73,12 +73,13 @@ class ReadParquet(IO):
 
     @property
     def columns(self):
-        if self.operand("columns") is None:
+        columns_operand = self.operand("columns")
+        if columns_operand is None:
             return self._meta.columns
         else:
             import pandas as pd
 
-            return pd.Index(_list_columns(self.operand("columns")))
+            return pd.Index(_list_columns(columns_operand))
 
     @classmethod
     def _replacement_rules(cls):
@@ -182,13 +183,14 @@ class ReadParquet(IO):
         paths = sorted(paths, key=natural_sort_key)  # numeric rather than glob ordering
 
         auto_index_allowed = False
-        if self.operand("index") is None:
+        index_operand = self.operand("index")
+        if index_operand is None:
             # User is allowing auto-detected index
             auto_index_allowed = True
-        if self.operand("index") and isinstance(self.operand("index"), str):
-            index = [self.operand("index")]
+        if index_operand and isinstance(index_operand, str):
+            index = [index_operand]
         else:
-            index = self.operand("index")
+            index = index_operand
 
         blocksize = self.blocksize
         if self.split_row_groups in ("infer", "adaptive"):

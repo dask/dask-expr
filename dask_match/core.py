@@ -348,15 +348,15 @@ class Apply(Elemwise):
 
     @property
     def _meta(self):
-        return self.operand("frame")._meta.apply(self.operand("function"), *self.operand("args"), **self.operand("kwargs"))
+        return self.frame._meta.apply(self.function, *self.args, **self.kwargs)
 
     def _layer(self):
         return {
             (self._name, i): (
                 apply,
                 M.apply,
-                [(self.operand("frame")._name, i), self.operand("function")] + list(self.operand("args")),
-                self.operand("kwargs"),
+                [(self.frame._name, i), self.function] + list(self.args),
+                self.kwargs,
             )
             for i in range(self.npartitions)
         }
@@ -387,7 +387,7 @@ class Projection(Elemwise):
     operation = operator.getitem
 
     def _divisions(self):
-        return self.operand("frame").divisions
+        return self.frame.divisions
 
     @property
     def columns(self):
@@ -395,16 +395,16 @@ class Projection(Elemwise):
 
     @property
     def _meta(self):
-        return self.operand("frame")._meta[self.columns]
+        return self.frame._meta[self.columns]
 
     def _layer(self):
         return {
-            (self._name, i): (operator.getitem, (self.operand("frame")._name, i), self.columns)
+            (self._name, i): (operator.getitem, (self.frame._name, i), self.columns)
             for i in range(self.npartitions)
         }
 
     def __str__(self):
-        base = str(self.operand("frame"))
+        base = str(self.frame)
         if " " in base:
             base = "(" + base + ")"
         return f"{base}[{repr(self.columns)}]"
@@ -417,15 +417,15 @@ class ProjectIndex(Elemwise):
     operation = getattr
 
     def _divisions(self):
-        return self.operand("frame").divisions
+        return self.frame.divisions
 
     @property
     def _meta(self):
-        return self.operand("frame")._meta.index
+        return self.frame._meta.index
 
     def _layer(self):
         return {
-            (self._name, i): (getattr, (self.operand("frame")._name, i), "index")
+            (self._name, i): (getattr, (self.frame._name, i), "index")
             for i in range(self.npartitions)
         }
 
@@ -438,8 +438,8 @@ class Binop(Elemwise):
         return {
             (self._name, i): (
                 self.operation,
-                (self.operand("left")._name, i) if isinstance(self.operand("left"), Expr) else self.operand("left"),
-                (self.operand("right")._name, i) if isinstance(self.operand("right"), Expr) else self.operand("right"),
+                (self.left._name, i) if isinstance(self.left, Expr) else self.left,
+                (self.right._name, i) if isinstance(self.right, Expr) else self.right,
             )
             for i in range(self.npartitions)
         }
@@ -558,10 +558,11 @@ class ReadCSV(IO):
         # Temporary hack to simplify logic
         import dask.dataframe as dd
 
-        path = self.operand("filename")
-        usecols = self.operand("usecols")
-        header = self.operand("header")
-        return dd.read_csv(path, usecols=usecols, header=header)
+        return dd.read_csv(
+            self.filename,
+            usecols=self.usecols,
+            header=self.header,
+        )
 
     @property
     def _meta(self):
@@ -586,16 +587,16 @@ class FromPandas(IO):
 
     @property
     def _meta(self):
-        return self.operand("frame").head(0)
+        return self.frame.head(0)
 
     def _divisions(self):
         return [None] * (self.npartitions + 1)
 
     def _layer(self):
-        chunksize = int(math.ceil(len(self.operand("frame")) / self.npartitions))
-        locations = list(range(0, len(self.operand("frame")), chunksize)) + [len(self.operand("frame"))]
+        chunksize = int(math.ceil(len(self.frame) / self.npartitions))
+        locations = list(range(0, len(self.frame), chunksize)) + [len(self.frame)]
         return {
-            (self._name, i): self.operand("frame").iloc[start:stop]
+            (self._name, i): self.frame.iloc[start:stop]
             for i, (start, stop) in enumerate(zip(locations[:-1], locations[1:]))
         }
 
