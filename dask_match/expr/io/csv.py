@@ -1,7 +1,7 @@
 import functools
 
-from dask_match.core import new_collection
-from dask_match.io.io import IO
+from dask_match.collection.core import new_collection
+from dask_match.expr.io.io import IO
 
 
 class ReadCSV(IO):

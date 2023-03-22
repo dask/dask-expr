@@ -1,6 +1,7 @@
 import math
 
-from dask_match.core import Expr, new_collection
+from dask_match.collection.core import new_collection
+from dask_match.expr.core import Expr
 
 
 class IO(Expr):

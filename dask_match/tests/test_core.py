@@ -170,7 +170,7 @@ def test_conditionals(func):
 
 
 def test_predicate_pushdown(tmpdir):
-    from dask_match.io.parquet import ReadParquet
+    from dask_match.expr.io.parquet import ReadParquet
 
     original = pd.DataFrame(
         {
