@@ -97,18 +97,27 @@ class Expr(Operation, metaclass=_ExprMeta):
         try:
             return object.__getattribute__(self, key)
         except AttributeError as err:
-            # TODO: Remove `parameter` API and uncomment
-            # if key in type(self)._parameters:
-            #     idx = type(self)._parameters.index(key)
-            #     return self.operands[idx]
+            # Allow operands to be accessed as attributes
+            # as long as the keys are not already reserved
+            # by existing methods/properties
+            _parameters = type(self)._parameters
+            if key in _parameters:
+                idx = _parameters.index(key)
+                return self.operands[idx]
             raise err
 
     def operand(self, key):
+        # Access an operand unambiguously
+        # (e.g. if the key is reserved by a method/property)
         return self.operands[type(self)._parameters.index(key)]
 
     @property
     def index(self):
-        return Index(self)
+        return ProjectIndex(self)
+
+    @property
+    def size(self):
+        return Size(self)
 
     def __setattr__(self, key, value):
         object.__setattr__(self, key, value)
@@ -205,10 +214,10 @@ class Expr(Operation, metaclass=_ExprMeta):
 
     @property
     def divisions(self):
-        if "divisions" in self._parameters:
-            idx = self._parameters.index("divisions")
-            return self.operands[idx]
         return tuple(self._divisions())
+
+    def _divisions(self):
+        raise NotImplementedError()
 
     @property
     def known_divisions(self):
@@ -225,18 +234,11 @@ class Expr(Operation, metaclass=_ExprMeta):
 
     @property
     def _name(self):
-        if "_name" in self._parameters:
-            idx = self._parameters.index("_name")
-            return self.operands[idx]
         return funcname(type(self)).lower() + "-" + tokenize(*self.operands)
 
     @property
     def columns(self):
-        if "columns" in self._parameters:
-            idx = self._parameters.index("columns")
-            return self.operands[idx]
-        else:
-            return self._meta.columns
+        return self._meta.columns
 
     @property
     def dtypes(self):
@@ -244,12 +246,6 @@ class Expr(Operation, metaclass=_ExprMeta):
 
     @property
     def _meta(self):
-        if "_meta" in self._parameters:
-            idx = self._parameters.index("_meta")
-            return self.operands[idx]
-        raise NotImplementedError()
-
-    def _divisions(self):
         raise NotImplementedError()
 
     def __dask_graph__(self):
@@ -392,6 +388,10 @@ class Projection(Elemwise):
 
     def _divisions(self):
         return self.operand("frame").divisions
+
+    @property
+    def columns(self):
+        return self.operand("columns")
 
     @property
     def _meta(self):
@@ -618,6 +618,17 @@ class FromGraph(IO):
 
     _parameters = ["layer", "_meta", "divisions", "_name"]
 
+    @property
+    def _meta(self):
+        return self.operand("_meta")
+
+    def _divisions(self):
+        return self.operand("divisions")
+
+    @property
+    def _name(self):
+        return self.operand("_name")
+
     def _layer(self):
         return self.operand("layer")
 
@@ -706,6 +717,10 @@ class Base(DaskMethodsMixin):
     def expr(self):
         return self.__expr
 
+    @property
+    def _meta(self):
+        return self.expr._meta
+
     def __dask_graph__(self):
         return self.expr.__dask_graph__()
 
@@ -768,11 +783,11 @@ class DataFrame(Base):
 
     @property
     def index(self):
-        return new_collection(ProjectIndex(self.expr))
+        return new_collection(self.expr.index)
 
     @property
     def size(self):
-        return new_collection(Size(self.expr))
+        return new_collection(self.expr.size)
 
     def __getattr__(self, key):
         try:
@@ -798,11 +813,11 @@ class Series(Base):
 
     @property
     def index(self):
-        return new_collection(ProjectIndex(self.expr))
+        return new_collection(self.expr.index)
 
     @property
     def size(self):
-        return new_collection(Size(self.expr))
+        return new_collection(self.expr.size)
 
     def __getitem__(self, other):
         if isinstance(other, Base):
