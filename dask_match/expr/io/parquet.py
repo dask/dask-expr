@@ -12,8 +12,8 @@ from dask.dataframe.io.parquet.utils import _split_user_options
 from dask.utils import natural_sort_key
 from matchpy import CustomConstraint, Pattern, ReplacementRule, Wildcard
 
-from dask_match.expr.dataframe.core import EQ, GE, GT, LE, LT, NE, Filter
-from dask_match.expr.dataframe.io import IO
+from dask_match.expr.core import EQ, GE, GT, LE, LT, NE, Filter
+from dask_match.expr.io import IO
 
 NONE_LABEL = "__null_dask_index__"
 

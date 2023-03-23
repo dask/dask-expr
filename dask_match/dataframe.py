@@ -11,7 +11,7 @@ from dask.dataframe.core import (
 )
 from fsspec.utils import stringify_path
 
-from dask_match.expr.dataframe.core import Expr
+from dask_match.expr.core import Expr
 
 
 #
@@ -203,25 +203,25 @@ def new_collection(expr):
 
 
 def optimize(collection):
-    from dask_match.expr.dataframe.core import optimize_expr
+    from dask_match.expr.core import optimize_expr
 
     return new_collection(optimize_expr(collection.expr))
 
 
 def from_pandas(*args, **kwargs):
-    from dask_match.expr.dataframe.io.io import FromPandas
+    from dask_match.expr.io.io import FromPandas
 
     return new_collection(FromPandas(*args, **kwargs))
 
 
 def from_graph(*args, **kwargs):
-    from dask_match.expr.dataframe.io.io import FromGraph
+    from dask_match.expr.io.io import FromGraph
 
     return new_collection(FromGraph(*args, **kwargs))
 
 
 def read_csv(*args, **kwargs):
-    from dask_match.expr.dataframe.io.csv import ReadCSV
+    from dask_match.expr.io.csv import ReadCSV
 
     return new_collection(ReadCSV(*args, **kwargs))
 
@@ -244,7 +244,7 @@ def read_parquet(
     filesystem="fsspec",
     **kwargs,
 ):
-    from dask_match.expr.dataframe.io.parquet import _list_columns, ReadParquet
+    from dask_match.expr.io.parquet import _list_columns, ReadParquet
 
     if use_nullable_dtypes:
         use_nullable_dtypes = config.get("dataframe.dtype_backend")

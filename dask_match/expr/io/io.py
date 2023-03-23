@@ -1,6 +1,6 @@
 import math
 
-from dask_match.expr.dataframe.core import Expr
+from dask_match.expr.core import Expr
 
 
 class IO(Expr):

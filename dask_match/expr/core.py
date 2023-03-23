@@ -575,4 +575,4 @@ def optimize_expr(expr):
     return expr
 
 
-from dask_match.expr.dataframe.reductions import Count, Max, Min, Mode, Size, Sum
+from dask_match.expr.reductions import Count, Max, Min, Mode, Size, Sum

@@ -1,6 +1,6 @@
 import functools
 
-from dask_match.expr.dataframe.io.io import IO
+from dask_match.expr.io.io import IO
 
 
 class ReadCSV(IO):
