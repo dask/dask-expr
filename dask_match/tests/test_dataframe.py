@@ -8,7 +8,7 @@ from dask.utils import M
 from dask_match import read_csv, from_pandas, optimize, read_parquet
 
 
-def _make_file(dir, format="parquet", df=None): 
+def _make_file(dir, format="parquet", df=None):
     fn = os.path.join(str(dir), f"myfile.{format}")
     if df is None:
         df = pd.DataFrame({c: range(10) for c in "abcde"})
@@ -186,7 +186,11 @@ def test_predicate_pushdown(tmpdir):
     x = df[df.a == 5][df.c > 20]["b"]
     y = optimize(x)
     assert isinstance(y.expr, ReadParquet)
-    assert ("a", "==", 5) in y.expr.operand("filters") or ("a", "==", 5) in y.expr.operand("filters")
+    assert ("a", "==", 5) in y.expr.operand("filters") or (
+        "a",
+        "==",
+        5,
+    ) in y.expr.operand("filters")
     assert ("c", ">", 20) in y.expr.operand("filters")
     assert y.columns == ["b"]
 

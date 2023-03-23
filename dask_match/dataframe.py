@@ -3,7 +3,12 @@ import functools
 from tlz import first
 from dask import config
 from dask.base import DaskMethodsMixin, named_schedulers
-from dask.dataframe.core import _concat, is_dataframe_like, is_series_like, is_index_like
+from dask.dataframe.core import (
+    _concat,
+    is_dataframe_like,
+    is_series_like,
+    is_index_like,
+)
 from fsspec.utils import stringify_path
 
 from dask_match.expr.dataframe.core import Expr
@@ -13,6 +18,7 @@ from dask_match.expr.dataframe.core import Expr
 # Utilities to wrap Expr API
 # (Helps limit boiler-plate code in collection APIs)
 #
+
 
 def _wrap_expr_api(*args, wrap_api=None, **kwargs):
     # Use Expr API, but convert to/from Expr objects
@@ -25,6 +31,7 @@ def _wrap_expr_api(*args, wrap_api=None, **kwargs):
         return new_collection(result)
     return result
 
+
 def _wrap_expr_op(self, other, op=None):
     # Wrap expr operator
     assert op is not None
@@ -36,6 +43,7 @@ def _wrap_expr_op(self, other, op=None):
 #
 # Collection classes
 #
+
 
 class FrameBase(DaskMethodsMixin):
     """Base class for Expr-backed Collections"""
@@ -196,9 +204,8 @@ def new_collection(expr):
 
 def optimize(collection):
     from dask_match.expr.dataframe.core import optimize_expr
- 
-    return new_collection(optimize_expr(collection.expr))
 
+    return new_collection(optimize_expr(collection.expr))
 
 
 def from_pandas(*args, **kwargs):

@@ -99,7 +99,9 @@ class ReadParquet(IO):
 
             def predicate_pushdown(a, b, c, d, e, op=None):
                 return ReadParquet(
-                    a, columns=_list_columns(b), filters=(c or []) + [(d, op._operator_repr, e)]
+                    a,
+                    columns=_list_columns(b),
+                    filters=(c or []) + [(d, op._operator_repr, e)],
                 )
 
             yield ReplacementRule(
@@ -114,7 +116,9 @@ class ReadParquet(IO):
 
             def predicate_pushdown(a, b, c, d, e, op=None):
                 return ReadParquet(
-                    a, columns=_list_columns(b), filters=(c or []) + [(d, op._operator_repr, e)]
+                    a,
+                    columns=_list_columns(b),
+                    filters=(c or []) + [(d, op._operator_repr, e)],
                 )
 
             yield ReplacementRule(
@@ -129,7 +133,9 @@ class ReadParquet(IO):
 
             def predicate_pushdown(a, b, c, d, e, op=None):
                 return ReadParquet(
-                    a, columns=_list_columns(b), filters=(c or []) + [(d, op._operator_repr, e)]
+                    a,
+                    columns=_list_columns(b),
+                    filters=(c or []) + [(d, op._operator_repr, e)],
                 )
 
             yield ReplacementRule(
@@ -145,7 +151,9 @@ class ReadParquet(IO):
 
             def predicate_pushdown(a, b, c, d, e, op=None):
                 return ReadParquet(
-                    a, columns=_list_columns(b), filters=(c or []) + [(d, op._operator_repr, e)]
+                    a,
+                    columns=_list_columns(b),
+                    filters=(c or []) + [(d, op._operator_repr, e)],
                 )
 
             yield ReplacementRule(
@@ -161,7 +169,6 @@ class ReadParquet(IO):
 
     @cached_property
     def _dataset_info(self):
-
         # Process and split user options
         (
             dataset_options,

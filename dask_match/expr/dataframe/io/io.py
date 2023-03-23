@@ -6,6 +6,7 @@ from dask_match.expr.dataframe.core import Expr
 class IO(Expr):
     pass
 
+
 class FromPandas(IO):
     """The only way today to get a real dataframe"""
 
