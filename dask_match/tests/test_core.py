@@ -170,7 +170,7 @@ def test_conditionals(func):
 
 
 def test_predicate_pushdown(tmpdir):
-    from dask_match.expr.io.parquet import ReadParquet
+    from dask_match.expr.dataframe.io.parquet import ReadParquet
 
     original = pd.DataFrame(
         {
@@ -231,8 +231,7 @@ def test_columns_traverse_filters():
     df = pd.DataFrame({"x": range(20), "y": range(20), "z": range(20)})
     df = from_pandas(df, npartitions=2)
 
-    expr = df[df.x > 5].y
-    result = optimize(expr)
+    result = optimize(df[df.x > 5].y)
     expected = df.y[df.x > 5]
 
     assert str(result) == str(expected)

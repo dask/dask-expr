@@ -1,7 +1,6 @@
 import functools
 
-from dask_match.collection.core import new_collection
-from dask_match.expr.io.io import IO
+from dask_match.expr.dataframe.io.io import IO
 
 
 class ReadCSV(IO):
@@ -28,7 +27,3 @@ class ReadCSV(IO):
 
     def _layer(self):
         return self._ddf.dask.to_dict()
-
-
-def read_csv(*args, **kwargs):
-    return new_collection(ReadCSV(*args, **kwargs))

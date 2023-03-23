@@ -1,22 +1,24 @@
 import functools
 
 from tlz import first
-from dask.base import DaskMethodsMixin, named_schedulers, normalize_token
+from dask import config
+from dask.base import DaskMethodsMixin, named_schedulers
 from dask.dataframe.core import _concat, is_dataframe_like, is_series_like, is_index_like
+from fsspec.utils import stringify_path
 
-from dask_match.expr.core import Expr
+from dask_match.expr.dataframe.core import Expr
 
 
 #
 # Utilities to wrap Expr API
-# (Helps limits boiler-plate code)
+# (Helps limit boiler-plate code in collection APIs)
 #
 
 def _wrap_expr_api(*args, wrap_api=None, **kwargs):
     # Use Expr API, but convert to/from Expr objects
     assert wrap_api is not None
     result = wrap_api(
-        *[arg.expr if isinstance(arg, Base) else arg for arg in args],
+        *[arg.expr if isinstance(arg, FrameBase) else arg for arg in args],
         **kwargs,
     )
     if isinstance(result, Expr):
@@ -26,7 +28,7 @@ def _wrap_expr_api(*args, wrap_api=None, **kwargs):
 def _wrap_expr_op(self, other, op=None):
     # Wrap expr operator
     assert op is not None
-    if isinstance(other, Base):
+    if isinstance(other, FrameBase):
         other = other.expr
     return new_collection(getattr(self.expr, op)(other))
 
@@ -35,7 +37,7 @@ def _wrap_expr_op(self, other, op=None):
 # Collection classes
 #
 
-class Base(DaskMethodsMixin):
+class FrameBase(DaskMethodsMixin):
     """Base class for Expr-backed Collections"""
 
     __dask_scheduler__ = staticmethod(
@@ -68,13 +70,11 @@ class Base(DaskMethodsMixin):
         return _concat, ()
 
     def __dask_postpersist__(self):
-        from dask_match.expr.io.io import from_graph
-
         return from_graph, (self._meta, self.divisions, self._name)
 
     def __getattr__(self, key):
         try:
-            # Prioritize `Base` attributes
+            # Prioritize `FrameBase` attributes
             return object.__getattribute__(self, key)
         except AttributeError as err:
             try:
@@ -110,15 +110,10 @@ for op in [
     "__eq__",
     "__ne__",
 ]:
-    setattr(Base, op, functools.partialmethod(_wrap_expr_op, op=op))
+    setattr(FrameBase, op, functools.partialmethod(_wrap_expr_op, op=op))
 
 
-@normalize_token.register(Base)
-def normalize_collection(collection):
-    return collection._name
-
-
-class DataFrame(Base):
+class DataFrame(FrameBase):
     """DataFrame-like Expr Collection"""
 
     @property
@@ -140,7 +135,7 @@ class DataFrame(Base):
             raise err
 
     def __getitem__(self, other):
-        if isinstance(other, Base):
+        if isinstance(other, FrameBase):
             return new_collection(self.expr.__getitem__(other.expr))
         return new_collection(self.expr.__getitem__(other))
 
@@ -148,7 +143,7 @@ class DataFrame(Base):
         return f"<dask_match.core.DataFrame: expr={self.expr}>"
 
 
-class Series(Base):
+class Series(FrameBase):
     """Series-like Expr Collection"""
 
     @property
@@ -160,7 +155,7 @@ class Series(Base):
         return new_collection(self.expr.size)
 
     def __getitem__(self, other):
-        if isinstance(other, Base):
+        if isinstance(other, FrameBase):
             return new_collection(self.expr.__getitem__(other.expr))
         return new_collection(self.expr.__getitem__(other))
 
@@ -175,7 +170,7 @@ class Index(Series):
         return f"<dask_match.core.Index: expr={self.expr}>"
 
 
-class Scalar(Base):
+class Scalar(FrameBase):
     """Scalar Expr Collection"""
 
     def __repr__(self):
@@ -200,6 +195,73 @@ def new_collection(expr):
 
 
 def optimize(collection):
-    from dask_match.expr.core import optimize as optimize_expr
+    from dask_match.expr.dataframe.core import optimize_expr
  
     return new_collection(optimize_expr(collection.expr))
+
+
+
+def from_pandas(*args, **kwargs):
+    from dask_match.expr.dataframe.io.io import FromPandas
+
+    return new_collection(FromPandas(*args, **kwargs))
+
+
+def from_graph(*args, **kwargs):
+    from dask_match.expr.dataframe.io.io import FromGraph
+
+    return new_collection(FromGraph(*args, **kwargs))
+
+
+def read_csv(*args, **kwargs):
+    from dask_match.expr.dataframe.io.csv import ReadCSV
+
+    return new_collection(ReadCSV(*args, **kwargs))
+
+
+def read_parquet(
+    path=None,
+    columns=None,
+    filters=None,
+    categories=None,
+    index=None,
+    storage_options=None,
+    use_nullable_dtypes=False,
+    calculate_divisions=False,
+    ignore_metadata_file=False,
+    metadata_task_size=None,
+    split_row_groups="infer",
+    blocksize="default",
+    aggregate_files=None,
+    parquet_file_extension=(".parq", ".parquet", ".pq"),
+    filesystem="fsspec",
+    **kwargs,
+):
+    from dask_match.expr.dataframe.io.parquet import _list_columns, ReadParquet
+
+    if use_nullable_dtypes:
+        use_nullable_dtypes = config.get("dataframe.dtype_backend")
+
+    if hasattr(path, "name"):
+        path = stringify_path(path)
+
+    return new_collection(
+        ReadParquet(
+            path,
+            columns=_list_columns(columns),
+            filters=filters,
+            categories=categories,
+            index=index,
+            storage_options=storage_options,
+            use_nullable_dtypes=use_nullable_dtypes,
+            calculate_divisions=calculate_divisions,
+            ignore_metadata_file=ignore_metadata_file,
+            metadata_task_size=metadata_task_size,
+            split_row_groups=split_row_groups,
+            blocksize=blocksize,
+            aggregate_files=aggregate_files,
+            parquet_file_extension=parquet_file_extension,
+            filesystem=filesystem,
+            **kwargs,
+        )
+    )

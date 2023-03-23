@@ -1,7 +1,6 @@
 import math
 
-from dask_match.collection.core import new_collection
-from dask_match.expr.core import Expr
+from dask_match.expr.dataframe.core import Expr
 
 
 class IO(Expr):
@@ -34,10 +33,6 @@ class FromPandas(IO):
     __repr__ = __str__
 
 
-def from_pandas(*args, **kwargs):
-    return new_collection(FromPandas(*args, **kwargs))
-
-
 class FromGraph(IO):
     """A DataFrame created from an opaque Dask task graph
 
@@ -60,7 +55,3 @@ class FromGraph(IO):
 
     def _layer(self):
         return self.operand("layer")
-
-
-def from_graph(*args, **kwargs):
-    return new_collection(FromGraph(*args, **kwargs))

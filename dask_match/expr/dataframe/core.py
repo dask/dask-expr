@@ -74,7 +74,7 @@ class Expr(Operation, metaclass=_ExprMeta):
         """Rules associated to this class that are useful for optimization
 
         See also:
-            optimize
+            optimize_expr
             _ExprMeta
         """
         yield from []
@@ -547,7 +547,7 @@ def normalize_expression(expr):
     return expr._name
 
 
-def optimize(expr):
+def optimize_expr(expr):
     """High level query optimization
 
     Today we just use MatchPy's term rewriting system, leveraging the
@@ -575,4 +575,4 @@ def optimize(expr):
     return expr
 
 
-from dask_match.expr.reductions import Count, Max, Min, Mode, Size, Sum
+from dask_match.expr.dataframe.reductions import Count, Max, Min, Mode, Size, Sum

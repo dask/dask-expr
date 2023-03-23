@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from functools import cached_property, partial
 
-import dask
 from dask.dataframe.io.parquet.core import (
     ParquetFunctionWrapper,
     get_engine,
@@ -11,12 +10,10 @@ from dask.dataframe.io.parquet.core import (
 )
 from dask.dataframe.io.parquet.utils import _split_user_options
 from dask.utils import natural_sort_key
-from fsspec.utils import stringify_path
 from matchpy import CustomConstraint, Pattern, ReplacementRule, Wildcard
 
-from dask_match.collection.core import new_collection
-from dask_match.expr.core import EQ, GE, GT, LE, LT, NE, Filter
-from dask_match.expr.io import IO
+from dask_match.expr.dataframe.core import EQ, GE, GT, LE, LT, NE, Filter
+from dask_match.expr.dataframe.io import IO
 
 NONE_LABEL = "__null_dask_index__"
 
@@ -299,49 +296,3 @@ class ReadParquet(IO):
         io_func = self._plan["func"]
         parts = self._plan["parts"]
         return {(self._name, i): (io_func, part) for i, part in enumerate(parts)}
-
-
-def read_parquet(
-    path=None,
-    columns=None,
-    filters=None,
-    categories=None,
-    index=None,
-    storage_options=None,
-    use_nullable_dtypes=False,
-    calculate_divisions=False,
-    ignore_metadata_file=False,
-    metadata_task_size=None,
-    split_row_groups="infer",
-    blocksize="default",
-    aggregate_files=None,
-    parquet_file_extension=(".parq", ".parquet", ".pq"),
-    filesystem="fsspec",
-    **kwargs,
-):
-    if use_nullable_dtypes:
-        use_nullable_dtypes = dask.config.get("dataframe.dtype_backend")
-
-    if hasattr(path, "name"):
-        path = stringify_path(path)
-
-    return new_collection(
-        ReadParquet(
-            path,
-            columns=_list_columns(columns),
-            filters=filters,
-            categories=categories,
-            index=index,
-            storage_options=storage_options,
-            use_nullable_dtypes=use_nullable_dtypes,
-            calculate_divisions=calculate_divisions,
-            ignore_metadata_file=ignore_metadata_file,
-            metadata_task_size=metadata_task_size,
-            split_row_groups=split_row_groups,
-            blocksize=blocksize,
-            aggregate_files=aggregate_files,
-            parquet_file_extension=parquet_file_extension,
-            filesystem=filesystem,
-            **kwargs,
-        )
-    )
