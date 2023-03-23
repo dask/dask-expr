@@ -1,7 +1,6 @@
 import os
 
 import pandas as pd
-import numpy as np
 import pytest
 from dask.dataframe.utils import assert_eq
 from dask.utils import M
@@ -170,7 +169,7 @@ def test_conditionals(func):
 
 
 def test_predicate_pushdown(tmpdir):
-    from dask_match.expr.dataframe.io.parquet import ReadParquet
+    from dask_match.expr.dataframe import ReadParquet
 
     original = pd.DataFrame(
         {
