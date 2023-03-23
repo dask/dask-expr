@@ -1,1 +1,1 @@
-from dask_match.dataframe import *
+from dask_match.core import *
