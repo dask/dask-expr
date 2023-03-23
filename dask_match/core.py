@@ -134,13 +134,18 @@ class DataFrame(FrameBase):
 
     def __getattr__(self, key):
         try:
-            return super().__getattr__(key)
+            # Prioritize `DataFrame` attributes
+            return object.__getattribute__(self, key)
         except AttributeError as err:
-            # Check if key is in columns if key
-            # is not a normal attribute
-            if key in self.expr._meta.columns:
-                return Series(self.expr[key])
-            raise err
+            try:
+                # Check if key is in columns if key
+                # is not a normal attribute
+                if key in self.expr._meta.columns:
+                    return Series(self.expr[key])
+                raise err
+            except AttributeError:
+                # Fall back to `BaseFrame.__getattr__`
+                return super().__getattr__(key)
 
     def __getitem__(self, other):
         if isinstance(other, FrameBase):
