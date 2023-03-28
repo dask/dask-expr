@@ -73,6 +73,11 @@ class FrameBase(DaskMethodsMixin):
             return new_collection(self.expr.__getitem__(other.expr))
         return new_collection(self.expr.__getitem__(other))
 
+    def __delitem__(self, key):
+        columns = [c for c in self.columns if c != key]
+        out = self[columns]
+        self.__expr = out.__expr
+
     def __dask_graph__(self):
         return self.expr.__dask_graph__()
 

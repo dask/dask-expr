@@ -36,6 +36,13 @@ def test_basic(tmpdir):
     x + 1
     1 + x
 
+    # Check mutation
+    assert "a" in z.columns
+    assert "b" in z.columns
+    del z["a"]
+    assert "a" not in z.columns
+    assert "b" in z.columns
+
 
 def df(fn):
     return read_parquet(fn, columns=["a", "b", "c"])
