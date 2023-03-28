@@ -64,6 +64,15 @@ class FrameBase(DaskMethodsMixin):
     def _meta(self):
         return self.expr._meta
 
+    @property
+    def size(self):
+        return new_collection(self.expr.size)
+
+    def __getitem__(self, other):
+        if isinstance(other, FrameBase):
+            return new_collection(self.expr.__getitem__(other.expr))
+        return new_collection(self.expr.__getitem__(other))
+
     def __dask_graph__(self):
         return self.expr.__dask_graph__()
 
@@ -128,10 +137,6 @@ class DataFrame(FrameBase):
     def index(self):
         return new_collection(self.expr.index)
 
-    @property
-    def size(self):
-        return new_collection(self.expr.size)
-
     def __getattr__(self, key):
         try:
             # Prioritize `DataFrame` attributes
@@ -147,11 +152,6 @@ class DataFrame(FrameBase):
                 # Fall back to `BaseFrame.__getattr__`
                 return super().__getattr__(key)
 
-    def __getitem__(self, other):
-        if isinstance(other, FrameBase):
-            return new_collection(self.expr.__getitem__(other.expr))
-        return new_collection(self.expr.__getitem__(other))
-
     def __repr__(self):
         return f"<dask_match.core.DataFrame: expr={self.expr}>"
 
@@ -162,15 +162,6 @@ class Series(FrameBase):
     @property
     def index(self):
         return new_collection(self.expr.index)
-
-    @property
-    def size(self):
-        return new_collection(self.expr.size)
-
-    def __getitem__(self, other):
-        if isinstance(other, FrameBase):
-            return new_collection(self.expr.__getitem__(other.expr))
-        return new_collection(self.expr.__getitem__(other))
 
     def __repr__(self):
         return f"<dask_match.core.Series: expr={self.expr}>"

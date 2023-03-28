@@ -442,7 +442,7 @@ class Binop(Elemwise):
         }
 
     def __str__(self):
-        return f"{self.operand('left')} {self._operator_repr} {self.operand('right')}"
+        return f"{self.left} {self._operator_repr} {self.right}"
 
     @classmethod
     def _replacement_rules(cls):
