@@ -26,4 +26,6 @@ class ReadCSV(IO):
         return self._ddf.divisions
 
     def _layer(self):
-        return self._ddf.dask.to_dict()
+        return {
+            (self._name, i): k for i, k in enumerate(self._ddf.dask.to_dict().values())
+        }

@@ -36,12 +36,26 @@ def test_basic(tmpdir):
     x + 1
     1 + x
 
-    # Check mutation
-    assert "a" in z.columns
-    assert "b" in z.columns
-    del z["a"]
-    assert "a" not in z.columns
-    assert "b" in z.columns
+
+def test_mutation(tmpdir):
+    fn_pq = _make_file(tmpdir, format="parquet")
+    x = read_parquet(fn_pq, columns=("a", "b", "c")) + 1
+    assert "a" in x.columns
+    assert "b" in x.columns
+
+    # Check __delitem__
+    del x["a"]
+    assert "a" not in x.columns
+    assert "b" in x.columns
+
+    # Check __setitem__
+    x.a = x.b + 1
+    assert_eq(x.a.compute(), (x.b + 1).compute(), check_names=False)
+
+    # Check assign
+    y = x.assign(d=x.a + x.b, e=x.b + x.c)
+    assert_eq(y.d.compute(), (x.a + x.b).compute(), check_names=False)
+    assert_eq(y.e.compute(), (x.b + x.c).compute(), check_names=False)
 
 
 def df(fn):

@@ -54,11 +54,11 @@ class FrameBase(DaskMethodsMixin):
     __dask_optimize__ = staticmethod(lambda dsk, keys, **kwargs: dsk)
 
     def __init__(self, expr):
-        self.__expr = expr
+        self._expr = expr
 
     @property
     def expr(self):
-        return self.__expr
+        return self._expr
 
     @property
     def _meta(self):
@@ -76,7 +76,7 @@ class FrameBase(DaskMethodsMixin):
     def __delitem__(self, key):
         columns = [c for c in self.columns if c != key]
         out = self[columns]
-        self.__expr = out.__expr
+        self._expr = out._expr
 
     def __dask_graph__(self):
         return self.expr.__dask_graph__()
@@ -141,6 +141,22 @@ class DataFrame(FrameBase):
     @property
     def index(self):
         return new_collection(self.expr.index)
+
+    def assign(self, **pairs):
+        from dask_match.core import Assign
+
+        result = self
+        for k, v in pairs.items():
+            if not isinstance(v, Series):
+                raise TypeError(f"Column assignment doesn't support type {type(v)}")
+            if not isinstance(k, str):
+                raise TypeError(f"Column name cannot be type {type(k)}")
+            result = new_collection(Assign(result.expr, k, v.expr))
+        return result
+
+    def __setitem__(self, key, value):
+        out = self.assign(**{key: value})
+        self._expr = out._expr
 
     def __getattr__(self, key):
         try:

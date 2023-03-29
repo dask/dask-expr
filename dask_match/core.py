@@ -5,6 +5,8 @@ from collections.abc import Iterator
 
 import toolz
 from dask.base import normalize_token, tokenize
+from dask.dataframe import methods
+from dask.dataframe.core import _extract_meta
 from dask.utils import M, apply, funcname
 from matchpy import (
     Arity,
@@ -354,6 +356,30 @@ class Apply(Elemwise):
                 M.apply,
                 [(self.frame._name, i), self.function] + list(self.args),
                 self.kwargs,
+            )
+            for i in range(self.npartitions)
+        }
+
+
+class Assign(Elemwise):
+    """Column Assignment"""
+
+    _parameters = ["frame", "key", "value"]
+    operation = methods.assign
+
+    @property
+    def _meta(self):
+        return _extract_meta(self.frame._meta, nonempty=True).assign(
+            **_extract_meta({self.key: self.value}, nonempty=True)
+        )
+
+    def _layer(self):
+        return {
+            (self._name, i): (
+                methods.assign,
+                (self.frame._name, i),
+                self.key,
+                (self.value._name, i),
             )
             for i in range(self.npartitions)
         }
