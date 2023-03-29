@@ -1,18 +1,17 @@
 import functools
 
-from tlz import first
 from dask import config
 from dask.base import DaskMethodsMixin, named_schedulers
 from dask.dataframe.core import (
     _concat,
     is_dataframe_like,
-    is_series_like,
     is_index_like,
+    is_series_like,
 )
 from fsspec.utils import stringify_path
+from tlz import first
 
 from dask_match.core import Expr
-
 
 #
 # Utilities to wrap Expr API
@@ -73,11 +72,6 @@ class FrameBase(DaskMethodsMixin):
             return new_collection(self.expr.__getitem__(other.expr))
         return new_collection(self.expr.__getitem__(other))
 
-    def __delitem__(self, key):
-        columns = [c for c in self.columns if c != key]
-        out = self[columns]
-        self._expr = out._expr
-
     def __dask_graph__(self):
         return self.expr.__dask_graph__()
 
@@ -110,6 +104,10 @@ class FrameBase(DaskMethodsMixin):
                 # Raise original error
                 raise err
 
+    @property
+    def index(self):
+        return new_collection(self.expr.index)
+
 
 # Add operator attributes
 for op in [
@@ -138,10 +136,6 @@ for op in [
 class DataFrame(FrameBase):
     """DataFrame-like Expr Collection"""
 
-    @property
-    def index(self):
-        return new_collection(self.expr.index)
-
     def assign(self, **pairs):
         from dask_match.core import Assign
 
@@ -156,6 +150,11 @@ class DataFrame(FrameBase):
 
     def __setitem__(self, key, value):
         out = self.assign(**{key: value})
+        self._expr = out._expr
+
+    def __delitem__(self, key):
+        columns = [c for c in self.columns if c != key]
+        out = self[columns]
         self._expr = out._expr
 
     def __getattr__(self, key):
@@ -179,10 +178,6 @@ class DataFrame(FrameBase):
 
 class Series(FrameBase):
     """Series-like Expr Collection"""
-
-    @property
-    def index(self):
-        return new_collection(self.expr.index)
 
     def __repr__(self):
         return f"<dask_match.core.Series: expr={self.expr}>"
@@ -261,7 +256,7 @@ def read_parquet(
     filesystem="fsspec",
     **kwargs,
 ):
-    from dask_match.io.parquet import _list_columns, ReadParquet
+    from dask_match.io.parquet import ReadParquet, _list_columns
 
     if use_nullable_dtypes:
         use_nullable_dtypes = config.get("dataframe.dtype_backend")

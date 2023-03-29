@@ -155,3 +155,8 @@ def test_persist(df, ddf):
     assert len(b.__dask_graph__()) == b.npartitions
 
     assert_eq(b.y.sum(), (df + 2).y.sum())
+
+
+def test_index(df, ddf):
+    assert_eq(ddf.index, df.index)
+    assert_eq(ddf.x.index, df.x.index)
