@@ -3,10 +3,10 @@ import numbers
 import operator
 from collections.abc import Iterator
 
+import pandas as pd
 import toolz
 from dask.base import normalize_token, tokenize
 from dask.dataframe import methods
-from dask.dataframe.core import _extract_meta
 from dask.utils import M, apply, funcname
 from matchpy import (
     Arity,
@@ -369,9 +369,7 @@ class Assign(Elemwise):
 
     @property
     def _meta(self):
-        return _extract_meta(self.frame._meta, nonempty=True).assign(
-            **_extract_meta({self.key: self.value}, nonempty=True)
-        )
+        return self.frame._meta.assign(**{self.key: self.value._meta})
 
     def _layer(self):
         return {
@@ -414,7 +412,10 @@ class Projection(Elemwise):
 
     @property
     def columns(self):
-        return self.operand("columns")
+        if isinstance(self.operand("columns"), list):
+            return pd.Index(self.operand("columns"))
+        else:
+            return self.operand("columns")
 
     @property
     def _meta(self):

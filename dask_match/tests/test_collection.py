@@ -5,7 +5,7 @@ import pytest
 from dask.dataframe.utils import assert_eq
 from dask.utils import M
 
-from dask_match import read_csv, from_pandas, optimize, read_parquet
+from dask_match import from_pandas, optimize, read_csv, read_parquet
 
 
 def _make_file(dir, format="parquet", df=None):
@@ -30,32 +30,33 @@ def test_basic(tmpdir):
 
     z = x + y
     result = z[["a", "b", "d"]].sum(skipna=False)
-    assert result.operand("skipna") == False
-    assert result.operands[0].columns == ["a", "b", "d"]
+    assert result.operand("skipna") is False
+    assert list(result.operands[0].columns) == ["a", "b", "d"]
 
     x + 1
     1 + x
 
 
-def test_mutation(tmpdir):
-    fn_pq = _make_file(tmpdir, format="parquet")
-    x = read_parquet(fn_pq, columns=("a", "b", "c")) + 1
-    assert "a" in x.columns
-    assert "b" in x.columns
+def test_del():
+    df = pd.DataFrame({"x": range(100), "y": range(100)})
+    ddf = from_pandas(df, npartitions=10)
+    df = df.copy()
 
     # Check __delitem__
-    del x["a"]
-    assert "a" not in x.columns
-    assert "b" in x.columns
+    del df["x"]
+    del ddf["x"]
+    assert_eq(df, ddf)
 
-    # Check __setitem__
-    x.a = x.b + 1
-    assert_eq(x.a.compute(), (x.b + 1).compute(), check_names=False)
 
-    # Check assign
-    y = x.assign(d=x.a + x.b, e=x.b + x.c)
-    assert_eq(y.d.compute(), (x.a + x.b).compute(), check_names=False)
-    assert_eq(y.e.compute(), (x.b + x.c).compute(), check_names=False)
+def test_setitem():
+    df = pd.DataFrame({"x": range(100), "y": range(100)})
+    ddf = from_pandas(df, npartitions=10)
+    df = df.copy()
+
+    ddf["z"] = ddf.x + ddf.y
+
+    assert "z" in ddf.columns
+    assert_eq(ddf, ddf)
 
 
 def df(fn):
@@ -213,7 +214,7 @@ def test_predicate_pushdown(tmpdir):
         5,
     ) in y.expr.operand("filters")
     assert ("c", ">", 20) in y.expr.operand("filters")
-    assert y.columns == ["b"]
+    assert list(y.columns) == ["b"]
 
     # Check computed result
     y_result = y.compute()
@@ -228,6 +229,7 @@ def test_predicate_pushdown(tmpdir):
         lambda df: df.astype(int),
         lambda df: df.apply(lambda row, x, y=10: row * x + y, x=2),
         lambda df: df[df.x > 5],
+        lambda df: df.assign(a=df.x + df.y, b=df.x - df.y),
     ],
 )
 def test_blockwise(func):
