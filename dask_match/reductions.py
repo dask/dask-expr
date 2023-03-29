@@ -1,6 +1,6 @@
 import pandas as pd
 import toolz
-from dask.dataframe.core import _concat, is_series_like
+from dask.dataframe.core import _concat, is_series_like, make_meta, meta_nonempty
 from dask.utils import M, apply
 from matchpy import Pattern, ReplacementRule, Wildcard
 
@@ -91,11 +91,11 @@ class ApplyConcatApply(Expr):
 
     @property
     def _meta(self):
-        meta = self.frame._meta
+        meta = meta_nonempty(self.frame._meta)
         meta = self.chunk(meta, **self.chunk_kwargs)
         meta = self.combine([meta], **self.combine_kwargs)
         meta = self.aggregate([meta], **self.aggregate_kwargs)
-        return meta
+        return make_meta(meta)
 
     def _divisions(self):
         return [None, None]
@@ -199,10 +199,6 @@ class Max(Reduction):
         return dict(
             skipna=self.skipna,
         )
-
-    @property
-    def _meta(self):
-        return self.frame._meta.max(**self.chunk_kwargs)
 
     @classmethod
     def _replacement_rules(cls):
