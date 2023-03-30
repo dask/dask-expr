@@ -1,6 +1,7 @@
 import functools
 import numbers
 import operator
+from collections import defaultdict
 from collections.abc import Iterator
 
 import pandas as pd
@@ -249,11 +250,13 @@ class Expr(Operation, metaclass=_ExprMeta):
 
     def __dask_graph__(self):
         """Traverse expression tree, collect layers"""
+
         stack = [self]
         seen = set()
         layers = []
+        fusable = _fusable_ops(self)
         while stack:
-            expr = stack.pop()
+            expr = _fuse_blockwise_deps(stack.pop(), fusable)
 
             if expr._name in seen:
                 continue
@@ -307,19 +310,26 @@ class Blockwise(Expr):
     def _name(self):
         return funcname(self.operation) + "-" + tokenize(*self.operands)
 
-    def _layer(self):
+    def _block(self):
         return {
-            (self._name, i): (
+            self._name: (
                 apply,
                 self.operation,
                 [
-                    (operand._name, i) if isinstance(operand, Expr) else operand
+                    operand._name if isinstance(operand, Expr) else operand
                     for operand in self.operands
                 ],
                 self._kwargs,
             )
-            for i in range(self.npartitions)
         }
+
+    def _layer(self):
+        return _blockwise_layer(
+            self._name,
+            self._block(),
+            self.operands,
+            self.npartitions,
+        )
 
 
 class Elemwise(Blockwise):
@@ -349,15 +359,14 @@ class Apply(Elemwise):
     def _meta(self):
         return self.frame._meta.apply(self.function, *self.args, **self.kwargs)
 
-    def _layer(self):
+    def _block(self):
         return {
-            (self._name, i): (
+            self._name: (
                 apply,
                 M.apply,
-                [(self.frame._name, i), self.function] + list(self.args),
+                [self.frame._name, self.function] + list(self.args),
                 self.kwargs,
             )
-            for i in range(self.npartitions)
         }
 
 
@@ -371,15 +380,14 @@ class Assign(Elemwise):
     def _meta(self):
         return self.frame._meta.assign(**{self.key: self.value._meta})
 
-    def _layer(self):
+    def _block(self):
         return {
-            (self._name, i): (
+            self._name: (
                 methods.assign,
-                (self.frame._name, i),
+                self.frame._name,
                 self.key,
-                (self.value._name, i),
+                self.value._name,
             )
-            for i in range(self.npartitions)
         }
 
 
@@ -421,10 +429,9 @@ class Projection(Elemwise):
     def _meta(self):
         return self.frame._meta[self.columns]
 
-    def _layer(self):
+    def _block(self):
         return {
-            (self._name, i): (operator.getitem, (self.frame._name, i), self.columns)
-            for i in range(self.npartitions)
+            self._name: (operator.getitem, self.frame._name, self.columns)
         }
 
     def __str__(self):
@@ -447,10 +454,9 @@ class ProjectIndex(Elemwise):
     def _meta(self):
         return self.frame._meta.index
 
-    def _layer(self):
+    def _block(self):
         return {
-            (self._name, i): (getattr, (self.frame._name, i), "index")
-            for i in range(self.npartitions)
+            self._name: (getattr, self.frame._name, "index")
         }
 
 
@@ -475,14 +481,13 @@ class Binop(Elemwise):
     _parameters = ["left", "right"]
     arity = Arity.binary
 
-    def _layer(self):
+    def _block(self):
         return {
-            (self._name, i): (
+            self._name: (
                 self.operation,
-                (self.left._name, i) if isinstance(self.left, Expr) else self.left,
-                (self.right._name, i) if isinstance(self.right, Expr) else self.right,
+                self.left._name if isinstance(self.left, Expr) else self.left,
+                self.right._name if isinstance(self.right, Expr) else self.right,
             )
-            for i in range(self.npartitions)
         }
 
     def __str__(self):
@@ -620,3 +625,152 @@ def optimize_expr(expr):
 
 
 from dask_match.reductions import Count, Max, Min, Mode, Size, Sum
+
+
+## Utilites for Blockwise-fusion
+
+def _fusable_ops(expr):
+    """Traverse the expression graph and record
+    any fusable operations
+
+    TODO: Make this optional (e.g. return set()
+    immediately if fusion is disabled).
+    """
+    seen = set()
+    stack = [expr]
+    dependencies = defaultdict(set)
+    while stack:
+        expr = stack.pop()
+
+        if expr._name in seen:
+            continue
+        seen.add(expr._name)
+
+        for operand in expr.operands:
+            if isinstance(operand, Expr):
+                stack.append(operand)
+                if isinstance(operand, Blockwise):
+                    dependencies[operand._name].add(expr._name)
+
+    return {
+        name
+        for name, deps in dependencies.items()
+        if len(deps) <= 1
+    }
+
+
+def _fuse_blockwise_deps(expr, fuseable=set()):
+    """Traverse local expression graph and convert
+    expr to `FusedBlockwiseGroup` if sequential
+    Blockwise expression can be merged
+    """
+    # Return quickly if fusion is not allowed
+    if not fuseable:
+        return expr
+
+    seen = set()
+    exprs = [expr]
+    stack = [expr] if isinstance(expr, Blockwise) else []
+    while stack:
+
+        next = stack.pop()
+        if next._name in seen:
+            continue
+        seen.add(next._name)
+
+        for operand in next.operands:
+            if isinstance(operand, Blockwise) and operand._name in fuseable:
+                exprs.append(operand)
+                stack.append(operand)
+
+    if len(exprs) > 1:
+        # We can fuse the original expr with 1+ dependencies
+        return FusedBlockwiseGroup(exprs)
+
+    # Return original expression by default
+    return exprs[0]
+
+
+def _blockwise_layer(name, block, operands, npartitions, funcname=None):
+    """Construct a low-level blockwise layer"""
+    from dask.optimization import SubgraphCallable
+
+    # Convert `_block` logic to SubgraphCallable
+    func = SubgraphCallable(
+        block,
+        name,
+        [
+            operand._name
+            for operand in operands
+            if isinstance(operand, Expr)
+        ],
+        funcname or name,
+    )
+
+    # Tasks depend on operand keys only
+    return {
+        (name, i): (
+            func,
+            *[
+                (operand._name, i)
+                for operand in operands
+                if isinstance(operand, Expr)
+            ],
+        )
+        for i in range(npartitions)
+    }
+
+
+class FusedBlockwiseGroup:
+    """Special Blockwise-like utility class
+    
+    The sole purpose of a `FusedBlockwiseGroup` object
+    is to simplify low-level task fusion. This class
+    does not behave as a proper `Expr`.
+    """
+
+    def __init__(self, exprs):
+        self.exprs = exprs
+        self.names = [expr._name for expr in exprs]
+
+    @property
+    def _name(self):
+        # Must preserve name of root task
+        return self.exprs[0]._name
+
+    @property
+    def operands(self):
+        operands = []
+        for expr in self.exprs:
+            operands += [
+                operand for operand in expr.operands
+                if isinstance(operand, Expr) and operand._name not in self.names
+            ]
+        return operands
+
+    def _block(self):
+        block = {}
+        for expr in self.exprs:
+            for k, v in expr._block().items():
+                block[k] = v
+        return block
+
+    def _layer(self):
+        # Creat special function name for fused task
+        root = "-".join(self.exprs[0]._name.split("-")[:-1])
+        fused = "-".join(
+            [
+                expr._name.split("-")[0]
+                for expr in self.exprs[1:]
+            ]
+        )
+        funcname = f"{root}-{fused}-fused"
+
+        # Materialize fused Blockwise layer
+        return _blockwise_layer(
+            self._name,
+            self._block(),
+            self.operands,
+            self.exprs[0].npartitions,
+            funcname=funcname,
+        )
