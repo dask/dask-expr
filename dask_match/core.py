@@ -430,9 +430,7 @@ class Projection(Elemwise):
         return self.frame._meta[self.columns]
 
     def _block(self):
-        return {
-            self._name: (operator.getitem, self.frame._name, self.columns)
-        }
+        return {self._name: (operator.getitem, self.frame._name, self.columns)}
 
     def __str__(self):
         base = str(self.frame)
@@ -455,9 +453,7 @@ class ProjectIndex(Elemwise):
         return self.frame._meta.index
 
     def _block(self):
-        return {
-            self._name: (getattr, self.frame._name, "index")
-        }
+        return {self._name: (getattr, self.frame._name, "index")}
 
 
 class Head(Expr):
@@ -629,6 +625,7 @@ from dask_match.reductions import Count, Max, Min, Mode, Size, Sum
 
 ## Utilites for Blockwise-fusion
 
+
 def _fusable_ops(expr):
     """Traverse the expression graph and record
     any fusable operations
@@ -652,11 +649,7 @@ def _fusable_ops(expr):
                 if isinstance(operand, Blockwise):
                     dependencies[operand._name].add(expr._name)
 
-    return {
-        name
-        for name, deps in dependencies.items()
-        if len(deps) <= 1
-    }
+    return {name for name, deps in dependencies.items() if len(deps) <= 1}
 
 
 def _fuse_blockwise_deps(expr, fuseable=set()):
@@ -672,7 +665,6 @@ def _fuse_blockwise_deps(expr, fuseable=set()):
     exprs = [expr]
     stack = [expr] if isinstance(expr, Blockwise) else []
     while stack:
-
         next = stack.pop()
         if next._name in seen:
             continue
@@ -699,11 +691,7 @@ def _blockwise_layer(name, block, operands, npartitions, funcname=None):
     func = SubgraphCallable(
         block,
         name,
-        [
-            operand._name
-            for operand in operands
-            if isinstance(operand, Expr)
-        ],
+        [operand._name for operand in operands if isinstance(operand, Expr)],
         funcname or name,
     )
 
@@ -711,11 +699,7 @@ def _blockwise_layer(name, block, operands, npartitions, funcname=None):
     return {
         (name, i): (
             func,
-            *[
-                (operand._name, i)
-                for operand in operands
-                if isinstance(operand, Expr)
-            ],
+            *[(operand._name, i) for operand in operands if isinstance(operand, Expr)],
         )
         for i in range(npartitions)
     }
@@ -723,7 +707,7 @@ def _blockwise_layer(name, block, operands, npartitions, funcname=None):
 
 class FusedBlockwiseGroup:
     """Special Blockwise-like utility class
-    
+
     The sole purpose of a `FusedBlockwiseGroup` object
     is to simplify low-level task fusion. This class
     does not behave as a proper `Expr`.
@@ -743,7 +727,8 @@ class FusedBlockwiseGroup:
         operands = []
         for expr in self.exprs:
             operands += [
-                operand for operand in expr.operands
+                operand
+                for operand in expr.operands
                 if isinstance(operand, Expr) and operand._name not in self.names
             ]
         return operands
@@ -758,12 +743,7 @@ class FusedBlockwiseGroup:
     def _layer(self):
         # Creat special function name for fused task
         root = "-".join(self.exprs[0]._name.split("-")[:-1])
-        fused = "-".join(
-            [
-                expr._name.split("-")[0]
-                for expr in self.exprs[1:]
-            ]
-        )
+        fused = "-".join([expr._name.split("-")[0] for expr in self.exprs[1:]])
         funcname = f"{root}-{fused}-fused"
 
         # Materialize fused Blockwise layer
