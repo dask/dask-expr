@@ -300,18 +300,14 @@ class ReadParquet(IO):
     def _divisions(self):
         return self._plan["divisions"]
 
-    def _part(self, index):
-        return self._plan["parts"][index]
-
     @cached_property
     def dependencies(self):
         from dask_match.core import BlockwiseDep
 
-        return [BlockwiseDep(self._part)]
+        return [BlockwiseDep(lambda x: self._plan["parts"][x])]
 
     def _block(self):
-        io_func = self._plan["func"]
-        return {self._name: (io_func, self.dependencies[0]._name)}
+        return {self._name: (self._plan["func"], self.dependencies[0]._name)}
 
     def _layer(self):
         from dask_match.core import _blockwise_layer
