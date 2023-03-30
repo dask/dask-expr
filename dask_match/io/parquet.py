@@ -65,6 +65,7 @@ class ReadParquet(IO):
         "filesystem": "fsspec",
         "kwargs": {},
     }
+    fusable = True
 
     @property
     def engine(self):
@@ -299,7 +300,25 @@ class ReadParquet(IO):
     def _divisions(self):
         return self._plan["divisions"]
 
-    def _layer(self):
+    def _part(self, index):
+        return self._plan["parts"][index]
+
+    @cached_property
+    def dependencies(self):
+        from dask_match.core import BlockwiseDep
+
+        return [BlockwiseDep(self._part)]
+
+    def _block(self):
         io_func = self._plan["func"]
-        parts = self._plan["parts"]
-        return {(self._name, i): (io_func, part) for i, part in enumerate(parts)}
+        return {self._name: (io_func, self.dependencies[0]._name)}
+
+    def _layer(self):
+        from dask_match.core import _blockwise_layer
+
+        return _blockwise_layer(
+            self._name,
+            self._block(),
+            self.dependencies,
+            self.npartitions,
+        )

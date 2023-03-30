@@ -69,6 +69,7 @@ class Expr(Operation, metaclass=_ExprMeta):
 
     commutative = False
     associative = False
+    fusable = False
     _parameters = []
     _defaults = {}
 
@@ -110,6 +111,13 @@ class Expr(Operation, metaclass=_ExprMeta):
         # Access an operand unambiguously
         # (e.g. if the key is reserved by a method/property)
         return self.operands[type(self)._parameters.index(key)]
+
+    @property
+    def dependencies(self):
+        # Non-uniform dependencies.
+        # Usually corresponds to `Expr` operands,
+        # but may include BlockwiseDep objects.
+        return [operand for operand in self.operands if isinstance(operand, Expr)]
 
     @property
     def index(self):
@@ -263,9 +271,9 @@ class Expr(Operation, metaclass=_ExprMeta):
             seen.add(expr._name)
 
             layers.append(expr._layer())
-            for operand in expr.operands:
-                if isinstance(operand, Expr):
-                    stack.append(operand)
+            for dep in expr.dependencies:
+                if isinstance(dep, Expr):
+                    stack.append(dep)
 
         return toolz.merge(layers)
 
@@ -282,6 +290,7 @@ class Blockwise(Expr):
     """
 
     operation = None
+    fusable = True
 
     @property
     def _meta(self):
@@ -327,7 +336,7 @@ class Blockwise(Expr):
         return _blockwise_layer(
             self._name,
             self._block(),
-            self.operands,
+            self.dependencies,
             self.npartitions,
         )
 
@@ -626,6 +635,20 @@ from dask_match.reductions import Count, Max, Min, Mode, Size, Sum
 ## Utilites for Blockwise-fusion
 
 
+class BlockwiseDep:
+    """Blockwise dependency callable"""
+
+    def __init__(self, func):
+        self.func = func
+
+    @property
+    def _name(self):
+        return f"dep-{tokenize(self.func)}"
+
+    def __call__(self, index):
+        return self.func(index)
+
+
 def _fusable_ops(expr):
     """Traverse the expression graph and record
     any fusable operations
@@ -646,7 +669,7 @@ def _fusable_ops(expr):
         for operand in expr.operands:
             if isinstance(operand, Expr):
                 stack.append(operand)
-                if isinstance(operand, Blockwise):
+                if operand.fusable:
                     dependencies[operand._name].add(expr._name)
 
     return {name for name, deps in dependencies.items() if len(deps) <= 1}
@@ -663,7 +686,7 @@ def _fuse_blockwise_deps(expr, fuseable=set()):
 
     seen = set()
     exprs = [expr]
-    stack = [expr] if isinstance(expr, Blockwise) else []
+    stack = [expr] if expr.fusable else []
     while stack:
         next = stack.pop()
         if next._name in seen:
@@ -671,7 +694,11 @@ def _fuse_blockwise_deps(expr, fuseable=set()):
         seen.add(next._name)
 
         for operand in next.operands:
-            if isinstance(operand, Blockwise) and operand._name in fuseable:
+            if (
+                isinstance(operand, Expr)
+                and operand.fusable
+                and operand._name in fuseable
+            ):
                 exprs.append(operand)
                 stack.append(operand)
 
@@ -683,7 +710,7 @@ def _fuse_blockwise_deps(expr, fuseable=set()):
     return exprs[0]
 
 
-def _blockwise_layer(name, block, operands, npartitions, funcname=None):
+def _blockwise_layer(name, block, dependencies, npartitions, funcname=None):
     """Construct a low-level blockwise layer"""
     from dask.optimization import SubgraphCallable
 
@@ -691,7 +718,7 @@ def _blockwise_layer(name, block, operands, npartitions, funcname=None):
     func = SubgraphCallable(
         block,
         name,
-        [operand._name for operand in operands if isinstance(operand, Expr)],
+        [dep._name for dep in dependencies],
         funcname or name,
     )
 
@@ -699,7 +726,10 @@ def _blockwise_layer(name, block, operands, npartitions, funcname=None):
     return {
         (name, i): (
             func,
-            *[(operand._name, i) for operand in operands if isinstance(operand, Expr)],
+            *[
+                dep(i) if isinstance(dep, BlockwiseDep) else (dep._name, i)
+                for dep in dependencies
+            ],
         )
         for i in range(npartitions)
     }
@@ -723,15 +753,22 @@ class FusedBlockwiseGroup:
         return self.exprs[0]._name
 
     @property
-    def operands(self):
-        operands = []
+    def dependencies(self):
+        dependencies = []
         for expr in self.exprs:
-            operands += [
+            dependencies += [
                 operand
-                for operand in expr.operands
-                if isinstance(operand, Expr) and operand._name not in self.names
+                for operand in expr.dependencies
+                if isinstance(operand, (Expr, BlockwiseDep))
+                and operand._name not in self.names
             ]
-        return operands
+        return dependencies
+
+    @property
+    def operands(self):
+        # Operands and dependencies are the same for
+        # the special case of FusedBlockwiseGroup
+        return self.dependencies
 
     def _block(self):
         block = {}
@@ -750,7 +787,7 @@ class FusedBlockwiseGroup:
         return _blockwise_layer(
             self._name,
             self._block(),
-            self.operands,
+            self.dependencies,
             self.exprs[0].npartitions,
             funcname=funcname,
         )
