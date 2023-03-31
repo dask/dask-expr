@@ -252,7 +252,7 @@ class Expr(Operation, metaclass=_ExprMeta):
 
     def _layer(self):
         if isinstance(self, Fusable):
-            return _block_subgraph_layer(
+            return _subgraph_callable_layer(
                 self._name,
                 self._block_subgraph(),
                 self._subgraph_dependencies(),
@@ -750,7 +750,7 @@ def _fuse_expr_groups(expr, fuseable=set()):
     return exprs[0]
 
 
-def _block_subgraph_layer(name, block, dependencies, npartitions, funcname=None):
+def _subgraph_callable_layer(name, block, dependencies, npartitions, funcname=None):
     """Construct a low-level blockwise layer"""
 
     # Convert `_block` logic to SubgraphCallable
@@ -821,7 +821,7 @@ class FusedExprGroup:
         funcname = f"{root}-{fused}-fused"
 
         # Materialize fused Blockwise layer
-        return _block_subgraph_layer(
+        return _subgraph_callable_layer(
             self._name,
             self._block_subgraph(),
             self._subgraph_dependencies(),
