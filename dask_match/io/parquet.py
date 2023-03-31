@@ -300,9 +300,9 @@ class ReadParquet(IO):
     def _divisions(self):
         return self._plan["divisions"]
 
-    @cached_property
-    def dependencies(self):
+    def _subgraph_dependencies(self):
         return [MappedArg(self._plan["parts"])]
 
     def _subgraph_callable(self):
-        return {self._name: (self._plan["func"], self.dependencies[0]._name)}
+        dep = self._subgraph_dependencies()[0]._name
+        return {self._name: (self._plan["func"], dep)}

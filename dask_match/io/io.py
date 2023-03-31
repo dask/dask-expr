@@ -30,12 +30,11 @@ class FromPandas(IO):
             for start, stop in zip(locations[:-1], locations[1:])
         ]
 
-    @property
-    def dependencies(self):
+    def _subgraph_dependencies(self):
         return [MappedArg(self._chunks)]
 
     def _subgraph_callable(self):
-        return {self._name: self.dependencies[0]._name}
+        return {self._name: self._subgraph_dependencies()[0]._name}
 
     def __str__(self):
         return "df"

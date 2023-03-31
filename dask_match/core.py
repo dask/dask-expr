@@ -114,16 +114,6 @@ class Expr(Operation, metaclass=_ExprMeta):
         return self.operands[type(self)._parameters.index(key)]
 
     @property
-    def dependencies(self):
-        # Non-uniform dependencies.
-        # Corresponds to `Expr` and `MappedArg` operands
-        return [
-            operand
-            for operand in self.operands
-            if isinstance(operand, (Expr, MappedArg))
-        ]
-
-    @property
     def index(self):
         return ProjectIndex(self)
 
@@ -265,7 +255,7 @@ class Expr(Operation, metaclass=_ExprMeta):
             return _subgraph_callable_layer(
                 self._name,
                 self._subgraph_callable(),
-                self.dependencies,
+                self._subgraph_dependencies(),
                 self.npartitions,
             )
         else:
@@ -286,9 +276,9 @@ class Expr(Operation, metaclass=_ExprMeta):
             seen.add(expr._name)
 
             layers.append(expr._layer())
-            for dep in expr.dependencies:
-                if isinstance(dep, Expr):
-                    stack.append(dep)
+            for operand in expr.operands:
+                if isinstance(operand, Expr):
+                    stack.append(operand)
 
         return toolz.merge(layers)
 
@@ -332,6 +322,11 @@ class Blockwise(Expr):
     @property
     def _name(self):
         return funcname(self.operation) + "-" + tokenize(*self.operands)
+
+    def _subgraph_dependencies(self):
+        # List `Expr` operands only.
+        # This property is required to enable fusion
+        return [operand for operand in self.operands if isinstance(operand, Expr)]
 
     def _subgraph_callable(self):
         return {
@@ -645,9 +640,21 @@ from dask_match.reductions import Count, Max, Min, Mode, Size, Sum
 class Fusable(Protocol):
     """Fusable Expr Protocol
 
-    Any `Expr` with a `_subgraph_callable` method will
-    be treated as "fusable".
+    An `Expr` with these methods will be treated as "fusable"
     """
+
+    def _subgraph_dependencies(self):
+        """List of `Expr` operands or `MappedArg`
+        dependencies. Since `_subgraph_callable`
+        cannot include mapped arguments explicitly,
+        IO expressions must represent these task
+        arguments as `MappedArg` dependencies.
+        """
+        return [
+            operand
+            for operand in self.operands
+            if isinstance(operand, (Expr, MappedArg))
+        ]
 
     def _subgraph_callable(self):
         """Return the subgraph for an abstract 'block'.
@@ -784,23 +791,21 @@ class FusedExprGroup:
         # Must preserve name of root task
         return self.exprs[0]._name
 
-    @property
-    def dependencies(self):
+    def _subgraph_dependencies(self):
         dependencies = []
         for expr in self.exprs:
             dependencies += [
                 operand
-                for operand in expr.dependencies
-                if isinstance(operand, (Expr, MappedArg))
-                and operand._name not in self.names
+                for operand in expr._subgraph_dependencies()
+                if operand._name not in self.names
             ]
         return dependencies
 
     @property
     def operands(self):
-        # Operands and dependencies are the same for
-        # the special case of FusedExprGroup
-        return self.dependencies
+        # Operands and _subgraph_dependencies are the
+        # same for the special case of FusedExprGroup
+        return self._subgraph_dependencies()
 
     def _subgraph_callable(self):
         block = {}
@@ -819,7 +824,7 @@ class FusedExprGroup:
         return _subgraph_callable_layer(
             self._name,
             self._subgraph_callable(),
-            self.dependencies,
+            self._subgraph_dependencies(),
             self.exprs[0].npartitions,
             funcname=funcname,
         )
