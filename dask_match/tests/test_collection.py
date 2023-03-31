@@ -1,5 +1,6 @@
 import pandas as pd
 import pytest
+from dask import config
 from dask.dataframe.utils import assert_eq
 from dask.utils import M
 
@@ -150,7 +151,13 @@ def test_persist(df, ddf):
     b = a.persist()
 
     assert_eq(a, b)
-    assert len(a.__dask_graph__()) > len(b.__dask_graph__())
+
+    with config.set({"dask-match.fusion": False}):
+        assert len(a.__dask_graph__()) > len(b.__dask_graph__())
+
+    with config.set({"dask-match.fusion": True}):
+        # Graphs will be the same size with fusion "on"
+        assert len(a.__dask_graph__()) == len(b.__dask_graph__())
 
     assert len(b.__dask_graph__()) == b.npartitions
 

@@ -636,26 +636,32 @@ from dask_match.reductions import Count, Max, Min, Mode, Size, Sum
 
 
 class BlockwiseDep:
-    """Blockwise dependency callable"""
+    """Indexable Blockwise dependency"""
 
-    def __init__(self, func):
-        self.func = func
+    def __init__(self, lookup):
+        assert callable(lookup) or isinstance(lookup, (list, dict))
+        self.lookup = lookup
 
     @property
     def _name(self):
-        return f"dep-{tokenize(self.func)}"
+        return f"dep-{tokenize(self.lookup)}"
 
-    def __call__(self, index):
-        return self.func(index)
+    def __getitem__(self, index):
+        if callable(self.lookup):
+            return self.lookup(index)
+        return self.lookup[index]
 
 
 def _fusable_ops(expr):
     """Traverse the expression graph and record
     any fusable operations
-
-    TODO: Make this optional (e.g. return set()
-    immediately if fusion is disabled).
     """
+    from dask import config
+
+    # TODO: How to toggle task fusion?
+    if not config.get("dask-match.fusion", True):
+        return set()
+
     seen = set()
     stack = [expr]
     dependencies = defaultdict(set)
@@ -727,7 +733,7 @@ def _blockwise_layer(name, block, dependencies, npartitions, funcname=None):
         (name, i): (
             func,
             *[
-                dep(i) if isinstance(dep, BlockwiseDep) else (dep._name, i)
+                dep[i] if isinstance(dep, BlockwiseDep) else (dep._name, i)
                 for dep in dependencies
             ],
         )

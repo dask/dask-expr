@@ -1,9 +1,10 @@
 import math
+from functools import cached_property
 
-from dask_match.core import Expr
+from dask_match.core import Blockwise
 
 
-class IO(Expr):
+class IO(Blockwise):
     pass
 
 
@@ -20,13 +21,23 @@ class FromPandas(IO):
     def _divisions(self):
         return [None] * (self.npartitions + 1)
 
-    def _layer(self):
+    @cached_property
+    def _chunks(self):
         chunksize = int(math.ceil(len(self.frame) / self.npartitions))
         locations = list(range(0, len(self.frame), chunksize)) + [len(self.frame)]
-        return {
-            (self._name, i): self.frame.iloc[start:stop]
-            for i, (start, stop) in enumerate(zip(locations[:-1], locations[1:]))
-        }
+        return [
+            self.frame.iloc[start:stop]
+            for start, stop in zip(locations[:-1], locations[1:])
+        ]
+
+    @property
+    def dependencies(self):
+        from dask_match.core import BlockwiseDep
+
+        return [BlockwiseDep(self._chunks)]
+
+    def _block(self):
+        return {self._name: self.dependencies[0]._name}
 
     def __str__(self):
         return "df"
@@ -42,6 +53,7 @@ class FromGraph(IO):
     """
 
     _parameters = ["layer", "_meta", "divisions", "_name"]
+    fusable = False
 
     @property
     def _meta(self):

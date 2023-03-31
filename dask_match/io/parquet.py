@@ -304,17 +304,7 @@ class ReadParquet(IO):
     def dependencies(self):
         from dask_match.core import BlockwiseDep
 
-        return [BlockwiseDep(lambda x: self._plan["parts"][x])]
+        return [BlockwiseDep(self._plan["parts"])]
 
     def _block(self):
         return {self._name: (self._plan["func"], self.dependencies[0]._name)}
-
-    def _layer(self):
-        from dask_match.core import _blockwise_layer
-
-        return _blockwise_layer(
-            self._name,
-            self._block(),
-            self.dependencies,
-            self.npartitions,
-        )

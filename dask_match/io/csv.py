@@ -6,6 +6,7 @@ from dask_match.io.io import IO
 class ReadCSV(IO):
     _parameters = ["filename", "usecols", "header"]
     _defaults = {"usecols": None, "header": "infer"}
+    fusable = False  # TODO
 
     @functools.cached_property
     def _ddf(self):
