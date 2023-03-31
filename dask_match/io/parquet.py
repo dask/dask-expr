@@ -12,7 +12,7 @@ from dask.dataframe.io.parquet.utils import _split_user_options
 from dask.utils import natural_sort_key
 from matchpy import CustomConstraint, Pattern, ReplacementRule, Wildcard
 
-from dask_match.core import EQ, GE, GT, LE, LT, NE, Filter
+from dask_match.core import EQ, GE, GT, LE, LT, NE, Filter, MappedArg
 from dask_match.io import IO
 
 NONE_LABEL = "__null_dask_index__"
@@ -302,9 +302,7 @@ class ReadParquet(IO):
 
     @cached_property
     def dependencies(self):
-        from dask_match.core import BlockwiseDep
+        return [MappedArg(self._plan["parts"])]
 
-        return [BlockwiseDep(self._plan["parts"])]
-
-    def _block(self):
+    def _subgraph_callable(self):
         return {self._name: (self._plan["func"], self.dependencies[0]._name)}

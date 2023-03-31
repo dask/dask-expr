@@ -3,11 +3,13 @@ import numbers
 import operator
 from collections import defaultdict
 from collections.abc import Iterator
+from typing import Protocol, runtime_checkable
 
 import pandas as pd
 import toolz
 from dask.base import normalize_token, tokenize
 from dask.dataframe import methods
+from dask.optimization import SubgraphCallable
 from dask.utils import M, apply, funcname
 from matchpy import (
     Arity,
@@ -69,7 +71,6 @@ class Expr(Operation, metaclass=_ExprMeta):
 
     commutative = False
     associative = False
-    fusable = False
     _parameters = []
     _defaults = {}
 
@@ -115,9 +116,12 @@ class Expr(Operation, metaclass=_ExprMeta):
     @property
     def dependencies(self):
         # Non-uniform dependencies.
-        # Usually corresponds to `Expr` operands,
-        # but may include BlockwiseDep objects.
-        return [operand for operand in self.operands if isinstance(operand, Expr)]
+        # Corresponds to `Expr` and `MappedArg` operands
+        return [
+            operand
+            for operand in self.operands
+            if isinstance(operand, (Expr, MappedArg))
+        ]
 
     @property
     def index(self):
@@ -256,6 +260,17 @@ class Expr(Operation, metaclass=_ExprMeta):
     def _meta(self):
         raise NotImplementedError()
 
+    def _layer(self):
+        if isinstance(self, Fusable):
+            return _subgraph_callable_layer(
+                self._name,
+                self._subgraph_callable(),
+                self.dependencies,
+                self.npartitions,
+            )
+        else:
+            raise NotImplementedError
+
     def __dask_graph__(self):
         """Traverse expression tree, collect layers"""
 
@@ -264,7 +279,7 @@ class Expr(Operation, metaclass=_ExprMeta):
         layers = []
         fusable = _fusable_ops(self)
         while stack:
-            expr = _fuse_blockwise_deps(stack.pop(), fusable)
+            expr = _fuse_expr_groups(stack.pop(), fusable)
 
             if expr._name in seen:
                 continue
@@ -290,7 +305,6 @@ class Blockwise(Expr):
     """
 
     operation = None
-    fusable = True
 
     @property
     def _meta(self):
@@ -319,7 +333,7 @@ class Blockwise(Expr):
     def _name(self):
         return funcname(self.operation) + "-" + tokenize(*self.operands)
 
-    def _block(self):
+    def _subgraph_callable(self):
         return {
             self._name: (
                 apply,
@@ -331,14 +345,6 @@ class Blockwise(Expr):
                 self._kwargs,
             )
         }
-
-    def _layer(self):
-        return _blockwise_layer(
-            self._name,
-            self._block(),
-            self.dependencies,
-            self.npartitions,
-        )
 
 
 class Elemwise(Blockwise):
@@ -368,7 +374,7 @@ class Apply(Elemwise):
     def _meta(self):
         return self.frame._meta.apply(self.function, *self.args, **self.kwargs)
 
-    def _block(self):
+    def _subgraph_callable(self):
         return {
             self._name: (
                 apply,
@@ -389,7 +395,7 @@ class Assign(Elemwise):
     def _meta(self):
         return self.frame._meta.assign(**{self.key: self.value._meta})
 
-    def _block(self):
+    def _subgraph_callable(self):
         return {
             self._name: (
                 methods.assign,
@@ -438,7 +444,7 @@ class Projection(Elemwise):
     def _meta(self):
         return self.frame._meta[self.columns]
 
-    def _block(self):
+    def _subgraph_callable(self):
         return {self._name: (operator.getitem, self.frame._name, self.columns)}
 
     def __str__(self):
@@ -461,7 +467,7 @@ class ProjectIndex(Elemwise):
     def _meta(self):
         return self.frame._meta.index
 
-    def _block(self):
+    def _subgraph_callable(self):
         return {self._name: (getattr, self.frame._name, "index")}
 
 
@@ -486,7 +492,7 @@ class Binop(Elemwise):
     _parameters = ["left", "right"]
     arity = Arity.binary
 
-    def _block(self):
+    def _subgraph_callable(self):
         return {
             self._name: (
                 self.operation,
@@ -632,11 +638,32 @@ def optimize_expr(expr):
 from dask_match.reductions import Count, Max, Min, Mode, Size, Sum
 
 
-## Utilites for Blockwise-fusion
+## Utilites for Expr fusion
 
 
-class BlockwiseDep:
-    """Indexable Blockwise dependency"""
+@runtime_checkable
+class Fusable(Protocol):
+    """Fusable Expr Protocol
+
+    Any `Expr` with a `_subgraph_callable` method will
+    be treated as "fusable".
+    """
+
+    def _subgraph_callable(self):
+        """Return the subgraph for an abstract 'block'.
+
+        Used to initialize a `SubgraphCallabe` object.
+        """
+        raise NotImplementedError
+
+
+class MappedArg:
+    """Indexable Expr dependency
+
+    NOTE: This class is used by IO expressions
+    to map path-like arguments over output partitions
+    in a fusion-compatible way.
+    """
 
     def __init__(self, lookup):
         assert callable(lookup) or isinstance(lookup, (list, dict))
@@ -644,7 +671,7 @@ class BlockwiseDep:
 
     @property
     def _name(self):
-        return f"dep-{tokenize(self.lookup)}"
+        return f"mapped-arg-{tokenize(self.lookup)}"
 
     def __getitem__(self, index):
         if callable(self.lookup):
@@ -675,15 +702,15 @@ def _fusable_ops(expr):
         for operand in expr.operands:
             if isinstance(operand, Expr):
                 stack.append(operand)
-                if operand.fusable:
+                if isinstance(operand, Fusable):
                     dependencies[operand._name].add(expr._name)
 
     return {name for name, deps in dependencies.items() if len(deps) <= 1}
 
 
-def _fuse_blockwise_deps(expr, fuseable=set()):
+def _fuse_expr_groups(expr, fuseable=set()):
     """Traverse local expression graph and convert
-    expr to `FusedBlockwiseGroup` if sequential
+    expr to `FusedExprGroup` if sequential
     Blockwise expression can be merged
     """
     # Return quickly if fusion is not allowed
@@ -692,7 +719,7 @@ def _fuse_blockwise_deps(expr, fuseable=set()):
 
     seen = set()
     exprs = [expr]
-    stack = [expr] if expr.fusable else []
+    stack = [expr] if isinstance(expr, Fusable) else []
     while stack:
         next = stack.pop()
         if next._name in seen:
@@ -702,7 +729,7 @@ def _fuse_blockwise_deps(expr, fuseable=set()):
         for operand in next.operands:
             if (
                 isinstance(operand, Expr)
-                and operand.fusable
+                and isinstance(expr, Fusable)
                 and operand._name in fuseable
             ):
                 exprs.append(operand)
@@ -710,15 +737,14 @@ def _fuse_blockwise_deps(expr, fuseable=set()):
 
     if len(exprs) > 1:
         # We can fuse the original expr with 1+ dependencies
-        return FusedBlockwiseGroup(exprs)
+        return FusedExprGroup(exprs)
 
     # Return original expression by default
     return exprs[0]
 
 
-def _blockwise_layer(name, block, dependencies, npartitions, funcname=None):
+def _subgraph_callable_layer(name, block, dependencies, npartitions, funcname=None):
     """Construct a low-level blockwise layer"""
-    from dask.optimization import SubgraphCallable
 
     # Convert `_block` logic to SubgraphCallable
     func = SubgraphCallable(
@@ -733,7 +759,7 @@ def _blockwise_layer(name, block, dependencies, npartitions, funcname=None):
         (name, i): (
             func,
             *[
-                dep[i] if isinstance(dep, BlockwiseDep) else (dep._name, i)
+                dep[i] if isinstance(dep, MappedArg) else (dep._name, i)
                 for dep in dependencies
             ],
         )
@@ -741,10 +767,10 @@ def _blockwise_layer(name, block, dependencies, npartitions, funcname=None):
     }
 
 
-class FusedBlockwiseGroup:
+class FusedExprGroup:
     """Special Blockwise-like utility class
 
-    The sole purpose of a `FusedBlockwiseGroup` object
+    The sole purpose of a `FusedExprGroup` object
     is to simplify low-level task fusion. This class
     does not behave as a proper `Expr`.
     """
@@ -765,7 +791,7 @@ class FusedBlockwiseGroup:
             dependencies += [
                 operand
                 for operand in expr.dependencies
-                if isinstance(operand, (Expr, BlockwiseDep))
+                if isinstance(operand, (Expr, MappedArg))
                 and operand._name not in self.names
             ]
         return dependencies
@@ -773,13 +799,13 @@ class FusedBlockwiseGroup:
     @property
     def operands(self):
         # Operands and dependencies are the same for
-        # the special case of FusedBlockwiseGroup
+        # the special case of FusedExprGroup
         return self.dependencies
 
-    def _block(self):
+    def _subgraph_callable(self):
         block = {}
         for expr in self.exprs:
-            for k, v in expr._block().items():
+            for k, v in expr._subgraph_callable().items():
                 block[k] = v
         return block
 
@@ -790,9 +816,9 @@ class FusedBlockwiseGroup:
         funcname = f"{root}-{fused}-fused"
 
         # Materialize fused Blockwise layer
-        return _blockwise_layer(
+        return _subgraph_callable_layer(
             self._name,
-            self._block(),
+            self._subgraph_callable(),
             self.dependencies,
             self.exprs[0].npartitions,
             funcname=funcname,

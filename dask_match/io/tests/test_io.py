@@ -95,3 +95,12 @@ def test_predicate_pushdown(tmpdir):
     assert list(y_result.columns) == ["b"]
     assert len(y_result["b"]) == 6
     assert all(y_result["b"] == 4)
+
+
+def test_parquet_fusion(tmpdir):
+    fn = _make_file(tmpdir, format="parquet")
+    df = read_parquet(fn)
+    df2 = df[["a", "b"]] + 1
+
+    # All tasks should be fused for each partition
+    assert len(df2.dask) == df2.npartitions

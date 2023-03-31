@@ -1,10 +1,10 @@
 import math
 from functools import cached_property
 
-from dask_match.core import Blockwise
+from dask_match.core import Expr, MappedArg
 
 
-class IO(Blockwise):
+class IO(Expr):
     pass
 
 
@@ -32,11 +32,9 @@ class FromPandas(IO):
 
     @property
     def dependencies(self):
-        from dask_match.core import BlockwiseDep
+        return [MappedArg(self._chunks)]
 
-        return [BlockwiseDep(self._chunks)]
-
-    def _block(self):
+    def _subgraph_callable(self):
         return {self._name: self.dependencies[0]._name}
 
     def __str__(self):
@@ -53,7 +51,6 @@ class FromGraph(IO):
     """
 
     _parameters = ["layer", "_meta", "divisions", "_name"]
-    fusable = False
 
     @property
     def _meta(self):

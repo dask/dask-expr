@@ -129,6 +129,23 @@ def test_blockwise(func, df, ddf):
     assert_eq(func(df), func(ddf))
 
 
+def test_task_fusion(ddf):
+    ddf2 = ddf[["x"]] + 1
+    ddf3 = ddf2.assign(z=ddf["y"] - 1)
+    ser = ddf3["z"]
+
+    with config.set({"dask-match.fusion": True}):
+        dsk_yes_fusion = ser.dask
+        result_yes_fusion = ser.compute()
+
+    with config.set({"dask-match.fusion": False}):
+        dsk_no_fusion = ser.dask
+        result_no_fusion = ser.compute()
+
+    assert len(dsk_yes_fusion) < len(dsk_no_fusion)
+    assert_eq(result_yes_fusion, result_no_fusion)
+
+
 def test_repr(ddf):
     assert "+ 1" in str(ddf + 1)
     assert "+ 1" in repr(ddf + 1)
