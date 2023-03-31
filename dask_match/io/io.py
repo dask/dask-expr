@@ -33,7 +33,7 @@ class FromPandas(IO):
     def _subgraph_dependencies(self):
         return [MappedArg(self._chunks)]
 
-    def _subgraph_callable(self):
+    def _block_subgraph(self):
         return {self._name: self._subgraph_dependencies()[0]._name}
 
     def __str__(self):

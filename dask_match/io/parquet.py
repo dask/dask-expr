@@ -303,6 +303,6 @@ class ReadParquet(IO):
     def _subgraph_dependencies(self):
         return [MappedArg(self._plan["parts"])]
 
-    def _subgraph_callable(self):
+    def _block_subgraph(self):
         dep = self._subgraph_dependencies()[0]._name
         return {self._name: (self._plan["func"], dep)}

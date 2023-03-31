@@ -252,9 +252,9 @@ class Expr(Operation, metaclass=_ExprMeta):
 
     def _layer(self):
         if isinstance(self, Fusable):
-            return _subgraph_callable_layer(
+            return _block_subgraph_layer(
                 self._name,
-                self._subgraph_callable(),
+                self._block_subgraph(),
                 self._subgraph_dependencies(),
                 self.npartitions,
             )
@@ -328,7 +328,7 @@ class Blockwise(Expr):
         # This property is required to enable fusion
         return [operand for operand in self.operands if isinstance(operand, Expr)]
 
-    def _subgraph_callable(self):
+    def _block_subgraph(self):
         return {
             self._name: (
                 apply,
@@ -369,7 +369,7 @@ class Apply(Elemwise):
     def _meta(self):
         return self.frame._meta.apply(self.function, *self.args, **self.kwargs)
 
-    def _subgraph_callable(self):
+    def _block_subgraph(self):
         return {
             self._name: (
                 apply,
@@ -390,7 +390,7 @@ class Assign(Elemwise):
     def _meta(self):
         return self.frame._meta.assign(**{self.key: self.value._meta})
 
-    def _subgraph_callable(self):
+    def _block_subgraph(self):
         return {
             self._name: (
                 methods.assign,
@@ -439,7 +439,7 @@ class Projection(Elemwise):
     def _meta(self):
         return self.frame._meta[self.columns]
 
-    def _subgraph_callable(self):
+    def _block_subgraph(self):
         return {self._name: (operator.getitem, self.frame._name, self.columns)}
 
     def __str__(self):
@@ -462,7 +462,7 @@ class ProjectIndex(Elemwise):
     def _meta(self):
         return self.frame._meta.index
 
-    def _subgraph_callable(self):
+    def _block_subgraph(self):
         return {self._name: (getattr, self.frame._name, "index")}
 
 
@@ -487,7 +487,7 @@ class Binop(Elemwise):
     _parameters = ["left", "right"]
     arity = Arity.binary
 
-    def _subgraph_callable(self):
+    def _block_subgraph(self):
         return {
             self._name: (
                 self.operation,
@@ -645,7 +645,7 @@ class Fusable(Protocol):
 
     def _subgraph_dependencies(self):
         """List of `Expr` operands or `MappedArg`
-        dependencies. Since `_subgraph_callable`
+        dependencies. Since `_block_subgraph`
         cannot include mapped arguments explicitly,
         IO expressions must represent these task
         arguments as `MappedArg` dependencies.
@@ -656,7 +656,7 @@ class Fusable(Protocol):
             if isinstance(operand, (Expr, MappedArg))
         ]
 
-    def _subgraph_callable(self):
+    def _block_subgraph(self):
         """Return the subgraph for an abstract 'block'.
 
         Used to initialize a `SubgraphCallabe` object.
@@ -750,7 +750,7 @@ def _fuse_expr_groups(expr, fuseable=set()):
     return exprs[0]
 
 
-def _subgraph_callable_layer(name, block, dependencies, npartitions, funcname=None):
+def _block_subgraph_layer(name, block, dependencies, npartitions, funcname=None):
     """Construct a low-level blockwise layer"""
 
     # Convert `_block` logic to SubgraphCallable
@@ -807,10 +807,10 @@ class FusedExprGroup:
         # same for the special case of FusedExprGroup
         return self._subgraph_dependencies()
 
-    def _subgraph_callable(self):
+    def _block_subgraph(self):
         block = {}
         for expr in self.exprs:
-            for k, v in expr._subgraph_callable().items():
+            for k, v in expr._block_subgraph().items():
                 block[k] = v
         return block
 
@@ -821,9 +821,9 @@ class FusedExprGroup:
         funcname = f"{root}-{fused}-fused"
 
         # Materialize fused Blockwise layer
-        return _subgraph_callable_layer(
+        return _block_subgraph_layer(
             self._name,
-            self._subgraph_callable(),
+            self._block_subgraph(),
             self._subgraph_dependencies(),
             self.exprs[0].npartitions,
             funcname=funcname,
