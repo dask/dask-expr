@@ -65,7 +65,6 @@ class ReadParquet(IO):
         "filesystem": "fsspec",
         "kwargs": {},
     }
-    fusable = True
 
     @property
     def engine(self):
