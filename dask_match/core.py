@@ -1,12 +1,15 @@
 import functools
 import numbers
 import operator
+from collections import defaultdict
 from collections.abc import Iterator
+from typing import Protocol, runtime_checkable
 
 import pandas as pd
 import toolz
 from dask.base import normalize_token, tokenize
 from dask.dataframe import methods
+from dask.optimization import SubgraphCallable
 from dask.utils import M, apply, funcname
 from matchpy import (
     Arity,
@@ -91,6 +94,9 @@ class Expr(Operation, metaclass=_ExprMeta):
 
     def __repr__(self):
         return str(self)
+
+    def __hash__(self):
+        return hash(self._name)
 
     def __getattr__(self, key):
         try:
@@ -307,19 +313,31 @@ class Blockwise(Expr):
     def _name(self):
         return funcname(self.operation) + "-" + tokenize(*self.operands)
 
-    def _layer(self):
+    def _subgraph_dependencies(self):
+        # List `Expr` operands only.
+        # This property is required to enable fusion
+        return [operand for operand in self.operands if isinstance(operand, Expr)]
+
+    def _block_subgraph(self):
         return {
-            (self._name, i): (
+            self._name: (
                 apply,
                 self.operation,
                 [
-                    (operand._name, i) if isinstance(operand, Expr) else operand
+                    operand._name if isinstance(operand, Expr) else operand
                     for operand in self.operands
                 ],
                 self._kwargs,
             )
-            for i in range(self.npartitions)
         }
+
+    def _layer(self):
+        return _subgraph_callable_layer(
+            self._name,
+            self._block_subgraph(),
+            self._subgraph_dependencies(),
+            self.npartitions,
+        )
 
 
 class Elemwise(Blockwise):
@@ -349,15 +367,14 @@ class Apply(Elemwise):
     def _meta(self):
         return self.frame._meta.apply(self.function, *self.args, **self.kwargs)
 
-    def _layer(self):
+    def _block_subgraph(self):
         return {
-            (self._name, i): (
+            self._name: (
                 apply,
                 M.apply,
-                [(self.frame._name, i), self.function] + list(self.args),
+                [self.frame._name, self.function] + list(self.args),
                 self.kwargs,
             )
-            for i in range(self.npartitions)
         }
 
 
@@ -371,15 +388,14 @@ class Assign(Elemwise):
     def _meta(self):
         return self.frame._meta.assign(**{self.key: self.value._meta})
 
-    def _layer(self):
+    def _block_subgraph(self):
         return {
-            (self._name, i): (
+            self._name: (
                 methods.assign,
-                (self.frame._name, i),
+                self.frame._name,
                 self.key,
-                (self.value._name, i),
+                self.value._name,
             )
-            for i in range(self.npartitions)
         }
 
 
@@ -421,11 +437,8 @@ class Projection(Elemwise):
     def _meta(self):
         return self.frame._meta[self.columns]
 
-    def _layer(self):
-        return {
-            (self._name, i): (operator.getitem, (self.frame._name, i), self.columns)
-            for i in range(self.npartitions)
-        }
+    def _block_subgraph(self):
+        return {self._name: (operator.getitem, self.frame._name, self.columns)}
 
     def __str__(self):
         base = str(self.frame)
@@ -447,11 +460,8 @@ class ProjectIndex(Elemwise):
     def _meta(self):
         return self.frame._meta.index
 
-    def _layer(self):
-        return {
-            (self._name, i): (getattr, (self.frame._name, i), "index")
-            for i in range(self.npartitions)
-        }
+    def _block_subgraph(self):
+        return {self._name: (getattr, self.frame._name, "index")}
 
 
 class Head(Expr):
@@ -475,14 +485,13 @@ class Binop(Elemwise):
     _parameters = ["left", "right"]
     arity = Arity.binary
 
-    def _layer(self):
+    def _block_subgraph(self):
         return {
-            (self._name, i): (
+            self._name: (
                 self.operation,
-                (self.left._name, i) if isinstance(self.left, Expr) else self.left,
-                (self.right._name, i) if isinstance(self.right, Expr) else self.right,
+                self.left._name if isinstance(self.left, Expr) else self.left,
+                self.right._name if isinstance(self.right, Expr) else self.right,
             )
-            for i in range(self.npartitions)
         }
 
     def __str__(self):
@@ -616,7 +625,230 @@ def optimize_expr(expr):
             expr = replace_all(expr, replacement_rules)
     finally:
         _defer_to_matchpy = False
-    return expr
+
+    # Apply fusion
+    fused = _blockwise_fusion(expr)
+
+    return fused
 
 
 from dask_match.reductions import Count, Max, Min, Mode, Size, Sum
+
+
+def replace_nodes(expr, nodes_to_replace: dict):
+    """Replace specific nodes in an Expr tree
+
+    `nodes_to_replace` corresponds to a `dict` mapping
+    of old `Expr` objects to new `Expr` objects.
+    """
+    if not nodes_to_replace:
+        # Nothing to replace
+        return expr
+    elif expr in nodes_to_replace:
+        # Already at targetted expr
+        return nodes_to_replace[expr]
+
+    new_operands = []
+    new_count = 0
+    for operand in expr.operands:
+
+        if isinstance(operand, Expr) and operand in nodes_to_replace:
+            # Replacing this operand
+            val = nodes_to_replace[operand]
+            new_count += 1
+        elif isinstance(operand, Expr):
+            # Non-Expr operand - Recursive call
+            val = replace_nodes(operand, nodes_to_replace)
+            if operand._name != val._name:
+                new_count += 1
+        else:
+            # Non-Expr operand
+            val = operand
+        new_operands.append(val)
+
+    if new_count:
+        # Only return new object if something changed
+        return type(expr)(*new_operands)
+    return expr
+
+
+def _blockwise_fusion(expr):
+    """Traverse the expression graph and record
+    any fusable operations
+    """
+    # First pass to find global dependencies
+    seen = set()
+    stack = [expr]
+    dependencies = defaultdict(set)
+    while stack:
+        next = stack.pop()
+
+        if next._name in seen:
+            continue
+        seen.add(next._name)
+
+        for operand in next.operands:
+            if isinstance(operand, Expr):
+                stack.append(operand)
+                if isinstance(operand, Fusable):
+                    dependencies[operand._name].add(next._name)
+
+    # TODO: Allow "diamond" pattern
+    fuseable = {name for name, deps in dependencies.items() if len(deps) <= 1}
+
+    # Second pass to form fusable groups
+    seen = set()
+    stack = [expr]
+    groups = []
+    next_group = []
+    while stack:
+        next = stack.pop()
+
+        if next._name in seen:
+            continue
+        seen.add(next._name)
+
+        if next._name in fuseable:
+            next_group.append(next)
+        else:
+            if len(next_group) > 1:
+                groups.append(next_group)
+            next_group = []
+
+        for operand in next.operands:
+            if isinstance(operand, Expr):
+                stack.append(operand)
+
+    # Finally, replace groups with FusedExpr objects
+    to_replace = {}
+    for group in groups:
+        dependencies = []
+        for _expr in group:
+            dependencies += [
+                operand
+                for operand in _expr._subgraph_dependencies()
+                if operand not in group
+            ]
+        
+        # Replace
+        to_replace[group[0]] = FusedExpr(group, *dependencies)
+
+    return replace_nodes(expr, to_replace)
+
+
+@runtime_checkable
+class Fusable(Protocol):
+    """Fusable Expr Protocol
+    An `Expr` with these methods will be treated as "fusable"
+    """
+
+    def _subgraph_dependencies(self):
+        """List of `Expr` operands or `MappedArg`
+        dependencies. Since `_block_subgraph`
+        cannot include mapped arguments explicitly,
+        IO expressions must represent these task
+        arguments as `MappedArg` dependencies.
+        """
+        return [
+            operand
+            for operand in self.operands
+            if isinstance(operand, (Expr, MappedArg))
+        ]
+
+    def _block_subgraph(self):
+        """Return the subgraph for an abstract 'block'.
+        Used to initialize a `SubgraphCallabe` object.
+        """
+        raise NotImplementedError
+
+
+class FusedExpr(Expr):
+
+    @property
+    def _meta(self):
+        return self.exprs[0]._meta
+
+    @property
+    def exprs(self):
+        # Wrapped expressions
+        return self.operands[0]
+
+    def _subgraph_dependencies(self):
+        deps = []
+        for op in list(self.operands)[1:]:
+            if op is None:
+                break
+            deps.append(op)
+        return deps
+
+    def __str__(self):
+        descr = "-".join([expr._name.split('-')[0] for expr in self.exprs])
+        return f"Fused-{descr}"
+
+    @property
+    def _name(self):
+        return f"{str(self)}-{tokenize(self.operands)}"
+
+    def _divisions(self):
+        return self.exprs[0]._divisions()
+
+    def _block_subgraph(self):
+        block = {self._name: self.exprs[0]._name}
+        for _expr in self.exprs:
+            for k, v in _expr._block_subgraph().items():
+                block[k] = v
+        return block
+
+    def _layer(self):
+        return _subgraph_callable_layer(
+            self._name,
+            self._block_subgraph(),
+            self._subgraph_dependencies(),
+            self.npartitions,
+        )
+
+
+class MappedArg:
+    """Indexable Expr dependency
+
+    NOTE: This class is used by IO expressions
+    to map path-like arguments over output partitions
+    in a fusion-compatible way.
+    """
+
+    def __init__(self, lookup):
+        assert callable(lookup) or isinstance(lookup, (list, dict))
+        self.lookup = lookup
+
+    @property
+    def _name(self):
+        return f"mapped-arg-{tokenize(self.lookup)}"
+
+    def __getitem__(self, index):
+        if callable(self.lookup):
+            return self.lookup(index)
+        return self.lookup[index]
+
+
+def _subgraph_callable_layer(name, block, dependencies, npartitions, funcname=None):
+    """Construct a low-level blockwise layer"""
+
+    # Convert `_block` logic to SubgraphCallable
+    func = SubgraphCallable(
+        block,
+        name,
+        [dep._name for dep in dependencies],
+        funcname or name,
+    )
+
+    # Tasks depend on operand keys only
+    return {
+        (name, i): (
+            func,
+            *[
+                dep[i] if isinstance(dep, MappedArg) else (dep._name, i)
+                for dep in dependencies
+            ],
+        )
+        for i in range(npartitions)
+    }

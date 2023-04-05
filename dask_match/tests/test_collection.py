@@ -145,6 +145,16 @@ def test_columns_traverse_filters(df, ddf):
     assert str(result) == str(expected)
 
 
+def test_optimize():
+    pdf = pd.DataFrame({"x": range(10), "y": range(10)})
+    ddf = from_pandas(pdf, npartitions=1)
+    result = optimize(ddf[ddf.x > 5])
+    
+    import pdb; pdb.set_trace()
+    pass
+
+
+
 def test_persist(df, ddf):
     a = ddf + 2
     b = a.persist()
