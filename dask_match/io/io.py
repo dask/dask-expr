@@ -5,7 +5,6 @@ from dask_match.core import Expr, MappedArg, Fusable, _subgraph_callable_layer
 
 
 class IO(Expr):
-
     def _layer(self):
         if isinstance(self, Fusable):
             return _subgraph_callable_layer(

@@ -655,7 +655,6 @@ def replace_nodes(expr, nodes_to_replace: dict):
     new_operands = []
     new_count = 0
     for operand in expr.operands:
-
         if isinstance(operand, Expr) and operand in nodes_to_replace:
             # Replacing this operand
             val = nodes_to_replace[operand]
@@ -680,7 +679,6 @@ def _blockwise_fusion(expr):
     """Traverse the expression graph and apply fusion"""
 
     def _fusion_pass(expr):
-
         # Full pass to find global dependencies
         seen = set()
         stack = [expr]
@@ -787,7 +785,6 @@ class Fusable(Protocol):
 
 
 class FusedExpr(Expr):
-
     @property
     def exprs(self):
         return self.operands[0]
@@ -797,7 +794,7 @@ class FusedExpr(Expr):
         return self.exprs[0]._meta
 
     def __str__(self):
-        descr = "-".join([expr._name.split('-')[0] for expr in self.exprs])
+        descr = "-".join([expr._name.split("-")[0] for expr in self.exprs])
         return f"Fused-{descr}"
 
     @property
