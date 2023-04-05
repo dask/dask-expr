@@ -1,10 +1,21 @@
 import math
+from functools import cached_property
 
-from dask_match.core import Expr
+from dask_match.core import Expr, MappedArg, Fusable, _subgraph_callable_layer
 
 
 class IO(Expr):
-    pass
+
+    def _layer(self):
+        if isinstance(self, Fusable):
+            return _subgraph_callable_layer(
+                self._name,
+                self._block_subgraph(),
+                self._subgraph_dependencies(),
+                self.npartitions,
+            )
+        else:
+            raise NotImplementedError()
 
 
 class FromPandas(IO):
@@ -20,13 +31,20 @@ class FromPandas(IO):
     def _divisions(self):
         return [None] * (self.npartitions + 1)
 
-    def _layer(self):
+    @cached_property
+    def _chunks(self):
         chunksize = int(math.ceil(len(self.frame) / self.npartitions))
         locations = list(range(0, len(self.frame), chunksize)) + [len(self.frame)]
-        return {
-            (self._name, i): self.frame.iloc[start:stop]
-            for i, (start, stop) in enumerate(zip(locations[:-1], locations[1:]))
-        }
+        return [
+            self.frame.iloc[start:stop]
+            for start, stop in zip(locations[:-1], locations[1:])
+        ]
+
+    def _subgraph_dependencies(self):
+        return [MappedArg(self._chunks)]
+
+    def _block_subgraph(self):
+        return {self._name: self._subgraph_dependencies()[0]._name}
 
     def __str__(self):
         return "df"

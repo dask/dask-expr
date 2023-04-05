@@ -699,11 +699,18 @@ def _blockwise_fusion(expr):
                 if isinstance(operand, Expr):
                     stack.append(operand)
                     if isinstance(operand, Fusable):
-                        dependencies[next].add(operand)
+                        if next in dependencies:
+                            dependencies[next].add(operand)
                         dependents[operand].add(next)
 
-        # Traverse each "root" until we find a fusable sub-group
-        roots = [k for k, v in dependents.items() if v == set()]
+        # Traverse each "root" until we find a fusable sub-group.
+        # Here we use root to refer to a Fusable Expr node that
+        # has no Fusable dependents
+        roots = [
+            k
+            for k, v in dependents.items()
+            if v == set() or all(not isinstance(_expr, Fusable) for _expr in v)
+        ]
         while roots:
             root = roots.pop()
             seen = set()
@@ -717,8 +724,9 @@ def _blockwise_fusion(expr):
                 seen.add(next._name)
 
                 group.append(next)
-                for dep in dependencies[root]:
-                    if dependents[dep].issubset(set(stack) | set(group)):
+                for dep in dependencies[next]:
+                    missing = dependents[dep] - set(stack) - set(group)
+                    if not missing:
                         # All of deps dependents are contained
                         # in the local group (or the local stack
                         # of expr nodes that we know we will be
@@ -767,11 +775,7 @@ class Fusable(Protocol):
         IO expressions must represent these task
         arguments as `MappedArg` dependencies.
         """
-        return [
-            operand
-            for operand in self.operands
-            if isinstance(operand, (Expr, MappedArg))
-        ]
+        raise NotImplementedError
 
     def _block_subgraph(self):
         """Return the subgraph for an abstract 'block'.
@@ -783,21 +787,12 @@ class Fusable(Protocol):
 class FusedExpr(Expr):
 
     @property
-    def _meta(self):
-        return self.exprs[0]._meta
-
-    @property
     def exprs(self):
-        # Wrapped expressions
         return self.operands[0]
 
-    def _subgraph_dependencies(self):
-        deps = []
-        for op in list(self.operands)[1:]:
-            if op is None:
-                break
-            deps.append(op)
-        return deps
+    @property
+    def _meta(self):
+        return self.exprs[0]._meta
 
     def __str__(self):
         descr = "-".join([expr._name.split('-')[0] for expr in self.exprs])
@@ -805,10 +800,13 @@ class FusedExpr(Expr):
 
     @property
     def _name(self):
-        return f"{str(self)}-{tokenize(self.operands)}"
+        return f"{str(self)}-{tokenize(self.exprs)}"
 
     def _divisions(self):
         return self.exprs[0]._divisions()
+
+    def _subgraph_dependencies(self):
+        return self.operands[1:]
 
     def _block_subgraph(self):
         block = {self._name: self.exprs[0]._name}

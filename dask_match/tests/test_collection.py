@@ -148,7 +148,7 @@ def test_columns_traverse_filters(df, ddf):
 def test_optimize():
     pdf = pd.DataFrame({"x": range(10), "y": range(10)})
     ddf = from_pandas(pdf, npartitions=1)
-    result = optimize(ddf[ddf.x > 5])
+    result = optimize(((ddf["x"] + ddf["y"]) - 1).sum())
     result.compute()
 
 
