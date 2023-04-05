@@ -223,10 +223,10 @@ def new_collection(expr):
         return Scalar(expr)
 
 
-def optimize(collection):
+def optimize(collection, fuse=True):
     from dask_match.core import optimize_expr
 
-    return new_collection(optimize_expr(collection.expr))
+    return new_collection(optimize_expr(collection.expr, fuse=fuse))
 
 
 def from_pandas(*args, **kwargs):

@@ -600,7 +600,7 @@ def normalize_expression(expr):
     return expr._name
 
 
-def optimize_expr(expr):
+def optimize_expr(expr, fuse=True):
     """High level query optimization
 
     Today we just use MatchPy's term rewriting system, leveraging the
@@ -626,10 +626,11 @@ def optimize_expr(expr):
     finally:
         _defer_to_matchpy = False
 
-    # Apply fusion
-    fused = _blockwise_fusion(expr)
+    if fuse:
+        # Apply fusion
+        expr = _blockwise_fusion(expr)
 
-    return fused
+    return expr
 
 
 from dask_match.reductions import Count, Max, Min, Mode, Size, Sum
@@ -673,67 +674,84 @@ def replace_nodes(expr, nodes_to_replace: dict):
 
 
 def _blockwise_fusion(expr):
-    """Traverse the expression graph and record
-    any fusable operations
-    """
-    # First pass to find global dependencies
-    seen = set()
-    stack = [expr]
-    dependencies = defaultdict(set)
-    while stack:
-        next = stack.pop()
+    """Traverse the expression graph and apply fusion"""
 
-        if next._name in seen:
-            continue
-        seen.add(next._name)
+    def _fusion_pass(expr):
 
-        for operand in next.operands:
-            if isinstance(operand, Expr):
-                stack.append(operand)
-                if isinstance(operand, Fusable):
-                    dependencies[operand._name].add(next._name)
+        # Full pass to find global dependencies
+        seen = set()
+        stack = [expr]
+        dependents = defaultdict(set)
+        dependencies = {}
+        while stack:
+            next = stack.pop()
 
-    # TODO: Allow "diamond" pattern
-    fuseable = {name for name, deps in dependencies.items() if len(deps) <= 1}
+            if next._name in seen:
+                continue
+            seen.add(next._name)
 
-    # Second pass to form fusable groups
-    seen = set()
-    stack = [expr]
-    groups = []
-    next_group = []
-    while stack:
-        next = stack.pop()
+            if isinstance(next, Fusable):
+                dependencies[next] = set()
+                if next not in dependents:
+                    dependents[next] = set()
 
-        if next._name in seen:
-            continue
-        seen.add(next._name)
+            for operand in next.operands:
+                if isinstance(operand, Expr):
+                    stack.append(operand)
+                    if isinstance(operand, Fusable):
+                        dependencies[next].add(operand)
+                        dependents[operand].add(next)
 
-        if next._name in fuseable:
-            next_group.append(next)
-        else:
-            if len(next_group) > 1:
-                groups.append(next_group)
-            next_group = []
+        # Traverse each "root" until we find a fusable sub-group
+        roots = [k for k, v in dependents.items() if v == set()]
+        while roots:
+            root = roots.pop()
+            seen = set()
+            stack = [root]
+            group = []
+            while stack:
+                next = stack.pop()
 
-        for operand in next.operands:
-            if isinstance(operand, Expr):
-                stack.append(operand)
+                if next._name in seen:
+                    continue
+                seen.add(next._name)
 
-    # Finally, replace groups with FusedExpr objects
-    to_replace = {}
-    for group in groups:
-        dependencies = []
-        for _expr in group:
-            dependencies += [
-                operand
-                for operand in _expr._subgraph_dependencies()
-                if operand not in group
-            ]
-        
-        # Replace
-        to_replace[group[0]] = FusedExpr(group, *dependencies)
+                group.append(next)
+                for dep in dependencies[root]:
+                    if dependents[dep].issubset(set(stack) | set(group)):
+                        # All of deps dependents are contained
+                        # in the local group (or the local stack
+                        # of expr nodes that we know we will be
+                        # adding to the local group)
+                        stack.append(dep)
+                    elif dep not in roots and dependencies[dep]:
+                        # Couldn't fuse dep, but we may be able to
+                        # use it as a new root on the next pass
+                        roots.append(dep)
 
-    return replace_nodes(expr, to_replace)
+            # Replace fusable sub-group
+            if len(group) > 1:
+                group_deps = []
+                local_names = [_expr._name for _expr in group]
+                for _expr in group:
+                    group_deps += [
+                        operand
+                        for operand in _expr._subgraph_dependencies()
+                        if operand._name not in local_names
+                    ]
+                to_replace = {group[0]: FusedExpr(group, *group_deps)}
+                return replace_nodes(expr, to_replace), not roots
+
+        # Return original expr if no fusable sub-groups were found
+        return expr, True
+
+    while True:
+        original_name = expr._name
+        expr, done = _fusion_pass(expr)
+        if done or expr._name == original_name:
+            break
+
+    return expr
 
 
 @runtime_checkable
