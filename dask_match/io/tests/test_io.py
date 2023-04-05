@@ -60,8 +60,18 @@ def df_bc(fn):
 )
 def test_optimize(tmpdir, input, expected):
     fn = _make_file(tmpdir, format="parquet")
-    result = optimize(input(fn))
+    result = optimize(input(fn), fuse=False)
     assert str(result.expr) == str(expected(fn).expr)
+
+
+def test_parquet_fusion(tmpdir):
+    fn = _make_file(tmpdir, format="parquet")
+    df = read_parquet(fn)
+    df2 = optimize(df[["a", "b"]] + 1, fuse=True)
+
+    # All tasks should be fused for each partition
+    assert len(df2.dask) == df2.npartitions
+    assert_eq(df2, df[["a", "b"]] + 1)
 
 
 def test_predicate_pushdown(tmpdir):

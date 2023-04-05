@@ -636,6 +636,9 @@ def optimize_expr(expr, fuse=True):
 from dask_match.reductions import Count, Max, Min, Mode, Size, Sum
 
 
+## Utilites for Expr fusion
+
+
 def replace_nodes(expr, nodes_to_replace: dict):
     """Replace specific nodes in an Expr tree
 
@@ -725,8 +728,7 @@ def _blockwise_fusion(expr):
 
                 group.append(next)
                 for dep in dependencies[next]:
-                    missing = dependents[dep] - set(stack) - set(group)
-                    if not missing:
+                    if not (dependents[dep] - set(stack) - set(group)):
                         # All of deps dependents are contained
                         # in the local group (or the local stack
                         # of expr nodes that we know we will be

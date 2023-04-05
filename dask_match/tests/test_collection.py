@@ -145,11 +145,16 @@ def test_columns_traverse_filters(df, ddf):
     assert str(result) == str(expected)
 
 
-def test_optimize():
+def test_optimize_fusion():
     pdf = pd.DataFrame({"x": range(10), "y": range(10)})
     ddf = from_pandas(pdf, npartitions=1)
-    result = optimize(((ddf["x"] + ddf["y"]) - 1).sum())
-    result.compute()
+    ddf2 = ((ddf["x"] + ddf["y"]) - 1).sum()
+    unfused = optimize(ddf2, fuse=False)
+    fused = optimize(ddf2, fuse=True)
+
+    # All tasks should be fused for each partition
+    assert len(unfused.dask) > len(fused.dask)
+    assert_eq(fused, unfused)
 
 
 def test_persist(df, ddf):
