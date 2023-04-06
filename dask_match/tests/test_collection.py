@@ -145,9 +145,7 @@ def test_columns_traverse_filters(df, ddf):
     assert str(result) == str(expected)
 
 
-def test_optimize_fusion():
-    pdf = pd.DataFrame({"x": range(10), "y": range(10)})
-    ddf = from_pandas(pdf, npartitions=1)
+def test_optimize_fusion(ddf):
 
     ddf2 = (ddf["x"] + ddf["y"]) - 1
     unfused = optimize(ddf2, fuse=False)
@@ -165,6 +163,12 @@ def test_optimize_fusion():
 
     assert len(fused.dask) < len(unfused.dask)
     assert_eq(fused, unfused)
+
+    # Check that we still get fusion
+    # after a non-blockwise operation as well
+    fused_2 = optimize(ddf3 + 10 - 5, fuse=True)
+    # The "+10 and -5" ops should get fused
+    assert len(fused_2.dask) == len(fused.dask) + 1
 
 
 def test_persist(df, ddf):
