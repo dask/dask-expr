@@ -64,7 +64,7 @@ def test_optimize(tmpdir, input, expected):
     assert str(result.expr) == str(expected(fn).expr)
 
 
-def test_head_partition_culling(tmpdir):
+def test_head_graph_culling(tmpdir):
     fn = _make_file(tmpdir, format="parquet")
     ddf = read_parquet(fn)
     result = ddf.head(compute=False)
