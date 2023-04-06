@@ -110,9 +110,10 @@ class FrameBase(DaskMethodsMixin):
 
     def head(self, n=5, compute=True):
         # We special-case head because matchpy uses 'head' as a special term
-        from dask_match.core import Head
+        from dask_match.core import Head, ProjectPartitions
 
-        out = new_collection(Head(self.expr, n=n))
+        # We use ProjectPartitions to facilitate Expr optimizations
+        out = new_collection(Head(ProjectPartitions(self.expr, [0]), n=n))
         if compute:
             out = out.compute()
         return out

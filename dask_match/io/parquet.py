@@ -12,7 +12,7 @@ from dask.dataframe.io.parquet.utils import _split_user_options
 from dask.utils import natural_sort_key
 from matchpy import CustomConstraint, Pattern, ReplacementRule, Wildcard
 
-from dask_match.core import EQ, GE, GT, LE, LT, NE, Filter
+from dask_match.core import EQ, GE, GT, LE, LT, NE, Filter, output_partitions_rule
 from dask_match.io import IO
 
 NONE_LABEL = "__null_dask_index__"
@@ -47,6 +47,7 @@ class ReadParquet(IO):
         "parquet_file_extension",
         "filesystem",
         "kwargs",
+        "output_partitions",
     ]
     _defaults = {
         "columns": None,
@@ -64,6 +65,7 @@ class ReadParquet(IO):
         "parquet_file_extension": (".parq", ".parquet", ".pq"),
         "filesystem": "fsspec",
         "kwargs": {},
+        "output_partitions": None,
     }
 
     @property
@@ -166,6 +168,9 @@ class ReadParquet(IO):
                 ),
                 partial(predicate_pushdown, op=flip_op.get(op, op)),
             )
+
+        # Output-partition projection
+        yield output_partitions_rule(cls)
 
     @cached_property
     def _dataset_info(self):
@@ -296,10 +301,24 @@ class ReadParquet(IO):
             "divisions": divisions,
         }
 
+    def _project_plan(self):
+        if self.output_partitions is not None:
+            return
+        return self._plan
+
     def _divisions(self):
-        return self._plan["divisions"]
+        _divisions = self._plan["divisions"]
+        if self.output_partitions is None:
+            return _divisions
+        divisions = []
+        for part in self.output_partitions:
+            divisions.append(_divisions[part])
+        divisions.append(_divisions[part + 1])
+        return tuple(divisions)
 
     def _layer(self):
         io_func = self._plan["func"]
         parts = self._plan["parts"]
+        if self.output_partitions is not None:
+            parts = [parts[part] for part in self.output_partitions]
         return {(self._name, i): (io_func, part) for i, part in enumerate(parts)}

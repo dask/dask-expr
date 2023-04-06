@@ -280,6 +280,11 @@ class Blockwise(Expr):
 
     operation = None
 
+    @classmethod
+    def _replacement_rules(cls):
+        # Push down partition projection
+        yield partition_pushdown_rule(cls)
+
     @property
     def _meta(self):
         return self.operation(
@@ -388,7 +393,7 @@ class Filter(Blockwise):
     operation = operator.getitem
 
     @classmethod
-    def _replacement_rules(self):
+    def _replacement_rules(cls):
         df = Wildcard.dot("df")
         condition = Wildcard.dot("condition")
         columns = Wildcard.dot("columns")
@@ -399,6 +404,9 @@ class Filter(Blockwise):
             Pattern(Filter(df, condition)[columns]),
             lambda df, condition, columns: df[columns][condition],
         )
+
+        # Push down partition projection
+        yield partition_pushdown_rule(cls)
 
 
 class Projection(Elemwise):
@@ -452,6 +460,61 @@ class ProjectIndex(Elemwise):
             (self._name, i): (getattr, (self.frame._name, i), "index")
             for i in range(self.npartitions)
         }
+
+
+class ProjectPartitions(Expr):
+    """Select one or more partitions"""
+
+    _parameters = ["frame", "projection"]
+
+    @property
+    def _meta(self):
+        return self.frame._meta
+
+    @property
+    def partitions(self):
+        if isinstance(self.projection, (list, tuple)):
+            return list(self.projection)
+        raise TypeError
+
+    def _divisions(self):
+        divisions = []
+        for part in self.partitions:
+            divisions.append(self.frame.divisions[part])
+        divisions.append(self.frame.divisions[part + 1])
+        return tuple(divisions)
+
+    def _layer(self):
+        return {
+            (self._name, i): (self.frame._name, part)
+            for i, part in enumerate(self.partitions)
+        }
+
+
+def output_partitions_rule(cls):
+    # Convenent rule that various `Expr` subclasses
+    # may want use to avoid producing unnecesary
+    # partitions just before `ProjectPartitions`
+    assert "output_partitions" in cls._parameters
+
+    def _replace(**kwargs):
+        args = list(kwargs.values())
+        return cls(*args[:-2], output_partitions=args[-1])
+
+    w = [Wildcard.dot(f"w{i}") for i in range(len(cls._parameters) + 1)]
+    pattern = Pattern(ProjectPartitions(cls(*w[:-2], output_partitions=w[-2]), w[-1]))
+    return ReplacementRule(pattern, _replace)
+
+
+def partition_pushdown_rule(cls):
+    # Simple rule to push down a trailing `ProjectPartitions` operation
+    def _replace(**kwargs):
+        args = list(kwargs.values())
+        return cls(ProjectPartitions(args[0], args[-1]), *args[1:-1])
+
+    w = [Wildcard.dot(f"w{i}") for i in range(len(cls._parameters) + 1)]
+    pattern = Pattern(ProjectPartitions(cls(*w[:-1]), w[-1]))
+    return ReplacementRule(pattern, _replace)
 
 
 class Head(Expr):
@@ -509,6 +572,9 @@ class Binop(Elemwise):
             Pattern(cls(left, right)[columns]), functools.partial(transform, cls=cls)
         )
 
+        # Push down partition projection
+        yield partition_pushdown_rule(cls)
+
 
 class Add(Binop):
     operation = operator.add
@@ -523,6 +589,9 @@ class Add(Binop):
         )
 
         yield from super()._replacement_rules()
+
+        # Push down partition projection
+        yield partition_pushdown_rule(cls)
 
 
 class Sub(Binop):
@@ -549,6 +618,9 @@ class Mul(Binop):
         )
 
         yield from super()._replacement_rules()
+
+        # Push down partition projection
+        yield partition_pushdown_rule(cls)
 
 
 class Div(Binop):

@@ -1,6 +1,7 @@
 import math
+from functools import cached_property
 
-from dask_match.core import Expr
+from dask_match.core import Expr, output_partitions_rule
 
 
 class IO(Expr):
@@ -10,23 +11,36 @@ class IO(Expr):
 class FromPandas(IO):
     """The only way today to get a real dataframe"""
 
-    _parameters = ["frame", "npartitions"]
-    _defaults = {"npartitions": 1}
+    _parameters = ["frame", "npartitions", "output_partitions"]
+    _defaults = {"npartitions": 1, "output_partitions": None}
+
+    @classmethod
+    def _replacement_rules(cls):
+        # Output-partition projection
+        yield output_partitions_rule(cls)
 
     @property
     def _meta(self):
         return self.frame.head(0)
 
     def _divisions(self):
-        return [None] * (self.npartitions + 1)
+        return [None] * (len(self._chunks) + 1)
 
-    def _layer(self):
+    @cached_property
+    def _chunks(self):
         chunksize = int(math.ceil(len(self.frame) / self.npartitions))
         locations = list(range(0, len(self.frame), chunksize)) + [len(self.frame)]
-        return {
-            (self._name, i): self.frame.iloc[start:stop]
-            for i, (start, stop) in enumerate(zip(locations[:-1], locations[1:]))
-        }
+        chunks = [
+            self.frame.iloc[start:stop]
+            for start, stop in zip(locations[:-1], locations[1:])
+        ]
+        if self.output_partitions is None:
+            return chunks
+        else:
+            return [chunks[i] for i in self.output_partitions]
+
+    def _layer(self):
+        return {(self._name, i): chunk for i, chunk in enumerate(self._chunks)}
 
     def __str__(self):
         return "df"

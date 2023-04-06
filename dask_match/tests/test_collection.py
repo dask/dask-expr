@@ -167,3 +167,18 @@ def test_head(df, ddf):
     assert_eq(ddf.head(compute=False, n=7), df.head(n=7))
 
     assert ddf.head(compute=False).npartitions == 1
+
+
+def test_head_graph_culling(ddf):
+    # Check that from_pandas avoids
+    # producing unnecessary tasks
+    result = ddf.head(compute=False)
+    assert len(optimize(result).dask) < ddf.npartitions
+    assert_eq(optimize(result), result)
+
+    # Check that the partition selection
+    # is pushed down through multiple
+    # Blockwise operations
+    result_2 = (ddf + 1).head(compute=False)
+    assert len(optimize(result_2).dask) < ddf.npartitions
+    assert_eq(optimize(result_2), result_2)
