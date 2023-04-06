@@ -177,8 +177,7 @@ def test_head_graph_culling(ddf):
     assert_eq(optimize(result), result)
 
     # Check that the partition selection
-    # is pushed down through multiple
-    # Blockwise operations
+    # is pushed down through Blockwise
     result_2 = (ddf + 1).head(compute=False)
     assert len(optimize(result_2).dask) < ddf.npartitions
     assert_eq(optimize(result_2), result_2)
