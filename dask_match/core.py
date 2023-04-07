@@ -279,27 +279,28 @@ class Expr(Operation, metaclass=_ExprMeta):
         return [(self._name, i) for i in range(self.npartitions)]
 
     def substitute(self, substitutions: dict):
-        """Substitute Expr nodes
+        """Substitute operands in the expression tree
 
-        `substitutions` corresponds to a `dict` mapping
-        of old `Expr` objects to new `Expr` objects.
+        `substitutions` corresponds to a `dict` mapping of old
+        operands to new operands. Note that the operands being
+        replaced must be hashable.
         """
         if not substitutions:
             # Nothing to replace
             return self
         elif self in substitutions:
-            # Already at targetted expr
+            # This is a targetted operand
             return substitutions[self]
 
         new_operands = []
         update = False
         for operand in self.operands:
-            if isinstance(operand, Expr) and operand in substitutions:
+            if operand in substitutions:
                 # Replacing this operand
                 val = substitutions[operand]
                 update = True
             elif isinstance(operand, Expr):
-                # Non-Expr operand - Recursive call
+                # Expr operand
                 val = operand.substitute(substitutions)
                 if operand._name != val._name:
                     update = True
@@ -781,7 +782,10 @@ class FusedExpr(Blockwise):
         return self.exprs[0]._meta
 
     def __str__(self):
-        descr = "-".join([expr._name.split("-")[0] for expr in self.exprs])
+        names = [expr._name.split("-")[0] for expr in self.exprs]
+        if len(names) > 3:
+            names = [names[0], f"{len(names) - 2}", names[-1]]
+        descr = "-".join(names)
         return f"Fused-{descr}"
 
     @property
@@ -803,7 +807,7 @@ class FusedExpr(Blockwise):
 
 
 class IndexableArg:
-    """Indexable Expr dependency
+    """Indexable Expr argument
 
     NOTE: This class is used by IO expressions
     to map path-like arguments over output partitions
