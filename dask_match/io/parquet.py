@@ -299,9 +299,9 @@ class ReadParquet(BlockwiseIO):
     def _divisions(self):
         return self._plan["divisions"]
 
-    def _subgraph_dependencies(self):
+    def dependencies(self):
         return [MappedArg(self._plan["parts"])]
 
     def _blockwise_subgraph(self):
-        dep = self._subgraph_dependencies()[0]._name
+        dep = self.dependencies()[0]._name
         return {self._name: (self._plan["func"], dep)}

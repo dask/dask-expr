@@ -33,7 +33,7 @@ class ReadCSV(BlockwiseIO):
         return list(self._ddf.dask.to_dict().values())
 
     @functools.lru_cache
-    def _subgraph_dependencies(self):
+    def dependencies(self):
         # Need to pass `token` to ensure deterministic name
         return [MappedArg([t[1] for t in self._tasks], token=tokenize(self._ddf))]
 
@@ -42,6 +42,6 @@ class ReadCSV(BlockwiseIO):
         return {
             self._name: (
                 next(iter(dsk.values()))[0],
-                self._subgraph_dependencies()[0]._name,
+                self.dependencies()[0]._name,
             )
         }

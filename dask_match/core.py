@@ -115,6 +115,10 @@ class Expr(Operation, metaclass=_ExprMeta):
         # (e.g. if the key is reserved by a method/property)
         return self.operands[type(self)._parameters.index(key)]
 
+    def dependencies(self):
+        # Dependencies are `Expr` operands only
+        return [operand for operand in self.operands if isinstance(operand, Expr)]
+
     @property
     def index(self):
         return ProjectIndex(self)
@@ -312,11 +316,6 @@ class Blockwise(Expr):
     def _name(self):
         return funcname(self.operation) + "-" + tokenize(*self.operands)
 
-    def _subgraph_dependencies(self):
-        # List `Expr` operands only.
-        # This property is required to enable fusion
-        return [operand for operand in self.operands if isinstance(operand, Expr)]
-
     def _blockwise_subgraph(self):
         return {
             self._name: (
@@ -332,7 +331,7 @@ class Blockwise(Expr):
 
     def _layer(self):
         # Create SubgraphCallable
-        dependencies = self._subgraph_dependencies()
+        dependencies = self.dependencies()
         func = SubgraphCallable(
             self._blockwise_subgraph(),
             self._name,
@@ -757,7 +756,7 @@ def _blockwise_fusion(expr):
                 for _expr in group:
                     group_deps += [
                         operand
-                        for operand in _expr._subgraph_dependencies()
+                        for operand in _expr.dependencies()
                         if operand._name not in local_names
                     ]
                 to_replace = {group[0]: FusedExpr(group, *group_deps)}
@@ -795,7 +794,7 @@ class FusedExpr(Blockwise):
     def _divisions(self):
         return self.exprs[0]._divisions()
 
-    def _subgraph_dependencies(self):
+    def dependencies(self):
         return self.operands[1:]
 
     def _blockwise_subgraph(self):

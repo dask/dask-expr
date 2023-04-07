@@ -58,11 +58,11 @@ class FromPandas(BlockwiseIO):
             for start, stop in zip(locations[:-1], locations[1:])
         ]
 
-    def _subgraph_dependencies(self):
+    def dependencies(self):
         return [MappedArg(self._chunks)]
 
     def _blockwise_subgraph(self):
-        return {self._name: self._subgraph_dependencies()[0]._name}
+        return {self._name: self.dependencies()[0]._name}
 
     def __str__(self):
         return "df"
