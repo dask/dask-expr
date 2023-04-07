@@ -278,6 +278,41 @@ class Expr(Operation, metaclass=_ExprMeta):
     def __dask_keys__(self):
         return [(self._name, i) for i in range(self.npartitions)]
 
+    def substitute(self, substitutions: dict):
+        """Substitute Expr nodes
+
+        `substitutions` corresponds to a `dict` mapping
+        of old `Expr` objects to new `Expr` objects.
+        """
+        if not substitutions:
+            # Nothing to replace
+            return self
+        elif self in substitutions:
+            # Already at targetted expr
+            return substitutions[self]
+
+        new_operands = []
+        update = False
+        for operand in self.operands:
+            if isinstance(operand, Expr) and operand in substitutions:
+                # Replacing this operand
+                val = substitutions[operand]
+                update = True
+            elif isinstance(operand, Expr):
+                # Non-Expr operand - Recursive call
+                val = operand.substitute(substitutions)
+                if operand._name != val._name:
+                    update = True
+            else:
+                # Non-Expr operand
+                val = operand
+            new_operands.append(val)
+
+        if update:
+            # Only return new object if something changed
+            return type(self)(*new_operands)
+        return self
+
 
 class Blockwise(Expr):
     """Super-class for block-wise operations
@@ -651,42 +686,6 @@ from dask_match.reductions import Count, Max, Min, Mode, Size, Sum
 ## Utilites for Expr fusion
 
 
-def replace_nodes(expr, nodes_to_replace: dict):
-    """Replace specific nodes in an Expr tree
-
-    `nodes_to_replace` corresponds to a `dict` mapping
-    of old `Expr` objects to new `Expr` objects.
-    """
-    if not nodes_to_replace:
-        # Nothing to replace
-        return expr
-    elif expr in nodes_to_replace:
-        # Already at targetted expr
-        return nodes_to_replace[expr]
-
-    new_operands = []
-    update = False
-    for operand in expr.operands:
-        if isinstance(operand, Expr) and operand in nodes_to_replace:
-            # Replacing this operand
-            val = nodes_to_replace[operand]
-            update = True
-        elif isinstance(operand, Expr):
-            # Non-Expr operand - Recursive call
-            val = replace_nodes(operand, nodes_to_replace)
-            if operand._name != val._name:
-                update = True
-        else:
-            # Non-Expr operand
-            val = operand
-        new_operands.append(val)
-
-    if update:
-        # Only return new object if something changed
-        return type(expr)(*new_operands)
-    return expr
-
-
 def _blockwise_fusion(expr):
     """Traverse the expression graph and apply fusion"""
 
@@ -760,7 +759,7 @@ def _blockwise_fusion(expr):
                         if operand._name not in local_names
                     ]
                 to_replace = {group[0]: FusedExpr(group, *group_deps)}
-                return replace_nodes(expr, to_replace), not roots
+                return expr.substitute(to_replace), not roots
 
         # Return original expr if no fusable sub-groups were found
         return expr, True
