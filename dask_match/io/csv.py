@@ -2,7 +2,7 @@ import functools
 
 from dask.base import tokenize
 
-from dask_match.core import MappedArg
+from dask_match.core import IndexableArg
 from dask_match.io.io import BlockwiseIO
 
 
@@ -35,7 +35,7 @@ class ReadCSV(BlockwiseIO):
     @functools.lru_cache
     def dependencies(self):
         # Need to pass `token` to ensure deterministic name
-        return [MappedArg([t[1] for t in self._tasks], token=tokenize(self._ddf))]
+        return [IndexableArg([t[1] for t in self._tasks], token=tokenize(self._ddf))]
 
     def _blockwise_subgraph(self):
         dsk = self._tasks[0][0].dsk

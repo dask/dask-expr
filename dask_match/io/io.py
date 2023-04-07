@@ -1,7 +1,7 @@
 import math
 from functools import cached_property
 
-from dask_match.core import Expr, Blockwise, MappedArg
+from dask_match.core import Expr, Blockwise, IndexableArg
 
 
 class IO(Expr):
@@ -59,7 +59,7 @@ class FromPandas(BlockwiseIO):
         ]
 
     def dependencies(self):
-        return [MappedArg(self._chunks)]
+        return [IndexableArg(self._chunks)]
 
     def _blockwise_subgraph(self):
         return {self._name: self.dependencies()[0]._name}

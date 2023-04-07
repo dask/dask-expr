@@ -344,7 +344,7 @@ class Blockwise(Expr):
             (self._name, i): (
                 func,
                 *[
-                    dep[i] if isinstance(dep, MappedArg) else (dep._name, i)
+                    dep[i] if isinstance(dep, IndexableArg) else (dep._name, i)
                     for dep in dependencies
                 ],
             )
@@ -775,9 +775,7 @@ def _blockwise_fusion(expr):
 
 
 class FusedExpr(Blockwise):
-    @property
-    def exprs(self):
-        return self.operands[0]
+    _parameters = ["exprs"]
 
     @property
     def _meta(self):
@@ -805,7 +803,7 @@ class FusedExpr(Blockwise):
         return block
 
 
-class MappedArg:
+class IndexableArg:
     """Indexable Expr dependency
 
     NOTE: This class is used by IO expressions
@@ -820,7 +818,7 @@ class MappedArg:
 
     @property
     def _name(self):
-        return f"mapped-arg-{self.token}"
+        return f"indexable-arg-{self.token}"
 
     def __getitem__(self, index):
         if callable(self.lookup):
