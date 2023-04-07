@@ -353,17 +353,14 @@ class Blockwise(Expr):
         return funcname(self.operation) + "-" + tokenize(*self.operands)
 
     def _blockwise_subgraph(self):
-        return {
-            self._name: (
-                apply,
-                self.operation,
-                [
-                    operand._name if isinstance(operand, Expr) else operand
-                    for operand in self.operands
-                ],
-                self._kwargs,
-            )
-        }
+        args = tuple(
+            operand._name if isinstance(operand, Expr) else operand
+            for operand in self.operands
+        )
+        if self._kwargs:
+            return {self._name: (apply, self.operation, args, self._kwargs)}
+        else:
+            return {self._name: (self.operation,) + args}
 
     def _layer(self):
         # Create SubgraphCallable
@@ -484,9 +481,6 @@ class Projection(Elemwise):
     @property
     def _meta(self):
         return self.frame._meta[self.columns]
-
-    def _blockwise_subgraph(self):
-        return {self._name: (operator.getitem, self.frame._name, self.columns)}
 
     def __str__(self):
         base = str(self.frame)
@@ -682,7 +676,6 @@ def optimize_expr(expr, fuse=True):
 
 
 from dask_match.reductions import Count, Max, Min, Mode, Size, Sum
-
 
 ## Utilites for Expr fusion
 
