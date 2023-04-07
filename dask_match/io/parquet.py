@@ -13,7 +13,7 @@ from dask.utils import natural_sort_key
 from matchpy import CustomConstraint, Pattern, ReplacementRule, Wildcard
 
 from dask_match.core import EQ, GE, GT, LE, LT, NE, Filter, MappedArg
-from dask_match.io import IO
+from dask_match.io import BlockwiseIO
 
 NONE_LABEL = "__null_dask_index__"
 
@@ -27,7 +27,7 @@ def _list_columns(columns):
     return columns
 
 
-class ReadParquet(IO):
+class ReadParquet(BlockwiseIO):
     """Read a parquet dataset"""
 
     _parameters = [
@@ -302,6 +302,6 @@ class ReadParquet(IO):
     def _subgraph_dependencies(self):
         return [MappedArg(self._plan["parts"])]
 
-    def _block_subgraph(self):
+    def _blockwise_subgraph(self):
         dep = self._subgraph_dependencies()[0]._name
         return {self._name: (self._plan["func"], dep)}

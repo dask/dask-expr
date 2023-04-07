@@ -1,54 +1,11 @@
 import math
 from functools import cached_property
 
-from dask_match.core import Expr, MappedArg, Fusable, _subgraph_callable_layer
+from dask_match.core import Expr, Blockwise, MappedArg
 
 
 class IO(Expr):
-    def _layer(self):
-        if isinstance(self, Fusable):
-            return _subgraph_callable_layer(
-                self._name,
-                self._block_subgraph(),
-                self._subgraph_dependencies(),
-                self.npartitions,
-            )
-        else:
-            raise NotImplementedError()
-
-
-class FromPandas(IO):
-    """The only way today to get a real dataframe"""
-
-    _parameters = ["frame", "npartitions"]
-    _defaults = {"npartitions": 1}
-
-    @property
-    def _meta(self):
-        return self.frame.head(0)
-
-    def _divisions(self):
-        return [None] * (self.npartitions + 1)
-
-    @cached_property
-    def _chunks(self):
-        chunksize = int(math.ceil(len(self.frame) / self.npartitions))
-        locations = list(range(0, len(self.frame), chunksize)) + [len(self.frame)]
-        return [
-            self.frame.iloc[start:stop]
-            for start, stop in zip(locations[:-1], locations[1:])
-        ]
-
-    def _subgraph_dependencies(self):
-        return [MappedArg(self._chunks)]
-
-    def _block_subgraph(self):
-        return {self._name: self._subgraph_dependencies()[0]._name}
-
-    def __str__(self):
-        return "df"
-
-    __repr__ = __str__
+    pass
 
 
 class FromGraph(IO):
@@ -73,3 +30,41 @@ class FromGraph(IO):
 
     def _layer(self):
         return self.operand("layer")
+
+
+class BlockwiseIO(Blockwise, IO):
+    pass
+
+
+class FromPandas(BlockwiseIO):
+    """The only way today to get a real dataframe"""
+
+    _parameters = ["frame", "npartitions"]
+    _defaults = {"npartitions": 1}
+
+    @property
+    def _meta(self):
+        return self.frame.head(0)
+
+    def _divisions(self):
+        return [None] * (self.npartitions + 1)
+
+    @cached_property
+    def _chunks(self):
+        chunksize = int(math.ceil(len(self.frame) / self.npartitions))
+        locations = list(range(0, len(self.frame), chunksize)) + [len(self.frame)]
+        return [
+            self.frame.iloc[start:stop]
+            for start, stop in zip(locations[:-1], locations[1:])
+        ]
+
+    def _subgraph_dependencies(self):
+        return [MappedArg(self._chunks)]
+
+    def _blockwise_subgraph(self):
+        return {self._name: self._subgraph_dependencies()[0]._name}
+
+    def __str__(self):
+        return "df"
+
+    __repr__ = __str__

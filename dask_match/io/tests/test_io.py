@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 from dask.dataframe.utils import assert_eq
 
-from dask_match import optimize, read_parquet
+from dask_match import optimize, read_parquet, read_csv
 
 
 def _make_file(dir, format="parquet", df=None):
@@ -64,9 +64,13 @@ def test_optimize(tmpdir, input, expected):
     assert str(result.expr) == str(expected(fn).expr)
 
 
-def test_parquet_fusion(tmpdir):
-    fn = _make_file(tmpdir, format="parquet")
-    df = read_parquet(fn)
+@pytest.mark.parametrize("fmt", ["parquet", "csv"])
+def test_io_fusion(tmpdir, fmt):
+    fn = _make_file(tmpdir, format=fmt)
+    if fmt == "parquet":
+        df = read_parquet(fn)
+    else:
+        df = read_csv(fn)
     df2 = optimize(df[["a", "b"]] + 1, fuse=True)
 
     # All tasks should be fused for each partition

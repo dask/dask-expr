@@ -3,7 +3,6 @@ import numbers
 import operator
 from collections import defaultdict
 from collections.abc import Iterator
-from typing import Protocol, runtime_checkable
 
 import pandas as pd
 import toolz
@@ -318,7 +317,7 @@ class Blockwise(Expr):
         # This property is required to enable fusion
         return [operand for operand in self.operands if isinstance(operand, Expr)]
 
-    def _block_subgraph(self):
+    def _blockwise_subgraph(self):
         return {
             self._name: (
                 apply,
@@ -332,12 +331,26 @@ class Blockwise(Expr):
         }
 
     def _layer(self):
-        return _subgraph_callable_layer(
+        # Create SubgraphCallable
+        dependencies = self._subgraph_dependencies()
+        func = SubgraphCallable(
+            self._blockwise_subgraph(),
             self._name,
-            self._block_subgraph(),
-            self._subgraph_dependencies(),
-            self.npartitions,
+            [dep._name for dep in dependencies],
+            self._name,
         )
+
+        # Tasks depend on external-dependency keys only
+        return {
+            (self._name, i): (
+                func,
+                *[
+                    dep[i] if isinstance(dep, MappedArg) else (dep._name, i)
+                    for dep in dependencies
+                ],
+            )
+            for i in range(self.npartitions)
+        }
 
 
 class Elemwise(Blockwise):
@@ -367,7 +380,7 @@ class Apply(Elemwise):
     def _meta(self):
         return self.frame._meta.apply(self.function, *self.args, **self.kwargs)
 
-    def _block_subgraph(self):
+    def _blockwise_subgraph(self):
         return {
             self._name: (
                 apply,
@@ -388,7 +401,7 @@ class Assign(Elemwise):
     def _meta(self):
         return self.frame._meta.assign(**{self.key: self.value._meta})
 
-    def _block_subgraph(self):
+    def _blockwise_subgraph(self):
         return {
             self._name: (
                 methods.assign,
@@ -437,7 +450,7 @@ class Projection(Elemwise):
     def _meta(self):
         return self.frame._meta[self.columns]
 
-    def _block_subgraph(self):
+    def _blockwise_subgraph(self):
         return {self._name: (operator.getitem, self.frame._name, self.columns)}
 
     def __str__(self):
@@ -460,7 +473,7 @@ class ProjectIndex(Elemwise):
     def _meta(self):
         return self.frame._meta.index
 
-    def _block_subgraph(self):
+    def _blockwise_subgraph(self):
         return {self._name: (getattr, self.frame._name, "index")}
 
 
@@ -485,7 +498,7 @@ class Binop(Elemwise):
     _parameters = ["left", "right"]
     arity = Arity.binary
 
-    def _block_subgraph(self):
+    def _blockwise_subgraph(self):
         return {
             self._name: (
                 self.operation,
@@ -653,23 +666,23 @@ def replace_nodes(expr, nodes_to_replace: dict):
         return nodes_to_replace[expr]
 
     new_operands = []
-    new_count = 0
+    update = False
     for operand in expr.operands:
         if isinstance(operand, Expr) and operand in nodes_to_replace:
             # Replacing this operand
             val = nodes_to_replace[operand]
-            new_count += 1
+            update = True
         elif isinstance(operand, Expr):
             # Non-Expr operand - Recursive call
             val = replace_nodes(operand, nodes_to_replace)
             if operand._name != val._name:
-                new_count += 1
+                update = True
         else:
             # Non-Expr operand
             val = operand
         new_operands.append(val)
 
-    if new_count:
+    if update:
         # Only return new object if something changed
         return type(expr)(*new_operands)
     return expr
@@ -691,7 +704,7 @@ def _blockwise_fusion(expr):
                 continue
             seen.add(next._name)
 
-            if isinstance(next, Fusable):
+            if isinstance(next, Blockwise):
                 dependencies[next] = set()
                 if next not in dependents:
                     dependents[next] = set()
@@ -699,18 +712,18 @@ def _blockwise_fusion(expr):
             for operand in next.operands:
                 if isinstance(operand, Expr):
                     stack.append(operand)
-                    if isinstance(operand, Fusable):
+                    if isinstance(operand, Blockwise):
                         if next in dependencies:
                             dependencies[next].add(operand)
                         dependents[operand].add(next)
 
         # Traverse each "root" until we find a fusable sub-group.
-        # Here we use root to refer to a Fusable Expr node that
-        # has no Fusable dependents
+        # Here we use root to refer to a Blockwise Expr node that
+        # has no Blockwise dependents
         roots = [
             k
             for k, v in dependents.items()
-            if v == set() or all(not isinstance(_expr, Fusable) for _expr in v)
+            if v == set() or all(not isinstance(_expr, Blockwise) for _expr in v)
         ]
         while roots:
             root = roots.pop()
@@ -762,29 +775,7 @@ def _blockwise_fusion(expr):
     return expr
 
 
-@runtime_checkable
-class Fusable(Protocol):
-    """Fusable Expr Protocol
-    An `Expr` with these methods will be treated as "fusable"
-    """
-
-    def _subgraph_dependencies(self):
-        """List of `Expr` operands or `MappedArg`
-        dependencies. Since `_block_subgraph`
-        cannot include mapped arguments explicitly,
-        IO expressions must represent these task
-        arguments as `MappedArg` dependencies.
-        """
-        raise NotImplementedError
-
-    def _block_subgraph(self):
-        """Return the subgraph for an abstract 'block'.
-        Used to initialize a `SubgraphCallabe` object.
-        """
-        raise NotImplementedError
-
-
-class FusedExpr(Expr):
+class FusedExpr(Blockwise):
     @property
     def exprs(self):
         return self.operands[0]
@@ -807,20 +798,12 @@ class FusedExpr(Expr):
     def _subgraph_dependencies(self):
         return self.operands[1:]
 
-    def _block_subgraph(self):
+    def _blockwise_subgraph(self):
         block = {self._name: self.exprs[0]._name}
         for _expr in self.exprs:
-            for k, v in _expr._block_subgraph().items():
+            for k, v in _expr._blockwise_subgraph().items():
                 block[k] = v
         return block
-
-    def _layer(self):
-        return _subgraph_callable_layer(
-            self._name,
-            self._block_subgraph(),
-            self._subgraph_dependencies(),
-            self.npartitions,
-        )
 
 
 class MappedArg:
@@ -831,39 +814,16 @@ class MappedArg:
     in a fusion-compatible way.
     """
 
-    def __init__(self, lookup):
+    def __init__(self, lookup, token=None):
         assert callable(lookup) or isinstance(lookup, (list, dict))
         self.lookup = lookup
+        self.token = token or tokenize(self.lookup)
 
     @property
     def _name(self):
-        return f"mapped-arg-{tokenize(self.lookup)}"
+        return f"mapped-arg-{self.token}"
 
     def __getitem__(self, index):
         if callable(self.lookup):
             return self.lookup(index)
         return self.lookup[index]
-
-
-def _subgraph_callable_layer(name, block, dependencies, npartitions, funcname=None):
-    """Construct a low-level blockwise layer"""
-
-    # Convert `_block` logic to SubgraphCallable
-    func = SubgraphCallable(
-        block,
-        name,
-        [dep._name for dep in dependencies],
-        funcname or name,
-    )
-
-    # Tasks depend on operand keys only
-    return {
-        (name, i): (
-            func,
-            *[
-                dep[i] if isinstance(dep, MappedArg) else (dep._name, i)
-                for dep in dependencies
-            ],
-        )
-        for i in range(npartitions)
-    }

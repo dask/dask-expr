@@ -146,7 +146,6 @@ def test_columns_traverse_filters(df, ddf):
 
 
 def test_optimize_fusion(ddf):
-
     ddf2 = (ddf["x"] + ddf["y"]) - 1
     unfused = optimize(ddf2, fuse=False)
     fused = optimize(ddf2, fuse=True)
@@ -166,7 +165,7 @@ def test_optimize_fusion(ddf):
 
     # Check that we still get fusion
     # after a non-blockwise operation as well
-    fused_2 = optimize(ddf3 + 10 - 5, fuse=True)
+    fused_2 = optimize((ddf3 + 10) - 5, fuse=True)
     # The "+10 and -5" ops should get fused
     assert len(fused_2.dask) == len(fused.dask) + 1
 
