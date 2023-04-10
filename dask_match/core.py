@@ -768,6 +768,29 @@ def _blockwise_fusion(expr):
 
 
 class FusedExpr(Blockwise):
+    """Fused ``Blockwise`` expression
+    
+    A ``FusedExpr`` corresponds to the fusion of multiple
+    ``Blockwise`` expressions into a single ``Expr`` object.
+    Before graph-materialization time, the behavior of this
+    object should be identical to that of the first element
+    of ``FusedExpr.exprs`` (i.e. the top-most expression in
+    the fused group).
+
+    Parameters
+    ----------
+    exprs : List[Expr]
+        Group of original ``Expr`` objects being fused together.
+    *dependencies:
+        List of ``IndexableArg`` arguments and external-``Expr``
+        dependencies. External-``Expr``dependencies correspond to
+        any ``Expr`` operand that is not already included in
+        ``exprs``. Note that these dependencies should be defined
+        in the order of the ``Expr`` objects that require them
+        (in ``exprs``). These dependencies do not include literal
+        operands, because those arguments should already be
+        captured in the fused subgraphs.
+    """
     _parameters = ["exprs"]
 
     @property
