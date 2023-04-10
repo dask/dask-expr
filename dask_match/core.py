@@ -278,32 +278,39 @@ class Expr(Operation, metaclass=_ExprMeta):
     def __dask_keys__(self):
         return [(self._name, i) for i in range(self.npartitions)]
 
-    def substitute(self, substitutions: dict):
-        """Substitute operands in the expression tree
+    def substitute(self, substitutions: list):
+        """Substitute specific `Expr` instances within `self`
 
-        `substitutions` corresponds to a `dict` mapping of old
-        operands to new operands. Note that the operands being
-        replaced must be hashable.
+        `substitutions` corresponds to a `list` old and new
+        `Expr` pairs (`List[Tuple[Expr, Expr]]`).
         """
         if not substitutions:
             # Nothing to replace
             return self
-        elif self in substitutions:
+        
+        targets, replacements = [], []
+        for target, replacement in substitutions:
+            assert isinstance(target, Expr)
+            targets.append(target._name)
+            replacements.append(replacement)
+
+        if self._name in targets:
             # This is a targetted operand
-            return substitutions[self]
+            return replacements[targets.index(self._name)]
 
         new_operands = []
         update = False
         for operand in self.operands:
-            if operand in substitutions:
-                # Replacing this operand
-                val = substitutions[operand]
-                update = True
-            elif isinstance(operand, Expr):
-                # Expr operand
-                val = operand.substitute(substitutions)
-                if operand._name != val._name:
+            if isinstance(operand, Expr):
+                if operand._name in targets:
+                    # Replacing this operand
+                    val = replacements[targets.index(operand._name)]
                     update = True
+                else:
+                    # Expr operand
+                    val = operand.substitute(substitutions)
+                    if operand._name != val._name:
+                        update = True
             else:
                 # Non-Expr operand
                 val = operand
@@ -752,7 +759,7 @@ def _blockwise_fusion(expr):
                         for operand in _expr.dependencies()
                         if operand._name not in local_names
                     ]
-                to_replace = {group[0]: FusedExpr(group, *group_deps)}
+                to_replace = [(group[0], FusedExpr(group, *group_deps))]
                 return expr.substitute(to_replace), not roots
 
         # Return original expr if no fusable sub-groups were found
@@ -831,16 +838,14 @@ class IndexableArg:
     in a fusion-compatible way.
     """
 
-    def __init__(self, lookup, token=None):
+    def __init__(self, lookup, name=None, token=None):
         assert callable(lookup) or isinstance(lookup, (list, dict))
-        self.lookup = lookup
-        self.token = token or tokenize(self.lookup)
-
-    @property
-    def _name(self):
-        return f"indexable-arg-{self.token}"
+        self._lookup = lookup
+        self._name = name or (
+            f"indexable-arg-{token or tokenize(self._lookup)}"
+        )
 
     def __getitem__(self, index):
-        if callable(self.lookup):
-            return self.lookup(index)
-        return self.lookup[index]
+        if callable(self._lookup):
+            return self._lookup(index)
+        return self._lookup[index]
