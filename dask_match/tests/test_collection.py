@@ -170,6 +170,47 @@ def test_optimize_fusion(ddf):
     assert len(fused_2.dask) == len(fused.dask) + 1
 
 
+def test_optimize_fusion_many(ddf):
+    # Test that many `Blockwise`` operations,
+    # originating from various IO operations,
+    # can all be fused together
+    ddfa = ddf
+    ddfb = from_pandas(pd.DataFrame({"a": range(100)}), ddf.npartitions)
+
+    ddf2a = ddfa[["x"]] + 1
+    ddf2a["a"] = ddfa["y"] + ddfa["x"]
+    ddf2a["b"] = ddf2a["x"] + 2
+    sera = ddf2a[ddfa["x"] > 1]["b"]
+
+    ddf2b = ddfb[["a"]] + 1
+    ddf2b["b"] = ddfb["a"] + ddfb["a"]
+    serb = ddf2b[ddfb["a"] > 1]["b"]
+
+    ser = (sera + serb) + 1
+    unfused = optimize(ser, fuse=False)
+    fused = optimize(ser, fuse=True)
+    assert len(fused.dask) == ddf.npartitions
+    assert_eq(fused, unfused)
+
+
+def test_optimize_fusion_repeat(ddf):
+    # Test that we can optimize a collection
+    # more than once, and fusion still works
+    ddf2 = (ddf[["x"]] + 1).assign(z=ddf.y)
+    ddf3 = ddf2 + 2
+    ddf3_fused = optimize(ddf2, fuse=True) + 2
+
+    fused = optimize(ddf3_fused, fuse=True)
+    assert len(fused.dask) == ddf.npartitions
+    assert_eq(fused, ddf3)
+
+    ser = ddf3["x"]
+    ser_fused = optimize(fused["x"], fuse=True)
+    ser_fused = optimize(ser_fused, fuse=True)
+    assert len(ser_fused.dask) == ddf.npartitions
+    assert_eq(ser_fused, ser)
+
+
 def test_persist(df, ddf):
     a = ddf + 2
     b = a.persist()

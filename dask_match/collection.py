@@ -188,6 +188,10 @@ class DataFrame(FrameBase):
 class Series(FrameBase):
     """Series-like Expr Collection"""
 
+    @property
+    def name(self):
+        return self.expr._meta.name
+
     def __repr__(self):
         return f"<dask_match.core.Series: expr={self.expr}>"
 

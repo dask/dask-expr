@@ -769,7 +769,7 @@ def _blockwise_fusion(expr):
 
 class FusedExpr(Blockwise):
     """Fused ``Blockwise`` expression
-    
+
     A ``FusedExpr`` corresponds to the fusion of multiple
     ``Blockwise`` expressions into a single ``Expr`` object.
     Before graph-materialization time, the behavior of this
@@ -791,6 +791,7 @@ class FusedExpr(Blockwise):
         operands, because those arguments should already be
         captured in the fused subgraphs.
     """
+
     _parameters = ["exprs"]
 
     @property
