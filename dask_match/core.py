@@ -287,7 +287,7 @@ class Expr(Operation, metaclass=_ExprMeta):
         if not substitutions:
             # Nothing to replace
             return self
-        
+
         targets, replacements = [], []
         for target, replacement in substitutions:
             assert isinstance(target, Expr)
@@ -841,9 +841,7 @@ class IndexableArg:
     def __init__(self, lookup, name=None, token=None):
         assert callable(lookup) or isinstance(lookup, (list, dict))
         self._lookup = lookup
-        self._name = name or (
-            f"indexable-arg-{token or tokenize(self._lookup)}"
-        )
+        self._name = name or (f"indexable-arg-{token or tokenize(self._lookup)}")
 
     def __getitem__(self, index):
         if callable(self._lookup):
