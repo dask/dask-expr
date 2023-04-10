@@ -66,6 +66,9 @@ class ReadParquet(BlockwiseIO):
         "kwargs": {},
     }
 
+    def __str__(self):
+        return f"{type(self).__name__}({self.path})"
+
     @property
     def engine(self):
         return get_engine("pyarrow")

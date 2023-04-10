@@ -5,7 +5,8 @@ from dask_match.core import Expr, Blockwise, IndexableArg
 
 
 class IO(Expr):
-    pass
+    def __str__(self):
+        return f"{type(self).__name__}({self._name[-7:]})"
 
 
 class FromGraph(IO):

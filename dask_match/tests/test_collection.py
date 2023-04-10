@@ -223,6 +223,17 @@ def test_persist(df, ddf):
     assert_eq(b.y.sum(), (df + 2).y.sum())
 
 
+def test_persist_with_fusion(ddf):
+    # Check that fusion works after persisting
+    a = ddf + 2
+    b = a.persist()
+
+    c = (b.y + 1).sum()
+    c_fused = optimize(c, fuse=True)
+    assert_eq(c, c_fused)
+    assert len(c_fused.dask) < len(c.dask)
+
+
 def test_index(df, ddf):
     assert_eq(ddf.index, df.index)
     assert_eq(ddf.x.index, df.x.index)
