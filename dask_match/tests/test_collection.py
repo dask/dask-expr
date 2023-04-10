@@ -170,11 +170,12 @@ def test_optimize_fusion(ddf):
     assert len(fused_2.dask) == len(fused.dask) + 1
 
 
-def test_optimize_fusion_many(ddf):
+@pytest.mark.parametrize("persist", [True, False])
+def test_optimize_fusion_many(ddf, persist):
     # Test that many `Blockwise`` operations,
     # originating from various IO operations,
     # can all be fused together
-    ddfa = ddf
+    ddfa = ddf.persist() if persist else ddf
     ddfb = from_pandas(pd.DataFrame({"a": range(100)}), ddf.npartitions)
 
     ddf2a = ddfa[["x"]] + 1
@@ -189,7 +190,13 @@ def test_optimize_fusion_many(ddf):
     ser = (sera + serb) + 1
     unfused = optimize(ser, fuse=False)
     fused = optimize(ser, fuse=True)
-    assert len(fused.dask) == ddf.npartitions
+    if persist:
+        # Can't fuse persisted graph, but everything
+        # after should be fused
+        assert len(fused.dask) == ddf.npartitions * 2
+    else:
+        # Everything should be fused
+        assert len(fused.dask) == ddf.npartitions
     assert_eq(fused, unfused)
 
 
