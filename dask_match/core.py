@@ -350,20 +350,21 @@ class Blockwise(Expr):
     def _kwargs(self):
         return {}
 
-    def _broadcast_dep(self, dep):
-        # Checks if an `Expr` dependency should be broadcasted to
-        # all partitions of this `Blockwise` operation. Returns
-        # `False` for non-`Expr` arguments
-        if isinstance(dep, Expr):
-            return dep.npartitions == 1 and dep.ndim < self.ndim
-        return False
+    def _broadcast_dep(self, dep: Expr):
+        # Checks if a dependency should be broadcasted to
+        # all partitions of this `Blockwise` operation
+        return (
+            not isinstance(dep, BlockwiseArg)
+            and dep.npartitions == 1
+            and dep.ndim < self.ndim
+        )
 
     def _divisions(self):
         # This is an issue.  In normal Dask we re-divide everything in a step
         # which combines divisions and graph.
         # We either have to create a new Align layer (ok) or combine divisions
         # and graph into a single operation.
-        dependencies = [o for o in self.operands if isinstance(o, Expr)]
+        dependencies = self.dependencies()
         for arg in dependencies:
             if not self._broadcast_dep(arg):
                 assert arg.divisions == dependencies[0].divisions
@@ -384,9 +385,9 @@ class Blockwise(Expr):
             return {self._name: (self.operation,) + args}
 
     def _layer(self):
-        # Use IndexableArg to broadcast dependencies (if necessary)
+        # Use BlockwiseArg to broadcast dependencies (if necessary)
         dependencies = [
-            IndexableArg([(dep._name, 0)] * self.npartitions, name=dep._name)
+            BlockwiseArg([(dep._name, 0)] * self.npartitions, name=dep._name)
             if self._broadcast_dep(dep)
             else dep
             for dep in self.dependencies()
@@ -405,12 +406,46 @@ class Blockwise(Expr):
             (self._name, i): (
                 func,
                 *[
-                    dep[i] if isinstance(dep, IndexableArg) else (dep._name, i)
+                    dep[i] if isinstance(dep, BlockwiseArg) else (dep._name, i)
                     for dep in dependencies
                 ],
             )
             for i in range(self.npartitions)
         }
+
+
+class BlockwiseArg(Expr):
+    """Indexable Blockwise argument
+
+    NOTE: This class is used by IO expressions
+    to map path-like arguments over output partitions
+    in a fusion-compatible way.
+    """
+
+    _parameters = ["lookup", "name", "token"]
+    _defaults = {"name": None, "token": None}
+
+    @property
+    def _meta(self):
+        return None
+
+    @property
+    def _name(self):
+        return self.name or (f"blockwise-arg-{self.token or tokenize(self.lookup)}")
+
+    def _divisions(self):
+        assert isinstance(self.lookup, (list, dict))
+        return (None,) * (len(self.lookup) + 1)
+
+    def __getitem__(self, index):
+        return self.lookup[index]
+
+    def _layer(self):
+        # A `BlockwiseArg` should never produce a graph here.
+        # The parent `Blockwise._layer` layer method should
+        # index this object to eagerly populate its graph
+        # with the values of `BlockwiseArg.lookup`
+        return {}
 
 
 class Elemwise(Blockwise):
@@ -810,7 +845,7 @@ class FusedExpr(Blockwise):
     exprs : List[Expr]
         Group of original ``Expr`` objects being fused together.
     *dependencies:
-        List of ``IndexableArg`` arguments and external-``Expr``
+        List of external and ``BlockwiseArg``-based ``Expr``
         dependencies. External-``Expr``dependencies correspond to
         any ``Expr`` operand that is not already included in
         ``exprs``. Note that these dependencies should be defined
@@ -849,22 +884,3 @@ class FusedExpr(Blockwise):
             for k, v in _expr._blockwise_subgraph().items():
                 block[k] = v
         return block
-
-
-class IndexableArg:
-    """Indexable Expr argument
-
-    NOTE: This class is used by IO expressions
-    to map path-like arguments over output partitions
-    in a fusion-compatible way.
-    """
-
-    def __init__(self, lookup, name=None, token=None):
-        assert callable(lookup) or isinstance(lookup, (list, dict))
-        self._lookup = lookup
-        self._name = name or (f"indexable-arg-{token or tokenize(self._lookup)}")
-
-    def __getitem__(self, index):
-        if callable(self._lookup):
-            return self._lookup(index)
-        return self._lookup[index]
