@@ -1,7 +1,6 @@
 name: Tests
 
 on:
-  push:
   pull_request:
   workflow_dispatch:
 
@@ -27,6 +26,9 @@ jobs:
         with:
           environment-file: ci/environment.yml
           environment-name: dask-match
+
+      - name: Install Dask-Match
+        run: python -m pip install -e . --no-deps
 
       - name: Run tests
         run: py.test dask-match --verbose
