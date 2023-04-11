@@ -369,7 +369,7 @@ class Blockwise(Expr):
     def _name(self):
         return funcname(self.operation) + "-" + tokenize(*self.operands)
 
-    def _blockwise_subgraph(self):
+    def _blockwise_layer(self):
         args = tuple(
             operand._name if isinstance(operand, Expr) else operand
             for operand in self.operands
@@ -390,7 +390,7 @@ class Blockwise(Expr):
 
         # Create SubgraphCallable
         func = SubgraphCallable(
-            self._blockwise_subgraph(),
+            self._blockwise_layer(),
             self._name,
             [dep._name for dep in dependencies],
             self._name,
@@ -480,7 +480,7 @@ class Apply(Elemwise):
     def _meta(self):
         return self.frame._meta.apply(self.function, *self.args, **self.kwargs)
 
-    def _blockwise_subgraph(self):
+    def _blockwise_layer(self):
         return {
             self._name: (
                 apply,
@@ -501,7 +501,7 @@ class Assign(Elemwise):
     def _meta(self):
         return self.frame._meta.assign(**{self.key: self.value._meta})
 
-    def _blockwise_subgraph(self):
+    def _blockwise_layer(self):
         return {
             self._name: (
                 methods.assign,
@@ -570,7 +570,7 @@ class ProjectIndex(Elemwise):
     def _meta(self):
         return self.frame._meta.index
 
-    def _blockwise_subgraph(self):
+    def _blockwise_layer(self):
         return {self._name: (getattr, self.frame._name, "index")}
 
 
@@ -595,7 +595,7 @@ class Binop(Elemwise):
     _parameters = ["left", "right"]
     arity = Arity.binary
 
-    def _blockwise_subgraph(self):
+    def _blockwise_layer(self):
         return {
             self._name: (
                 self.operation,
@@ -883,9 +883,9 @@ class FusedExpr(Blockwise):
     def dependencies(self):
         return self.operands[1:]
 
-    def _blockwise_subgraph(self):
+    def _blockwise_layer(self):
         block = {self._name: self.exprs[0]._name}
         for _expr in self.exprs:
-            for k, v in _expr._blockwise_subgraph().items():
+            for k, v in _expr._blockwise_layer().items():
                 block[k] = v
         return block
