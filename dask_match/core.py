@@ -369,7 +369,6 @@ class Blockwise(Expr):
     def _name(self):
         return funcname(self.operation) + "-" + tokenize(*self.operands)
 
-    @functools.lru_cache
     def _blockwise_subgraph(self):
         args = tuple(
             operand._name if isinstance(operand, Expr) else operand
@@ -380,7 +379,6 @@ class Blockwise(Expr):
         else:
             return {self._name: (self.operation,) + args}
 
-    @functools.lru_cache
     def _layer(self):
         # Use BlockwiseArg to broadcast dependencies (if necessary)
         dependencies = [
