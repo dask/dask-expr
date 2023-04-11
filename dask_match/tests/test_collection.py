@@ -18,9 +18,7 @@ def ddf(df):
     yield from_pandas(df, npartitions=10)
 
 
-def test_del():
-    df = pd.DataFrame({"x": range(100), "y": range(100)})
-    ddf = from_pandas(df, npartitions=10)
+def test_del(df, ddf):
     df = df.copy()
 
     # Check __delitem__
@@ -29,9 +27,7 @@ def test_del():
     assert_eq(df, ddf)
 
 
-def test_setitem():
-    df = pd.DataFrame({"x": range(100), "y": range(100)})
-    ddf = from_pandas(df, npartitions=10)
+def test_setitem(df, ddf):
     df = df.copy()
 
     ddf["z"] = ddf.x + ddf.y
