@@ -728,7 +728,6 @@ def optimize_expr(expr, fuse=True):
         _defer_to_matchpy = False
 
     if fuse:
-        # Apply fusion
         expr = _blockwise_fusion(expr)
 
     return expr
@@ -811,7 +810,7 @@ def _blockwise_fusion(expr):
                         for operand in _expr.dependencies()
                         if operand._name not in local_names
                     ]
-                to_replace = {group[0]: FusedExpr(group, *group_deps)}
+                to_replace = {group[0]: Fused(group, *group_deps)}
                 return expr.substitute(to_replace), not roots
 
         # Return original expr if no fusable sub-groups were found
@@ -826,14 +825,14 @@ def _blockwise_fusion(expr):
     return expr
 
 
-class FusedExpr(Blockwise):
+class Fused(Blockwise):
     """Fused ``Blockwise`` expression
 
-    A ``FusedExpr`` corresponds to the fusion of multiple
+    A ``Fused`` corresponds to the fusion of multiple
     ``Blockwise`` expressions into a single ``Expr`` object.
     Before graph-materialization time, the behavior of this
     object should be identical to that of the first element
-    of ``FusedExpr.exprs`` (i.e. the top-most expression in
+    of ``Fused.exprs`` (i.e. the top-most expression in
     the fused group).
 
     Parameters
