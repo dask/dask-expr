@@ -73,6 +73,14 @@ class Expr(Operation, metaclass=_ExprMeta):
     _parameters = []
     _defaults = {}
 
+    @functools.cached_property
+    def ndim(self):
+        meta = self._meta
+        try:
+            return meta.ndim
+        except AttributeError:
+            return 0
+
     @classmethod
     def _replacement_rules(cls) -> Iterator[ReplacementRule]:
         """Rules associated to this class that are useful for optimization
@@ -220,7 +228,7 @@ class Expr(Operation, metaclass=_ExprMeta):
     def apply(self, function, *args, **kwargs):
         return Apply(self, function, args, kwargs)
 
-    @property
+    @functools.cached_property
     def divisions(self):
         return tuple(self._divisions())
 
@@ -342,18 +350,24 @@ class Blockwise(Expr):
     def _kwargs(self):
         return {}
 
+    def _broadcast_dep(self, dep):
+        # Checks if an `Expr` dependency should be broadcasted to
+        # all partitions of this `Blockwise` operation. Returns
+        # `False` for non-`Expr` arguments
+        if isinstance(dep, Expr):
+            return dep.npartitions == 1 and dep.ndim < self.ndim
+        return False
+
     def _divisions(self):
         # This is an issue.  In normal Dask we re-divide everything in a step
         # which combines divisions and graph.
         # We either have to create a new Align layer (ok) or combine divisions
         # and graph into a single operation.
-        first = [o for o in self.operands if isinstance(o, Expr)][0]
-        assert all(
-            arg.divisions == first.divisions
-            for arg in self.operands
-            if isinstance(arg, Expr)
-        )
-        return first.divisions
+        dependencies = [o for o in self.operands if isinstance(o, Expr)]
+        for arg in dependencies:
+            if not self._broadcast_dep(arg):
+                assert arg.divisions == dependencies[0].divisions
+        return dependencies[0].divisions
 
     @property
     def _name(self):
@@ -370,8 +384,15 @@ class Blockwise(Expr):
             return {self._name: (self.operation,) + args}
 
     def _layer(self):
+        # Use IndexableArg to broadcast dependencies (if necessary)
+        dependencies = [
+            IndexableArg([(dep._name, 0)] * self.npartitions, name=dep._name)
+            if self._broadcast_dep(dep)
+            else dep
+            for dep in self.dependencies()
+        ]
+
         # Create SubgraphCallable
-        dependencies = self.dependencies()
         func = SubgraphCallable(
             self._blockwise_subgraph(),
             self._name,
