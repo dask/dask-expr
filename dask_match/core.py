@@ -595,15 +595,6 @@ class Binop(Elemwise):
     _parameters = ["left", "right"]
     arity = Arity.binary
 
-    def _blockwise_layer(self):
-        return {
-            self._name: (
-                self.operation,
-                self.left._name if isinstance(self.left, Expr) else self.left,
-                self.right._name if isinstance(self.right, Expr) else self.right,
-            )
-        }
-
     def __str__(self):
         return f"{self.left} {self._operator_repr} {self.right}"
 
