@@ -446,9 +446,9 @@ class BlockwiseArg(Expr):
         return self.lookup[index]
 
     def _layer(self):
-        # A `BlockwiseArg` should never produce a graph here.
-        # The parent `Blockwise._layer` layer method should
-        # index this object to eagerly populate its graph
+        # `BlockwiseArg` should never produce a graph.
+        # The parent `Blockwise._layer` method should
+        # index this object to populate its graph
         # with the values of `BlockwiseArg.lookup`
         return {}
 
