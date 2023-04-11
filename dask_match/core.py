@@ -221,7 +221,7 @@ class Expr(Operation, metaclass=_ExprMeta):
     def apply(self, function, *args, **kwargs):
         return Apply(self, function, args, kwargs)
 
-    @property
+    @functools.cached_property
     def divisions(self):
         return tuple(self._divisions())
 
@@ -241,7 +241,7 @@ class Expr(Operation, metaclass=_ExprMeta):
         else:
             return len(self.divisions) - 1
 
-    @property
+    @functools.cached_property
     def _name(self):
         return funcname(type(self)).lower() + "-" + tokenize(*self.operands)
 
@@ -327,7 +327,7 @@ class Blockwise(Expr):
 
     operation = None
 
-    @property
+    @functools.cached_property
     def _meta(self):
         return self.operation(
             *[arg._meta if isinstance(arg, Expr) else arg for arg in self.operands]
@@ -350,7 +350,7 @@ class Blockwise(Expr):
         )
         return first.divisions
 
-    @property
+    @functools.cached_property
     def _name(self):
         return funcname(self.operation) + "-" + tokenize(*self.operands)
 
@@ -796,7 +796,7 @@ class FusedExpr(Blockwise):
 
     _parameters = ["exprs"]
 
-    @property
+    @functools.cached_property
     def _meta(self):
         return self.exprs[0]._meta
 
@@ -807,7 +807,7 @@ class FusedExpr(Blockwise):
         descr = "-".join(names)
         return f"Fused-{descr}"
 
-    @property
+    @functools.cached_property
     def _name(self):
         return f"{str(self)}-{tokenize(self.exprs)}"
 
