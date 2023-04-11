@@ -232,9 +232,9 @@ def new_collection(expr):
 
 
 def optimize(collection, fuse=True):
-    from dask_match.core import optimize_expr
+    from dask_match.core import optimize
 
-    return new_collection(optimize_expr(collection.expr, fuse=fuse))
+    return new_collection(optimize(collection.expr, fuse=fuse))
 
 
 def from_pandas(*args, **kwargs):
