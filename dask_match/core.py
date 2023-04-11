@@ -7,6 +7,7 @@ from collections.abc import Iterator
 import pandas as pd
 import toolz
 from dask.base import normalize_token, tokenize
+from dask.core import ishashable
 from dask.dataframe import methods
 from dask.optimization import SubgraphCallable
 from dask.utils import M, apply, funcname
@@ -248,7 +249,7 @@ class Expr(Operation, metaclass=_ExprMeta):
         else:
             return len(self.divisions) - 1
 
-    @property
+    @functools.cached_property
     def _name(self):
         return funcname(type(self)).lower() + "-" + tokenize(*self.operands)
 
@@ -286,47 +287,41 @@ class Expr(Operation, metaclass=_ExprMeta):
     def __dask_keys__(self):
         return [(self._name, i) for i in range(self.npartitions)]
 
-    def substitute(self, substitutions: list):
+    def substitute(self, substitutions: dict) -> "Expr":
         """Substitute specific `Expr` instances within `self`
 
-        `substitutions` corresponds to a `list` old and new
-        `Expr` pairs (`List[Tuple[Expr, Expr]]`).
+        Parameters
+        ----------
+        substitutions:
+            mapping old terms to new terms
+
+        Examples
+        --------
+        >>> (df + 10).substitute({10: 20})
+        df + 20
         """
         if not substitutions:
-            # Nothing to replace
             return self
 
-        targets, replacements = [], []
-        for target, replacement in substitutions:
-            assert isinstance(target, Expr)
-            targets.append(target._name)
-            replacements.append(replacement)
+        if self in substitutions:
+            return substitutions[self]
 
-        if self._name in targets:
-            # This is a targetted operand
-            return replacements[targets.index(self._name)]
-
-        new_operands = []
+        new = []
         update = False
         for operand in self.operands:
-            if isinstance(operand, Expr):
-                if operand._name in targets:
-                    # Replacing this operand
-                    val = replacements[targets.index(operand._name)]
+            if ishashable(operand) and operand in substitutions:
+                new.append(substitutions[operand])
+                update = True
+            elif isinstance(operand, Expr):
+                val = operand.substitute(substitutions)
+                if operand._name != val._name:
                     update = True
-                else:
-                    # Expr operand
-                    val = operand.substitute(substitutions)
-                    if operand._name != val._name:
-                        update = True
+                new.append(val)
             else:
-                # Non-Expr operand
-                val = operand
-            new_operands.append(val)
+                new.append(operand)
 
-        if update:
-            # Only return new object if something changed
-            return type(self)(*new_operands)
+        if update:  # Only recreate if something changed
+            return type(self)(*new)
         return self
 
 
@@ -340,7 +335,7 @@ class Blockwise(Expr):
 
     operation = None
 
-    @property
+    @functools.cached_property
     def _meta(self):
         return self.operation(
             *[arg._meta if isinstance(arg, Expr) else arg for arg in self.operands]
@@ -370,7 +365,7 @@ class Blockwise(Expr):
                 assert arg.divisions == dependencies[0].divisions
         return dependencies[0].divisions
 
-    @property
+    @functools.cached_property
     def _name(self):
         return funcname(self.operation) + "-" + tokenize(*self.operands)
 
@@ -817,7 +812,7 @@ def _blockwise_fusion(expr):
                         for operand in _expr.dependencies()
                         if operand._name not in local_names
                     ]
-                to_replace = [(group[0], FusedExpr(group, *group_deps))]
+                to_replace = {group[0]: FusedExpr(group, *group_deps)}
                 return expr.substitute(to_replace), not roots
 
         # Return original expr if no fusable sub-groups were found
@@ -859,7 +854,7 @@ class FusedExpr(Blockwise):
 
     _parameters = ["exprs"]
 
-    @property
+    @functools.cached_property
     def _meta(self):
         return self.exprs[0]._meta
 
@@ -870,7 +865,7 @@ class FusedExpr(Blockwise):
         descr = "-".join(names)
         return f"Fused-{descr}"
 
-    @property
+    @functools.cached_property
     def _name(self):
         return f"{str(self)}-{tokenize(self.exprs)}"
 

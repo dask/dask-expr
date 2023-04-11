@@ -251,3 +251,35 @@ def test_head(df, ddf):
     assert_eq(ddf.head(compute=False, n=7), df.head(n=7))
 
     assert ddf.head(compute=False).npartitions == 1
+
+
+def test_substitute(ddf):
+    pdf = pd.DataFrame(
+        {
+            "a": range(100),
+            "b": range(100),
+            "c": range(100),
+        }
+    )
+    df = from_pandas(pdf, npartitions=3)
+    df = df.expr
+
+    result = (df + 1).substitute({1: 2})
+    expected = df + 2
+    assert result._name == expected._name
+
+    result = df["a"].substitute({df["a"]: df["b"]})
+    expected = df["b"]
+    assert result._name == expected._name
+
+    result = (df["a"] - df["b"]).substitute({df["b"]: df["c"]})
+    expected = df["a"] - df["c"]
+    assert result._name == expected._name
+
+    result = df["a"].substitute({3: 4})
+    expected = from_pandas(pdf, npartitions=4).a
+    assert result._name == expected._name
+
+    result = (df["a"].sum() + 5).substitute({df["a"]: df["b"], 5: 6})
+    expected = df["b"].sum() + 6
+    assert result._name == expected._name
