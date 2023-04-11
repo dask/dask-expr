@@ -218,6 +218,14 @@ def test_optimize_fusion_repeat(ddf):
     assert_eq(ser_fused, ser)
 
 
+def test_optimize_fusion_broadcast(ddf):
+    # Check fusion with broadcated reduction
+    ser = ((ddf["x"] + 1) + ddf["y"].sum()) + 1
+    ser_fused = optimize(ser, fuse=True)
+    assert_eq(ser_fused, ser)
+    assert len(ser_fused.dask) < len(ser.dask)
+
+
 def test_persist(df, ddf):
     a = ddf + 2
     b = a.persist()

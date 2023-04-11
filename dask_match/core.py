@@ -384,7 +384,7 @@ class Blockwise(Expr):
     def _layer(self):
         # Use BlockwiseArg to broadcast dependencies (if necessary)
         dependencies = [
-            BlockwiseArg([(dep._name, 0)] * self.npartitions, name=dep._name)
+            BlockwiseArg([(dep._name, 0)] * self.npartitions, dep._name)
             if self._broadcast_dep(dep)
             else dep
             for dep in self.dependencies()
@@ -419,16 +419,16 @@ class BlockwiseArg(Expr):
     in a fusion-compatible way.
     """
 
-    _parameters = ["lookup", "name", "token"]
-    _defaults = {"name": None, "token": None}
+    _parameters = ["lookup", "name"]
+    _defaults = {"name": None}
 
     @property
     def _meta(self):
         return None
 
-    @property
+    @functools.cached_property
     def _name(self):
-        return self.name or (f"blockwise-arg-{self.token or tokenize(self.lookup)}")
+        return self.operand("name") or f"arg-{tokenize(self.lookup)}"
 
     def _divisions(self):
         assert isinstance(self.lookup, (list, dict))
@@ -875,7 +875,6 @@ class FusedExpr(Blockwise):
     def dependencies(self):
         return self.operands[1:]
 
-    @functools.lru_cache
     def _blockwise_subgraph(self):
         block = {self._name: self.exprs[0]._name}
         for _expr in self.exprs:

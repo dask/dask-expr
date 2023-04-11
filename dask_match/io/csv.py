@@ -38,7 +38,8 @@ class ReadCSV(BlockwiseIO):
     @functools.lru_cache
     def dependencies(self):
         # Need to pass `token` to ensure deterministic name
-        return [BlockwiseArg([t[1] for t in self._tasks], token=tokenize(self._ddf))]
+        name = f"csvdep-{tokenize(self._ddf)}"
+        return [BlockwiseArg([t[1] for t in self._tasks], name)]
 
     def _blockwise_subgraph(self):
         dsk = self._tasks[0][0].dsk
