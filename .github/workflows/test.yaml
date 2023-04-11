@@ -31,4 +31,4 @@ jobs:
         run: python -m pip install -e . --no-deps
 
       - name: Run tests
-        run: py.test dask-match --verbose
+        run: py.test --verbose
