@@ -1,7 +1,9 @@
+import functools
 import math
-from functools import cached_property
 
-from dask_match.core import Expr, Blockwise, BlockwiseArg
+from dask.base import tokenize
+
+from dask_match.core import Blockwise, BlockwiseArg, Expr
 
 
 class IO(Expr):
@@ -43,6 +45,10 @@ class FromPandas(BlockwiseIO):
     _parameters = ["frame", "npartitions"]
     _defaults = {"npartitions": 1}
 
+    @functools.cached_property
+    def _name(self):
+        return "from-pandas-" + tokenize(self.frame, self.npartitions)
+
     @property
     def _meta(self):
         return self.frame.head(0)
@@ -50,7 +56,7 @@ class FromPandas(BlockwiseIO):
     def _divisions(self):
         return [None] * (self.npartitions + 1)
 
-    @cached_property
+    @functools.cached_property
     def _chunks(self):
         chunksize = int(math.ceil(len(self.frame) / self.npartitions))
         locations = list(range(0, len(self.frame), chunksize)) + [len(self.frame)]
