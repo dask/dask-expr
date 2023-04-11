@@ -109,8 +109,6 @@ class Expr(Operation, metaclass=_ExprMeta):
             if key in _parameters:
                 idx = _parameters.index(key)
                 return self.operands[idx]
-            if key in self.columns:
-                return self[key]
             raise err
 
     def operand(self, key):
