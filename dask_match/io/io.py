@@ -1,8 +1,9 @@
-import math
 import functools
+import math
 
-from dask_match.core import Expr, Blockwise, BlockwiseArg
 from dask.base import tokenize
+
+from dask_match.core import Blockwise, BlockwiseArg, Expr
 
 
 class IO(Expr):

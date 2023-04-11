@@ -218,6 +218,17 @@ def test_optimize_fusion_repeat(ddf):
     assert_eq(ser_fused, ser)
 
 
+def test_broadcast(df, ddf):
+    assert_eq(
+        ddf + ddf.sum(),
+        df + df.sum(),
+    )
+    assert_eq(
+        ddf.x + ddf.x.sum(),
+        df.x + df.x.sum(),
+    )
+
+
 def test_optimize_fusion_broadcast(ddf):
     # Check fusion with broadcated reduction
     ser = ((ddf["x"] + 1) + ddf["y"].sum()) + 1
