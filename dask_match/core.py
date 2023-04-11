@@ -412,9 +412,20 @@ class Blockwise(Expr):
 class BlockwiseArg(Expr):
     """Indexable Blockwise argument
 
-    NOTE: This class is used by IO expressions
-    to map path-like arguments over output partitions
-    in a fusion-compatible way.
+    This class is used by IO expressions to map path-like
+    arguments over output partitions in a fusion-compatible way.
+
+    Parameters
+    ----------
+    lookup: Sequence
+        Indexable sequence that should return a task argument
+        for a given parition index (e.g. ``[0, npartitions]``).
+        Note that ``Blockwise._layer`` will eagerly populate
+        leteral partition-dependent task arguments at graph
+        creation time using ``BlockwiseArg`` dependencies.
+    name: str, optional
+        Custom expression name. This operand should be specified
+        if ``lookup`` does not produce a deterministic hash.
     """
 
     _parameters = ["lookup", "name"]
@@ -429,7 +440,6 @@ class BlockwiseArg(Expr):
         return self.operand("name") or f"arg-{tokenize(self.lookup)}"
 
     def _divisions(self):
-        assert isinstance(self.lookup, (list, dict))
         return (None,) * (len(self.lookup) + 1)
 
     def __getitem__(self, index):
