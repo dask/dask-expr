@@ -117,6 +117,10 @@ class FrameBase(DaskMethodsMixin):
             out = out.compute()
         return out
 
+    def copy(self):
+        """ Return a copy of this object """
+        return new_collection(self.expr)
+
 
 # Add operator attributes
 for op in [

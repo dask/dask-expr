@@ -301,3 +301,13 @@ def test_from_pandas(df):
     ddf = from_pandas(df, npartitions=3)
     assert ddf.npartitions == 3
     assert "from-pandas" in ddf._name
+
+
+def test_copy(ddf):
+    original = ddf.copy()
+    columns = tuple(original.columns)
+
+    ddf["z"] = ddf.x + ddf.y
+
+    assert tuple(original.columns) == columns
+    assert "z" not in original.columns
