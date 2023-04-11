@@ -118,7 +118,7 @@ class FrameBase(DaskMethodsMixin):
         return out
 
     def copy(self):
-        """ Return a copy of this object """
+        """Return a copy of this object"""
         return new_collection(self.expr)
 
 

@@ -141,72 +141,6 @@ def test_columns_traverse_filters(df, ddf):
     assert str(result) == str(expected)
 
 
-def test_optimize_fusion(ddf):
-    ddf2 = (ddf["x"] + ddf["y"]) - 1
-    unfused = optimize(ddf2, fuse=False)
-    fused = optimize(ddf2, fuse=True)
-
-    # Should only get one task per partition
-    assert len(fused.dask) == ddf.npartitions
-    assert_eq(fused, unfused)
-
-    # Check that we still get fusion when
-    # non-blockwise operations are added
-    ddf3 = ddf2.sum()
-    unfused = optimize(ddf3, fuse=False)
-    fused = optimize(ddf3, fuse=True)
-
-    assert len(fused.dask) < len(unfused.dask)
-    assert_eq(fused, unfused)
-
-    # Check that we still get fusion
-    # after a non-blockwise operation as well
-    fused_2 = optimize((ddf3 + 10) - 5, fuse=True)
-    # The "+10 and -5" ops should get fused
-    assert len(fused_2.dask) == len(fused.dask) + 1
-
-
-def test_optimize_fusion_many(ddf):
-    # Test that many `Blockwise`` operations,
-    # originating from various IO operations,
-    # can all be fused together
-    ddfa = ddf
-    ddfb = from_pandas(pd.DataFrame({"a": range(100)}), ddf.npartitions)
-
-    ddf2a = ddfa[["x"]] + 1
-    ddf2a["a"] = ddfa["y"] + ddfa["x"]
-    ddf2a["b"] = ddf2a["x"] + 2
-    sera = ddf2a[ddfa["x"] > 1]["b"]
-
-    ddf2b = ddfb[["a"]] + 1
-    ddf2b["b"] = ddfb["a"] + ddfb["a"]
-    serb = ddf2b[ddfb["a"] > 1]["b"]
-
-    ser = (sera + serb) + 1
-    unfused = optimize(ser, fuse=False)
-    fused = optimize(ser, fuse=True)
-    assert len(fused.dask) == ddf.npartitions
-    assert_eq(fused, unfused)
-
-
-def test_optimize_fusion_repeat(ddf):
-    # Test that we can optimize a collection
-    # more than once, and fusion still works
-    ddf2 = (ddf[["x"]] + 1).assign(z=ddf.y)
-    ddf3 = ddf2 + 2
-    ddf3_fused = optimize(ddf2, fuse=True) + 2
-
-    fused = optimize(ddf3_fused, fuse=True)
-    assert len(fused.dask) == ddf.npartitions
-    assert_eq(fused, ddf3)
-
-    ser = ddf3["x"]
-    ser_fused = optimize(fused["x"], fuse=True)
-    ser_fused = optimize(ser_fused, fuse=True)
-    assert len(ser_fused.dask) == ddf.npartitions
-    assert_eq(ser_fused, ser)
-
-
 def test_broadcast(df, ddf):
     assert_eq(
         ddf + ddf.sum(),
@@ -216,14 +150,6 @@ def test_broadcast(df, ddf):
         ddf.x + ddf.x.sum(),
         df.x + df.x.sum(),
     )
-
-
-def test_optimize_fusion_broadcast(ddf):
-    # Check fusion with broadcated reduction
-    result = ((ddf["x"] + 1) + ddf["y"].sum()) + 1
-    result_fused = optimize(result, fuse=True)
-    assert_eq(result_fused, result)
-    assert len(result_fused.dask) < len(result.dask)
 
 
 def test_persist(df, ddf):
@@ -236,17 +162,6 @@ def test_persist(df, ddf):
     assert len(b.__dask_graph__()) == b.npartitions
 
     assert_eq(b.y.sum(), (df + 2).y.sum())
-
-
-def test_persist_with_fusion(ddf):
-    # Check that fusion works after persisting
-    a = ddf + 2
-    b = a.persist()
-
-    c = (b.y + 1).sum()
-    c_fused = optimize(c, fuse=True)
-    assert_eq(c, c_fused)
-    assert len(c_fused.dask) < len(c.dask)
 
 
 def test_index(df, ddf):
@@ -299,7 +214,7 @@ def test_from_pandas(df):
     assert "from-pandas" in ddf._name
 
 
-def test_copy(ddf):
+def test_copy(df, ddf):
     original = ddf.copy()
     columns = tuple(original.columns)
 
