@@ -1,0 +1,16 @@
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install Environment
+        uses: mamba-org/provision-with-micromamba@main
+        with:
+          environment-file: ci/environment.yml
+          environment-name: dask-match
+
+      - name:
+        shell: bash -l {0}
+        run: |
+          py.test dask-match --verbose
