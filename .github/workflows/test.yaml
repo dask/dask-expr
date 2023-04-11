@@ -1,3 +1,21 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# When this workflow is queued, automatically cancel any previous running
+# or pending jobs from the same branch
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+# Required shell entrypoint to have properly activated conda environments
+defaults:
+  run:
+    shell: bash -l {0}
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -10,7 +28,5 @@ jobs:
           environment-file: ci/environment.yml
           environment-name: dask-match
 
-      - name:
-        shell: bash -l {0}
-        run: |
-          py.test dask-match --verbose
+      - name: Run tests
+        run: py.test dask-match --verbose
