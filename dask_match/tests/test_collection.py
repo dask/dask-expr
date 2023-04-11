@@ -291,3 +291,9 @@ def test_substitute(ddf):
     result = (df["a"].sum() + 5).substitute({df["a"]: df["b"], 5: 6})
     expected = df["b"].sum() + 6
     assert result._name == expected._name
+
+
+def test_from_pandas(df):
+    ddf = from_pandas(df, npartitions=3)
+    assert ddf.npartitions == 3
+    assert "from-pandas" in ddf._name
