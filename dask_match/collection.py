@@ -119,7 +119,71 @@ class FrameBase(DaskMethodsMixin):
     def copy(self):
         """Return a copy of this object"""
         return new_collection(self.expr)
+    
+    def shuffle(
+        self,
+        keys: str | list,
+        ignore_index: bool = False,
+        npartitions: int | None = None,
+        algorithm: str = "simple",
+        options: dict | None = None,
+    ):
+        """Shuffle a collection by column names
 
+        Parameters
+        ----------
+        keys:
+            Column names to shuffle by.
+        npartitions: optional
+            Number of output partitions. The partition count will
+            be preserved by default.
+        ignore_index: optional
+            Whether to ignore the index. Default is ``False``.
+        options: optional
+            Algorithm-specific options.
+        """
+        from dask_match.shuffle import PartitioningIndex
+
+        # Only support "SimpleShuffle" for now
+        if algorithm == "simple":
+            from dask_match.shuffle import SimpleShuffle
+
+            shuffle_cls = SimpleShuffle
+        else:
+            raise ValueError(f"{algorithm} not supported")
+
+        # Preserve partition count by default
+        npartitions = npartitions or self.npartitions
+
+        # Check `keys`
+        # TODO: Support other selections
+        if not isinstance(keys, str):
+            raise ValueError(f"{type(keys)} not a supported type for key")
+        if keys not in self.frame.columns:
+            raise ValueError(f"{keys} not found in columns: {self.frame.columns}")
+
+        # Add partitioning index
+        index_added = expr.Assign(
+            self.expr,
+            "_partitions",
+            PartitioningIndex(self.expr, keys, npartitions),
+        )
+
+        # Returned shuffled result
+        shuffled = new_collection(
+            shuffle_cls(
+                index_added,
+                "_partitions",
+                npartitions,
+                ignore_index,
+                options or {},
+            )
+        )
+        if "_partitions" in shuffled.columns:
+            del shuffled["_partitions"]
+        return shuffled
+
+ 
 
 # Add operator attributes
 for op in [

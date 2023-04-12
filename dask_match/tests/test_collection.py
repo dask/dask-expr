@@ -222,3 +222,9 @@ def test_copy(df, ddf):
 
     assert tuple(original.columns) == columns
     assert "z" not in original.columns
+
+
+def test_shuffle(df, ddf):
+    # TODO: Improve this test
+    ddf2 = ddf.shuffle("x")
+    assert_eq(ddf, ddf2.compute())
