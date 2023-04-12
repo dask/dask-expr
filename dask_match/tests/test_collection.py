@@ -222,3 +222,35 @@ def test_copy(pdf, df):
 
     assert tuple(original.columns) == columns
     assert "z" not in original.columns
+
+
+def test_partitions(pdf, df):
+    assert_eq(df.partitions[0], pdf.iloc[:10])
+    assert_eq(df.partitions[1], pdf.iloc[10:20])
+    assert_eq(df.partitions[1:3], pdf.iloc[10:30])
+    assert_eq(df.partitions[[3, 4]], pdf.iloc[30:50])
+    assert_eq(df.partitions[-1], pdf.iloc[90:])
+
+
+@pytest.mark.parametrize("ignore_index", [True, False])
+@pytest.mark.parametrize("npartitions", [None, 2])
+def test_simple_shuffle(ignore_index, npartitions):
+    df = from_pandas(
+        pd.DataFrame({"x": list(range(20)) * 5, "y": range(100)}),
+        npartitions=10,
+    )
+    df2 = df.shuffle("x", npartitions=npartitions, ignore_index=ignore_index)
+
+    # Check that the output partition count is correct
+    assert df2.npartitions == (npartitions or df.npartitions)
+
+    # Check the computed (re-ordered) result
+    assert_eq(df, df2.compute(), check_index=not ignore_index)
+
+    # Check that df was really partitioned by "x"
+    unique = []
+    for part in df2.partitions:
+        unique.extend(part["x"].compute().unique().tolist())
+    # If any values of "x" can be found in multiple
+    # partitions, then `len(unique)` will be >20
+    assert sorted(unique) == list(range(20))

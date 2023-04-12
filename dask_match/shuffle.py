@@ -9,6 +9,7 @@ from dask_match.expr import Expr, Blockwise
 def make_partitioning_index(df, index: str | list, npartitions: int):
     """Construct a hash-based partitioning index"""
 
+    # Always convert str index to list.
     # TODO: Support cases other than index is column list
     index = [index] if isinstance(index, str) else list(index)
     return partitioning_index(df[index], npartitions)
@@ -17,52 +18,56 @@ def make_partitioning_index(df, index: str | list, npartitions: int):
 class PartitioningIndex(Blockwise):
     """Create a partitioning index
 
-    This class is used by shuffle routines to assign a
-    hash-based partitioning-index as a new column.
+    This class is used to construct a hash-based
+    partitioning index for shuffling.
 
     Parameters
     ----------
     frame: Expr
         Frame-like expression being partitioned.
-    column_name: str
-        Column name to use for the partitioning-index.
-    npartitions: int
+    selection: list
+        Columns to construct the partitioning-index from.
+    npartitions_out: int
         Number of partitions after repartitioning is finished.
     """
-    _parameters = ["frame", "column_name", "npartitions"]
+
+    _parameters = ["frame", "selection", "npartitions_out"]
     operation = make_partitioning_index
 
     @property
     def _meta(self):
-        return make_partitioning_index(self.frame._meta, self.column_name, self.npartitions)
+        return make_partitioning_index(
+            self.frame._meta, self.selection, self.npartitions_out
+        )
 
     def _blockwise_layer(self):
         return {
             self._name: (
                 make_partitioning_index,
                 self.frame._name,
-                self.column_name,
-                self.npartitions,
+                self.selection,
+                self.npartitions_out,
             )
         }
 
 
 class BaseShuffle(Expr):
     """Base shuffle class
-    
-    TODO: Should allow ``keys`` to be a list of column names.
-    Dask-cudf performance is typically better when we avoid
-    assigning a "_partitions" column up front, and instead
-    perform the hash+modulus within ``shuffle_group``.
+
+    TODO: Should also allow ``partitioning_index`` to be a list
+    of column names. Dask-cudf performance is typically better
+    when we avoid assigning a "_partitions" column up front, and
+    instead perform the hash+modulus within ``shuffle_group``.
 
     Parameters
     ----------
     frame: Expr
         The DataFrame-like expression to shuffle.
-    keys: str
-        Name of the column to shuffle by. We assume that the values
-        of ``frame[keys]`` already correspond to the final partition
-        indices for every row of ``frame``.
+    partitioning_index: str
+        Name of the column to use as a partitioning index. We
+        assume that the values of ``frame[partitioning_index]``
+        correspond to the final partition indices for every row
+        of ``frame``.
     npartitions: int
         Number of output partitions.
     ignore_index: bool
@@ -70,7 +75,14 @@ class BaseShuffle(Expr):
     options: dict
         Algorithm-specific options.
     """
-    _parameters = ["frame", "keys", "npartitions", "ignore_index", "options"]
+
+    _parameters = [
+        "frame",
+        "partitioning_index",
+        "npartitions",
+        "ignore_index",
+        "options",
+    ]
 
     def _layer(self):
         raise NotImplementedError
@@ -81,7 +93,7 @@ class BaseShuffle(Expr):
 
     def _divisions(self):
         return (None,) * (self.npartitions + 1)
-    
+
 
 class SimpleShuffle(BaseShuffle):
     """Simple task-based shuffle implementation"""
@@ -112,7 +124,7 @@ class SimpleShuffle(BaseShuffle):
                     dsk[(shuffle_group_name, _part_in)] = (
                         shuffle_group,
                         (self.frame._name, _part_in),
-                        self.keys,
+                        self.partitioning_index,
                         0,
                         self.npartitions,
                         self.npartitions,

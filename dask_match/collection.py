@@ -1,6 +1,7 @@
 import functools
+from numbers import Number
 
-from dask import config
+import numpy as np
 from dask.base import DaskMethodsMixin, named_schedulers
 from dask.dataframe.core import (
     _concat,
@@ -8,6 +9,7 @@ from dask.dataframe.core import (
     is_index_like,
     is_series_like,
 )
+from dask.utils import IndexCallable
 from fsspec.utils import stringify_path
 from tlz import first
 
@@ -119,10 +121,36 @@ class FrameBase(DaskMethodsMixin):
     def copy(self):
         """Return a copy of this object"""
         return new_collection(self.expr)
-    
+
+    def _partitions(self, index):
+        # Used by `partitions` for partition-wise slicing
+
+        # Convert index to list
+        if isinstance(index, int):
+            index = [index]
+        index = np.arange(self.npartitions, dtype=object)[index].tolist()
+
+        # Check that selection makes sense
+        assert set(index).issubset(range(self.npartitions))
+
+        # Return selected partitions
+        return new_collection(expr.Partitions(self.expr, index))
+
+    @property
+    def partitions(self):
+        """Partition-wise slicing of a collection
+
+        Examples
+        --------
+        >>> df.partitions[0]
+        >>> df.partitions[:3]
+        >>> df.partitions[::10]
+        """
+        return IndexCallable(self._partitions)
+
     def shuffle(
         self,
-        keys: str | list,
+        index: str | list,
         ignore_index: bool = False,
         npartitions: int | None = None,
         algorithm: str = "simple",
@@ -132,7 +160,7 @@ class FrameBase(DaskMethodsMixin):
 
         Parameters
         ----------
-        keys:
+        index:
             Column names to shuffle by.
         npartitions: optional
             Number of output partitions. The partition count will
@@ -155,18 +183,19 @@ class FrameBase(DaskMethodsMixin):
         # Preserve partition count by default
         npartitions = npartitions or self.npartitions
 
-        # Check `keys`
-        # TODO: Support other selections
-        if not isinstance(keys, str):
-            raise ValueError(f"{type(keys)} not a supported type for key")
-        if keys not in self.frame.columns:
-            raise ValueError(f"{keys} not found in columns: {self.frame.columns}")
+        # TODO: Support other `index` types
+        if isinstance(index, str):
+            index = [index]
+        if not isinstance(index, list):
+            raise ValueError(f"{type(index)} not a supported type for index")
+        if not set(index).issubset(self.frame.columns):
+            raise ValueError(f"{index} not a subset of columns: {self.frame.columns}")
 
         # Add partitioning index
         index_added = expr.Assign(
             self.expr,
             "_partitions",
-            PartitioningIndex(self.expr, keys, npartitions),
+            PartitioningIndex(self.expr, index, npartitions),
         )
 
         # Returned shuffled result
@@ -183,7 +212,6 @@ class FrameBase(DaskMethodsMixin):
             del shuffled["_partitions"]
         return shuffled
 
- 
 
 # Add operator attributes
 for op in [
