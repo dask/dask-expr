@@ -80,16 +80,24 @@ class ReadParquet(BlockwiseIO):
 
     @classmethod
     def _replacement_rules(cls):
-        path, columns, filters = map(Wildcard.dot, ["path", "columns", "filters"])
-        _columns, _filters = map(Wildcard.dot, ["_columns", "_filters"])
-        params = list(map(Wildcard.dot, cls._parameters[3:]))
-        x, y = map(Wildcard.dot, ["x", "y"])
+        # All wildcards defined here.
+        # Note that "x" corresponds to a column selection, and
+        # "y" corresponds to a literal filter-comparison value
+        _ = Wildcard.dot()
+        path, columns, filters, x, y = map(
+            Wildcard.dot, ["path", "columns", "filters", "x", "y"]
+        )
+        other = {w.variable_name: w for w in map(Wildcard.dot, cls._parameters[3:])}
 
         # Column projection
         def project_columns(path, columns, filters, x, **kwargs):
-            return ReadParquet(path, _list_columns(x), filters, **kwargs)
+            return ReadParquet(
+                path, columns=_list_columns(x), filters=filters, **kwargs
+            )
 
-        pattern = Pattern(ReadParquet(path, columns, filters, *params)[x])
+        pattern = Pattern(
+            ReadParquet(path, columns=columns, filters=filters, **other)[x]
+        )
         yield ReplacementRule(pattern, project_columns)
 
         # Simple dict to make sure field comes first in filter
@@ -98,9 +106,7 @@ class ReadParquet(BlockwiseIO):
         # Predicate pushdown to parquet
         for op in [LE, LT, GE, GT, EQ, NE]:
 
-            def predicate_pushdown(
-                path, columns, filters, _columns, _filters, x, y, op=None, **kwargs
-            ):
+            def predicate_pushdown(path, columns, filters, x, y, op=None, **kwargs):
                 return ReadParquet(
                     path,
                     columns=_list_columns(columns),
@@ -110,8 +116,8 @@ class ReadParquet(BlockwiseIO):
 
             pattern = Pattern(
                 Filter(
-                    ReadParquet(path, columns, filters, *params),
-                    op(ReadParquet(path, _columns, _filters, *params)[x], y),
+                    ReadParquet(path, columns=columns, filters=filters, **other),
+                    op(ReadParquet(path, columns=_, filters=_, **other)[x], y),
                 )
             )
             replace = partial(predicate_pushdown, op=op)
@@ -119,8 +125,8 @@ class ReadParquet(BlockwiseIO):
 
             pattern = Pattern(
                 Filter(
-                    ReadParquet(path, columns, filters, *params),
-                    op(y, ReadParquet(path, _columns, _filters, *params)[x]),
+                    ReadParquet(path, columns=columns, filters=filters, **other),
+                    op(y, ReadParquet(path, columns=_, filters=_, **other)[x]),
                 )
             )
             replace = partial(predicate_pushdown, op=flip_op.get(op, op))
@@ -128,8 +134,8 @@ class ReadParquet(BlockwiseIO):
 
             pattern = Pattern(
                 Filter(
-                    ReadParquet(path, columns, filters, *params),
-                    op(ReadParquet(path, _columns, _filters, *params), y),
+                    ReadParquet(path, columns=columns, filters=filters, **other),
+                    op(ReadParquet(path, columns=x, filters=_, **other), y),
                 ),
                 CustomConstraint(lambda x: isinstance(x, str)),
             )
@@ -138,8 +144,8 @@ class ReadParquet(BlockwiseIO):
 
             pattern = Pattern(
                 Filter(
-                    ReadParquet(path, columns, filters, *params),
-                    op(y, ReadParquet(path, _columns, _filters, *params)),
+                    ReadParquet(path, columns=columns, filters=filters, **other),
+                    op(y, ReadParquet(path, columns=x, filters=_, **other)),
                 ),
                 CustomConstraint(lambda x: isinstance(x, str)),
             )
