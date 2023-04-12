@@ -751,20 +751,27 @@ def normalize_expression(expr):
     return expr._name
 
 
-def optimize(expr, fuse=True):
+def optimize(expr: Expr, fuse: bool = True) -> Expr:
     """High level query optimization
 
-    Today we just use MatchPy's term rewriting system, leveraging the
-    replacement rules found in the `replacement_rules` global list .  We continue
-    rewriting until nothing changes.  The `replacement_rules` list can be added
-    to by anyone, but is mostly populated by the various `_replacement_rules`
-    methods on the Expr subclasses.
+    This leverages three optimization passes:
 
-    Note: matchpy expects `__eq__` and `__ne__` to work in a certain way during
-    matching.  This is a bit of a hack, but we turn off our implementations of
-    `__eq__` and `__ne__` when this function is running using the
-    `_defer_to_matchpy` global.  Please forgive us our sins, as we forgive
-    those who sin against us.
+    1.  Class based simplification using the ``simplify`` function and methods
+    2.  Replacement rules with matchpy
+    3.  Blockwise fusion
+
+    Parameters
+    ----------
+    expr:
+        Input expression to optimize
+    fuse:
+        whether or not to turn on blockwise fusion
+
+    See Also
+    --------
+    simplify
+    matchpy
+    optimize_blockwise_fusion
     """
     last = None
     global _defer_to_matchpy
