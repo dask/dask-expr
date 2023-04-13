@@ -42,6 +42,6 @@ class ReadCSV(BlockwiseIO):
         dsk = self._tasks[0][0].dsk
         return next(iter(dsk.values()))[0]
 
-    def _blockwise_task(self, i=None):
+    def _blockwise_task(self, index: int | None = None):
         dep = self.dependencies()[0]
-        return (self._io_func, self._blockwise_arg(dep, i))
+        return (self._io_func, self._blockwise_arg(dep, index))

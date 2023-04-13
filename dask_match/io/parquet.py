@@ -287,6 +287,6 @@ class ReadParquet(BlockwiseIO):
     def dependencies(self):
         return [BlockwiseArg(self._plan["parts"])]
 
-    def _blockwise_task(self, i=None):
+    def _blockwise_task(self, index: int | None = None):
         dep = self.dependencies()[0]
-        return (self._plan["func"], self._blockwise_arg(dep, i))
+        return (self._plan["func"], self._blockwise_arg(dep, index))

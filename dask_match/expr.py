@@ -334,6 +334,9 @@ class Blockwise(Expr):
     This is fairly generic, and includes definitions for `_meta`, `divisions`,
     `_layer` that are often (but not always) correct.  Mostly this helps us
     avoid duplication in the future.
+
+    Note that `Fused` expressions rely on every `Blockwise`
+    expression having a proper `_blockwise_task` method.
     """
 
     operation = None
@@ -385,14 +388,34 @@ class Blockwise(Expr):
         else:
             return arg
 
-    def _blockwise_task(self, i=None):
-        args = tuple(self._blockwise_arg(operand, i) for operand in self.operands)
+    def _blockwise_task(self, index: int | None = None):
+        """Produce the task for a specific partition
+        
+        Parameters
+        ----------
+        index:
+            Partition index for this task. If `None`,
+            the result will be used to construct a fused
+            task using `SubgraphCallable`, and string
+            names like `dep._name` should be used in
+            lieue of tuples like `(dep._name, index)`.
+            Use `_blockwise_arg` to ensure that proper
+            dependency keys will be constructed for any
+            value of `index`.
+
+        Returns
+        -------
+        task: tuple
+        """
+        args = tuple(self._blockwise_arg(operand, index) for operand in self.operands)
         if self._kwargs:
             return (apply, self.operation, args, self._kwargs)
         else:
             return (self.operation,) + args
 
     def _layer(self):
+        # WARNING: This method should only be overriden by `Fused`.
+        # Other `Blockwise` subclasses should implement `_blockwise_task`
         return {
             (self._name, i): self._blockwise_task(i) for i in range(self.npartitions)
         }
@@ -469,12 +492,12 @@ class Apply(Elemwise):
     def _meta(self):
         return self.frame._meta.apply(self.function, *self.args, **self.kwargs)
 
-    def _blockwise_task(self, i=None):
+    def _blockwise_task(self, index: int | None = None):
         return (
             apply,
             M.apply,
             [
-                self._blockwise_arg(self.frame, i),
+                self._blockwise_arg(self.frame, index),
                 self.function,
             ]
             + list(self.args),
@@ -492,12 +515,12 @@ class Assign(Elemwise):
     def _meta(self):
         return self.frame._meta.assign(**{self.key: self.value._meta})
 
-    def _blockwise_task(self, i=None):
+    def _blockwise_task(self, index: int | None = None):
         return (
             methods.assign,
-            self._blockwise_arg(self.frame, i),
+            self._blockwise_arg(self.frame, index),
             self.key,
-            self._blockwise_arg(self.value, i),
+            self._blockwise_arg(self.value, index),
         )
 
 
@@ -596,10 +619,10 @@ class Index(Elemwise):
     def _meta(self):
         return self.frame._meta.index
 
-    def _blockwise_task(self, i=None):
+    def _blockwise_task(self, index: int | None = None):
         return (
             getattr,
-            self._blockwise_arg(self.frame, i),
+            self._blockwise_arg(self.frame, index),
             "index",
         )
 
