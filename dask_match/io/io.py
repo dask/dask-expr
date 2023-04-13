@@ -68,8 +68,9 @@ class FromPandas(BlockwiseIO):
     def dependencies(self):
         return [BlockwiseArg(self._chunks)]
 
-    def _blockwise_layer(self):
-        return {self._name: self.dependencies()[0]._name}
+    def _blockwise_task(self, i=None):
+        dep = self.dependencies()[0]
+        return self._blockwise_arg(dep, i)
 
     def __str__(self):
         return "df"

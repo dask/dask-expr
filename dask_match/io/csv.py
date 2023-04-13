@@ -37,11 +37,11 @@ class ReadCSV(BlockwiseIO):
         name = f"csvdep-{tokenize(self._ddf)}"
         return [BlockwiseArg([t[1] for t in self._tasks], name)]
 
-    def _blockwise_layer(self):
+    @functools.cached_property
+    def _io_func(self):
         dsk = self._tasks[0][0].dsk
-        return {
-            self._name: (
-                next(iter(dsk.values()))[0],
-                self.dependencies()[0]._name,
-            )
-        }
+        return next(iter(dsk.values()))[0]
+
+    def _blockwise_task(self, i=None):
+        dep = self.dependencies()[0]
+        return (self._io_func, self._blockwise_arg(dep, i))

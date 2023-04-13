@@ -372,43 +372,29 @@ class Blockwise(Expr):
     def _name(self):
         return funcname(self.operation) + "-" + tokenize(*self.operands)
 
-    def _blockwise_layer(self):
-        args = tuple(
-            operand._name if isinstance(operand, Expr) else operand
-            for operand in self.operands
-        )
-        if self._kwargs:
-            return {self._name: (apply, self.operation, args, self._kwargs)}
+    def _blockwise_arg(self, arg, i=None):
+        is_expr = isinstance(arg, Expr)
+        if i is None:
+            # This code path is used by `Fused._blockwise_layer`
+            # to produce `SubgraphCallable` objects=
+            return arg._name if is_expr else arg
+        elif is_expr:
+            if self._broadcast_dep(arg):
+                arg = BlockwiseArg([(arg._name, 0)] * self.npartitions, arg._name)
+            return arg[i] if isinstance(arg, BlockwiseArg) else (arg._name, i)
         else:
-            return {self._name: (self.operation,) + args}
+            return arg
+
+    def _blockwise_task(self, i=None):
+        args = tuple(self._blockwise_arg(operand, i) for operand in self.operands)
+        if self._kwargs:
+            return (apply, self.operation, args, self._kwargs)
+        else:
+            return (self.operation,) + args
 
     def _layer(self):
-        # Use BlockwiseArg to broadcast dependencies (if necessary)
-        dependencies = [
-            BlockwiseArg([(dep._name, 0)] * self.npartitions, dep._name)
-            if self._broadcast_dep(dep)
-            else dep
-            for dep in self.dependencies()
-        ]
-
-        # Create SubgraphCallable
-        func = SubgraphCallable(
-            self._blockwise_layer(),
-            self._name,
-            [dep._name for dep in dependencies],
-            self._name,
-        )
-
-        # Tasks depend on external-dependency keys only
         return {
-            (self._name, i): (
-                func,
-                *[
-                    dep[i] if isinstance(dep, BlockwiseArg) else (dep._name, i)
-                    for dep in dependencies
-                ],
-            )
-            for i in range(self.npartitions)
+            (self._name, i): self._blockwise_task(i) for i in range(self.npartitions)
         }
 
 
@@ -483,15 +469,17 @@ class Apply(Elemwise):
     def _meta(self):
         return self.frame._meta.apply(self.function, *self.args, **self.kwargs)
 
-    def _blockwise_layer(self):
-        return {
-            self._name: (
-                apply,
-                M.apply,
-                [self.frame._name, self.function] + list(self.args),
-                self.kwargs,
-            )
-        }
+    def _blockwise_task(self, i=None):
+        return (
+            apply,
+            M.apply,
+            [
+                self._blockwise_arg(self.frame, i),
+                self.function,
+            ]
+            + list(self.args),
+            self.kwargs,
+        )
 
 
 class Assign(Elemwise):
@@ -504,15 +492,13 @@ class Assign(Elemwise):
     def _meta(self):
         return self.frame._meta.assign(**{self.key: self.value._meta})
 
-    def _blockwise_layer(self):
-        return {
-            self._name: (
-                methods.assign,
-                self.frame._name,
-                self.key,
-                self.value._name,
-            )
-        }
+    def _blockwise_task(self, i=None):
+        return (
+            methods.assign,
+            self._blockwise_arg(self.frame, i),
+            self.key,
+            self._blockwise_arg(self.value, i),
+        )
 
 
 class Filter(Blockwise):
@@ -610,8 +596,12 @@ class Index(Elemwise):
     def _meta(self):
         return self.frame._meta.index
 
-    def _blockwise_layer(self):
-        return {self._name: (getattr, self.frame._name, "index")}
+    def _blockwise_task(self, i=None):
+        return (
+            getattr,
+            self._blockwise_arg(self.frame, i),
+            "index",
+        )
 
 
 class Head(Expr):
@@ -1009,9 +999,41 @@ class Fused(Blockwise):
     def _blockwise_layer(self):
         block = {self._name: self.exprs[0]._name}
         for _expr in self.exprs:
-            for k, v in _expr._blockwise_layer().items():
-                block[k] = v
+            if isinstance(_expr, Fused):
+                for k, v in _expr._blockwise_layer().items():
+                    block[k] = v
+            else:
+                block[_expr._name] = _expr._blockwise_task()
         return block
+
+    def _layer(self):
+        # Use BlockwiseArg to broadcast dependencies (if necessary)
+        dependencies = [
+            BlockwiseArg([(dep._name, 0)] * self.npartitions, dep._name)
+            if self._broadcast_dep(dep)
+            else dep
+            for dep in self.dependencies()
+        ]
+
+        # Create SubgraphCallable
+        func = SubgraphCallable(
+            self._blockwise_layer(),
+            self._name,
+            [dep._name for dep in dependencies],
+            self._name,
+        )
+
+        # Tasks depend on external-dependency keys only
+        return {
+            (self._name, i): (
+                func,
+                *[
+                    dep[i] if isinstance(dep, BlockwiseArg) else (dep._name, i)
+                    for dep in dependencies
+                ],
+            )
+            for i in range(self.npartitions)
+        }
 
 
 from dask_match.reductions import Count, Max, Min, Mode, Size, Sum
