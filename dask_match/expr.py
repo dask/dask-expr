@@ -802,21 +802,27 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     matchpy
     optimize_blockwise_fusion
     """
+
+    expr, _ = simplify(expr)
+    expr = optimize_matchpy(expr)
+
+    if fuse:
+        expr = optimize_blockwise_fusion(expr)
+
+    return expr
+
+
+def optimize_matchpy(expr: Expr) -> Expr:
     last = None
     global _defer_to_matchpy
 
-    expr, _ = simplify(expr)
-
     _defer_to_matchpy = True  # take over ==/!= when optimizing
     try:
-        while str(expr) != str(last):
+        while last is None or expr._name != last._name:
             last = expr
             expr = replace_all(expr, replacement_rules)
     finally:
         _defer_to_matchpy = False
-
-    if fuse:
-        expr = optimize_blockwise_fusion(expr)
 
     return expr
 
