@@ -245,7 +245,7 @@ def test_simple_shuffle(ignore_index, npartitions):
     assert df2.npartitions == (npartitions or df.npartitions)
 
     # Check the computed (re-ordered) result
-    assert_eq(df, df2.compute(), check_index=not ignore_index)
+    assert_eq(df, df2, check_index=not ignore_index)
 
     # Check that df was really partitioned by "x"
     unique = []
