@@ -647,8 +647,6 @@ class Head(Expr):
             ]
             return type(self.frame)(*operands)
 
-        return self
-
 
 class Binop(Elemwise):
     _parameters = ["left", "right"]
@@ -776,6 +774,14 @@ class Partitions(Expr):
             (self._name, i): (self.frame._name, part)
             for i, part in enumerate(self.partitions)
         }
+
+    def simplify(self):
+        if isinstance(self.frame, Blockwise):
+            operands = [
+                Partitions(op, self.partitions) if isinstance(op, Expr) else op
+                for op in self.frame.operands
+            ]
+            return type(self.frame)(*operands)
 
 
 @normalize_token.register(Expr)
