@@ -148,7 +148,6 @@ class FrameBase(DaskMethodsMixin):
         """
         return IndexCallable(self._partitions)
 
-
     def shuffle(
         self,
         index: str | list,

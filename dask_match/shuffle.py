@@ -65,9 +65,11 @@ class Shuffle(Expr):
     def _divisions(self):
         return (None,) * (self.npartitions_out + 1)
 
+
 #
 # ShuffleBackend
 #
+
 
 class ShuffleBackend(Shuffle):
     """Base shuffle-backend class"""
@@ -89,9 +91,11 @@ class ShuffleBackend(Shuffle):
         # Already composed
         return None
 
+
 #
 # SimpleShuffle
 #
+
 
 class SimpleShuffle(ShuffleBackend):
     """Simple task-based shuffle implementation"""
@@ -168,9 +172,11 @@ class SimpleShuffle(ShuffleBackend):
 
         return dsk
 
+
 #
 # Helper logic
 #
+
 
 def make_partitioning_index(df, index, npartitions: int):
     """Construct a hash-based partitioning index"""
@@ -193,14 +199,10 @@ def _select_columns_or_index(expr, columns_or_index):
 
     # Ensure columns_or_index is a list
     columns_or_index = (
-        columns_or_index
-        if isinstance(columns_or_index, list)
-        else [columns_or_index]
+        columns_or_index if isinstance(columns_or_index, list) else [columns_or_index]
     )
 
-    column_names = [
-        n for n in columns_or_index if _is_column_label_reference(expr, n)
-    ]
+    column_names = [n for n in columns_or_index if _is_column_label_reference(expr, n)]
 
     selected_expr = expr[column_names]
     if _contains_index_name(expr, columns_or_index):
@@ -275,9 +277,7 @@ class PartitioningIndex(Blockwise):
         index = self.operand("index")
         if isinstance(index, Expr):
             index = index._meta
-        return make_partitioning_index(
-            self.frame._meta, index, self.npartitions_out
-        )
+        return make_partitioning_index(self.frame._meta, index, self.npartitions_out)
 
     def _blockwise_layer(self):
         index = self.operand("index")

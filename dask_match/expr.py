@@ -130,7 +130,7 @@ class Expr(Operation, metaclass=_ExprMeta):
 
     def simplify(self):
         return None
-    
+
     def compose(self):
         return None
 
