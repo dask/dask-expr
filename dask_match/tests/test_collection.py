@@ -1,3 +1,5 @@
+import operator
+
 import pandas as pd
 import pytest
 from dask.dataframe.utils import assert_eq
@@ -239,6 +241,13 @@ def test_copy(pdf, df):
 
     assert tuple(original.columns) == columns
     assert "z" not in original.columns
+
+
+def test_simple_graphs(df):
+    expr = (df + 1).expr
+    graph = expr.__dask_graph__()
+
+    assert graph[(expr._name, 0)] == (operator.add, (df.expr._name, 0), 1)
 
 
 def test_partitions(pdf, df):
