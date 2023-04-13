@@ -148,12 +148,13 @@ class FrameBase(DaskMethodsMixin):
         """
         return IndexCallable(self._partitions)
 
+
     def shuffle(
         self,
         index: str | list,
         ignore_index: bool = False,
         npartitions: int | None = None,
-        algorithm: str = "simple",
+        backend: str | None = None,
         options: dict | None = None,
     ):
         """Shuffle a collection by column names
@@ -162,55 +163,32 @@ class FrameBase(DaskMethodsMixin):
         ----------
         index:
             Column names to shuffle by.
+        ignore_index: optional
+            Whether to ignore the index. Default is ``False``.
         npartitions: optional
             Number of output partitions. The partition count will
             be preserved by default.
-        ignore_index: optional
-            Whether to ignore the index. Default is ``False``.
+        backend: optional
+            Desired shuffle backend. Default chosen at optimization time.
         options: optional
             Algorithm-specific options.
         """
-        from dask_match.shuffle import PartitioningIndex
-
-        # Only support "SimpleShuffle" for now
-        if algorithm == "simple":
-            from dask_match.shuffle import SimpleShuffle
-
-            shuffle_cls = SimpleShuffle
-        else:
-            raise ValueError(f"{algorithm} not supported")
+        from dask_match.shuffle import Shuffle
 
         # Preserve partition count by default
         npartitions = npartitions or self.npartitions
 
-        # TODO: Support other `index` types
-        if isinstance(index, str):
-            index = [index]
-        if not isinstance(index, list):
-            raise ValueError(f"{type(index)} not a supported type for index")
-        if not set(index).issubset(self.frame.columns):
-            raise ValueError(f"{index} not a subset of columns: {self.frame.columns}")
-
-        # Add partitioning index
-        index_added = expr.Assign(
-            self.expr,
-            "_partitions",
-            PartitioningIndex(self.expr, index, npartitions),
-        )
-
         # Returned shuffled result
-        shuffled = new_collection(
-            shuffle_cls(
-                index_added,
-                "_partitions",
+        return new_collection(
+            Shuffle(
+                self.expr,
+                index,
                 npartitions,
                 ignore_index,
+                backend,
                 options or {},
             )
         )
-        if "_partitions" in shuffled.columns:
-            del shuffled["_partitions"]
-        return shuffled
 
 
 # Add operator attributes

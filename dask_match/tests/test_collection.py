@@ -1,5 +1,7 @@
 import pandas as pd
 import pytest
+
+import dask
 from dask.dataframe.utils import assert_eq
 from dask.utils import M
 
@@ -257,7 +259,6 @@ def test_simple_shuffle(ignore_index, npartitions):
         npartitions=10,
     )
     df2 = df.shuffle("x", npartitions=npartitions, ignore_index=ignore_index)
-
     # Check that the output partition count is correct
     assert df2.npartitions == (npartitions or df.npartitions)
 
@@ -266,8 +267,8 @@ def test_simple_shuffle(ignore_index, npartitions):
 
     # Check that df was really partitioned by "x"
     unique = []
-    for part in df2.partitions:
-        unique.extend(part["x"].compute().unique().tolist())
+    for part in dask.compute(list(df2["x"].partitions))[0]:
+        unique.extend(part.unique().tolist())
     # If any values of "x" can be found in multiple
     # partitions, then `len(unique)` will be >20
     assert sorted(unique) == list(range(20))
