@@ -297,8 +297,8 @@ def new_collection(expr):
         return Scalar(expr)
 
 
-def optimize(collection, fuse=True):
-    return new_collection(expr.optimize(collection.expr, fuse=fuse))
+def optimize(collection, fuse=True, lower=True):
+    return new_collection(expr.optimize(collection.expr, fuse=fuse, lower=lower))
 
 
 def from_pandas(*args, **kwargs):
