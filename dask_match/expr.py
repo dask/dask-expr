@@ -371,7 +371,7 @@ class Blockwise(Expr):
     def _name(self):
         return funcname(self.operation) + "-" + tokenize(*self.operands)
 
-    def _blockwise_arg(self, arg, i=None):
+    def _blockwise_arg(self, arg, i):
         """Return a Blockwise-task argument"""
         if isinstance(arg, Expr):
             # Make key for Expr-based argument
@@ -469,7 +469,7 @@ class Assign(Elemwise):
             methods.assign,
             (self.frame._name, index),
             self.key,
-            self._blockwise_arg(self.value),
+            self._blockwise_arg(self.value, index),
         )
 
 
