@@ -966,8 +966,9 @@ class Fused(Blockwise):
         graph = {self._name: (self.exprs[0]._name, index)}
         for _expr in self.exprs:
             if isinstance(_expr, Fused):
-                for k, v in _expr._task(index).items():
-                    graph[k] = v
+                (_, subgraph, name) = _expr._task(index)
+                graph.update(subgraph)
+                graph[(name, index)] = name
             else:
                 graph[(_expr._name, index)] = _expr._task(index)
 
