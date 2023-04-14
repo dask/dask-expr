@@ -972,7 +972,20 @@ class Fused(Blockwise):
             else:
                 graph[(_expr._name, index)] = _expr._task(index)
 
-        return (dask.get, graph, self._name)
+        for i, dep in enumerate(self.dependencies()):
+            graph[self._blockwise_arg(dep, index)] = "_" + str(i)
+
+        return (
+            Fused._execute_task,
+            graph,
+            self._name,
+        ) + tuple(self._blockwise_arg(dep, index) for dep in self.dependencies())
+
+    @staticmethod
+    def _execute_task(graph, name, *deps):
+        for i, dep in enumerate(deps):
+            graph["_" + str(i)] = dep
+        return dask.core.get(graph, name)
 
 
 from dask_match.reductions import Count, Max, Min, Mode, Size, Sum
