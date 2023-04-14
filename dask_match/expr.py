@@ -389,14 +389,7 @@ class Blockwise(Expr):
         Parameters
         ----------
         index:
-            Partition index for this task. If `None`,
-            the result will be used to construct a fused
-            task using `SubgraphCallable`, and string
-            names like `dep._name` should be used in
-            lieue of tuples like `(dep._name, index)`.
-            Use `_blockwise_arg` to ensure that proper
-            dependency keys will be constructed for any
-            value of `index`.
+            Partition index for this task.
 
         Returns
         -------
