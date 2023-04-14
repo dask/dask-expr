@@ -181,7 +181,7 @@ class Expr(Operation, metaclass=_ExprMeta):
 
         return {(self._name, i): self._task(i) for i in range(self.npartitions)}
 
-    def simplify(self, lower: bool = False):
+    def simplify(self, lower: bool = True):
         return None
 
     @property
@@ -564,7 +564,7 @@ class Projection(Elemwise):
             base = "(" + base + ")"
         return f"{base}[{repr(self.columns)}]"
 
-    def simplify(self, lower: bool = False):
+    def simplify(self, lower: bool = True):
         if isinstance(self.frame, Projection):
             # df[a][b]
             a = self.frame.operand("columns")
@@ -638,7 +638,7 @@ class Head(Expr):
         assert index == 0
         return (M.head, (self.frame._name, 0), self.n)
 
-    def simplify(self, lower: bool = False):
+    def simplify(self, lower: bool = True):
         if isinstance(self.frame, Elemwise):
             operands = [
                 Head(op, self.n) if isinstance(op, Expr) else op
@@ -771,7 +771,7 @@ class Partitions(Expr):
     def _task(self, index: int):
         return (self.frame._name, self.partitions[index])
 
-    def simplify(self, lower: bool = False):
+    def simplify(self, lower: bool = True):
         if isinstance(self.frame, Blockwise):
             operands = [
                 Partitions(op, self.partitions) if isinstance(op, Expr) else op
@@ -831,7 +831,7 @@ def optimize(expr: Expr, fuse: bool = True, lower: bool = True) -> Expr:
     return expr
 
 
-def simplify(expr: Expr, lower: bool = False) -> tuple[Expr, bool]:
+def simplify(expr: Expr, lower: bool = True) -> tuple[Expr, bool]:
     """Simplify an expression
 
     This leverages the ``.simplify`` method defined on each class
