@@ -4,12 +4,12 @@ import operator
 from collections import defaultdict
 from collections.abc import Iterator
 
+import dask
 import pandas as pd
 import toolz
 from dask.base import normalize_token, tokenize
 from dask.core import ishashable
 from dask.dataframe import methods
-from dask.optimization import SubgraphCallable
 from dask.utils import M, apply, funcname
 from matchpy import (
     Arity,
@@ -336,7 +336,7 @@ class Blockwise(Expr):
     avoid duplication in the future.
 
     Note that `Fused` expressions rely on every `Blockwise`
-    expression defining a proper `_blockwise_task` method.
+    expression defining a proper `_task` method.
     """
 
     operation = None
@@ -354,11 +354,7 @@ class Blockwise(Expr):
     def _broadcast_dep(self, dep: Expr):
         # Checks if a dependency should be broadcasted to
         # all partitions of this `Blockwise` operation
-        return (
-            not isinstance(dep, BlockwiseInput)
-            and dep.npartitions == 1
-            and dep.ndim < self.ndim
-        )
+        return dep.npartitions == 1 and dep.ndim < self.ndim
 
     def _divisions(self):
         # This is an issue.  In normal Dask we re-divide everything in a step
@@ -375,31 +371,19 @@ class Blockwise(Expr):
     def _name(self):
         return funcname(self.operation) + "-" + tokenize(*self.operands)
 
-    def _blockwise_arg(self, arg, i=None):
+    def _blockwise_arg(self, arg, i):
         """Return a Blockwise-task argument"""
-
-        if not ishashable(arg):
-            # Literal non-hashable argument
-            return arg
-
-        if i is None:
-            # Return a partition-agnostic key.
-            # This result is being used by `Fused` to
-            # construct a task for `SubgraphCallable`
-            return arg._name if isinstance(arg, Expr) else arg
-
-        if isinstance(arg, BlockwiseInput):
-            # Convert BlockwiseInput to literal input value
-            return arg[i]
-        elif isinstance(arg, Expr):
+        if isinstance(arg, Expr):
             # Make key for Expr-based argument
             if self._broadcast_dep(arg):
                 return (arg._name, 0)
-            return (arg._name, i)
+            else:
+                return (arg._name, i)
 
-        return arg
+        else:
+            return arg
 
-    def _blockwise_task(self, index: int | None = None):
+    def _task(self, index: int):
         """Produce the task for a specific partition
 
         Parameters
@@ -418,62 +402,14 @@ class Blockwise(Expr):
         -------
         task: tuple
         """
-        args = tuple(self._blockwise_arg(operand, index) for operand in self.operands)
+        args = tuple(self._blockwise_arg(op, index) for op in self.operands)
         if self._kwargs:
             return (apply, self.operation, args, self._kwargs)
         else:
             return (self.operation,) + args
 
     def _layer(self):
-        # WARNING: This method should only be overriden by `Fused`.
-        # Other `Blockwise` subclasses should implement `_blockwise_task`
-        return {
-            (self._name, i): self._blockwise_task(i) for i in range(self.npartitions)
-        }
-
-
-class BlockwiseInput(Expr):
-    """Indexable Blockwise-task input
-
-    This class is used by `BlockwiseIO` and `Fused` to map
-    partition-dependent input arguments to blockwise tasks.
-
-    Parameters
-    ----------
-    lookup: Sequence
-        Indexable sequence that should return a task argument
-        for a given parition index (e.g. ``[0, npartitions]``).
-        Note that ``Blockwise._layer`` will eagerly populate
-        literal partition-dependent task arguments at graph
-        creation time using ``BlockwiseInput`` dependencies.
-    name: str, optional
-        Custom expression name. This operand should be specified
-        if ``lookup`` does not produce a deterministic hash.
-    """
-
-    _parameters = ["lookup", "name"]
-    _defaults = {"name": None}
-
-    @property
-    def _meta(self):
-        return None
-
-    @functools.cached_property
-    def _name(self):
-        return self.operand("name") or f"arg-{tokenize(self.lookup)}"
-
-    def _divisions(self):
-        return (None,) * (len(self.lookup) + 1)
-
-    def __getitem__(self, index):
-        return self.lookup[index]
-
-    def _layer(self):
-        # `BlockwiseInput` should never produce a graph.
-        # The parent `Blockwise._layer` method should
-        # index this object to populate its graph
-        # with the values of `BlockwiseInput.lookup`
-        return {}
+        return {(self._name, i): self._task(i) for i in range(self.npartitions)}
 
 
 class Elemwise(Blockwise):
@@ -503,12 +439,12 @@ class Apply(Elemwise):
     def _meta(self):
         return self.frame._meta.apply(self.function, *self.args, **self.kwargs)
 
-    def _blockwise_task(self, index: int | None = None):
+    def _task(self, index: int):
         return (
             apply,
             M.apply,
             [
-                self._blockwise_arg(self.frame, index),
+                (self.frame._name, index),
                 self.function,
             ]
             + list(self.args),
@@ -526,10 +462,10 @@ class Assign(Elemwise):
     def _meta(self):
         return self.frame._meta.assign(**{self.key: self.value._meta})
 
-    def _blockwise_task(self, index: int | None = None):
+    def _task(self, index: int):
         return (
             methods.assign,
-            self._blockwise_arg(self.frame, index),
+            (self.frame._name, index),
             self.key,
             self._blockwise_arg(self.value, index),
         )
@@ -630,10 +566,10 @@ class Index(Elemwise):
     def _meta(self):
         return self.frame._meta.index
 
-    def _blockwise_task(self, index: int | None = None):
+    def _task(self, index: int):
         return (
             getattr,
-            self._blockwise_arg(self.frame, index),
+            (self.frame._name, index),
             "index",
         )
 
@@ -1026,34 +962,30 @@ class Fused(Blockwise):
     def _divisions(self):
         return self.exprs[0]._divisions()
 
-    def _fused_task(self):
-        block = {self._name: self.exprs[0]._name}
+    def _task(self, index):
+        graph = {self._name: (self.exprs[0]._name, index)}
         for _expr in self.exprs:
             if isinstance(_expr, Fused):
-                for k, v in _expr._fused_task().items():
-                    block[k] = v
+                (_, subgraph, name) = _expr._task(index)
+                graph.update(subgraph)
+                graph[(name, index)] = name
             else:
-                block[_expr._name] = _expr._blockwise_task()
-        return block
+                graph[(_expr._name, index)] = _expr._task(index)
 
-    def _layer(self):
-        # Create SubgraphCallable
-        dependencies = self.dependencies()
-        func = SubgraphCallable(
-            self._fused_task(),
-            self._name,
-            [dep._name for dep in dependencies],
-            self._name,
-        )
+        for i, dep in enumerate(self.dependencies()):
+            graph[self._blockwise_arg(dep, index)] = "_" + str(i)
 
-        # Tasks depend on external-dependency keys only
-        return {
-            (self._name, i): (
-                func,
-                *[self._blockwise_arg(dep, i) for dep in dependencies],
-            )
-            for i in range(self.npartitions)
-        }
+        return (
+            Fused._execute_task,
+            graph,
+            self._name,
+        ) + tuple(self._blockwise_arg(dep, index) for dep in self.dependencies())
+
+    @staticmethod
+    def _execute_task(graph, name, *deps):
+        for i, dep in enumerate(deps):
+            graph["_" + str(i)] = dep
+        return dask.core.get(graph, name)
 
 
 from dask_match.reductions import Count, Max, Min, Mode, Size, Sum
