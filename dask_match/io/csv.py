@@ -33,14 +33,12 @@ class ReadCSV(BlockwiseIO):
         return list(self._ddf.dask.to_dict().values())
 
     @functools.cached_property
-    def _indexable_input(self) -> dict:
+    def _blockwise_input(self):
         name = f"csvdep-{tokenize(self._ddf)}"
-        return {name: [t[1] for t in self._tasks]}
+        return BlockwiseInput([t[1] for t in self._tasks], name=name)
 
-    @functools.lru_cache
     def dependencies(self):
-        name = f"csvdep-{tokenize(self._ddf)}"
-        return [BlockwiseInput([t[1] for t in self._tasks], name=name)]
+        return [self._blockwise_input]
 
     @functools.cached_property
     def _io_func(self):
@@ -48,6 +46,5 @@ class ReadCSV(BlockwiseIO):
         return next(iter(dsk.values()))[0]
 
     def _blockwise_task(self, index: int | None = None):
-        #dep = list(self._indexable_input)[0]
-        dep = self.dependencies()[0]
+        dep = self._blockwise_input
         return (self._io_func, self._blockwise_arg(dep, index))

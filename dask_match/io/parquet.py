@@ -286,15 +286,12 @@ class ReadParquet(BlockwiseIO):
         return self._plan["divisions"]
 
     @cached_property
-    def _indexable_input(self) -> dict:
-        plan = self._plan["parts"]
-        return {f"arg-{tokenize(plan)}": plan}
+    def _blockwise_input(self):
+        return BlockwiseInput(self._plan["parts"])
 
-    @lru_cache
     def dependencies(self):
-        return [BlockwiseInput(self._plan["parts"])]
+        return [self._blockwise_input]
 
     def _blockwise_task(self, index: int | None = None):
-        #dep = list(self._indexable_input)[0]
-        dep = self.dependencies()[0]
+        dep = self._blockwise_input
         return (self._plan["func"], self._blockwise_arg(dep, index))

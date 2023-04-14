@@ -355,7 +355,6 @@ class Blockwise(Expr):
         # Checks if a dependency should be broadcasted to
         # all partitions of this `Blockwise` operation
         return (
-            #dep not in self._indexable_input
             not isinstance(dep, BlockwiseInput)
             and dep.npartitions == 1
             and dep.ndim < self.ndim
@@ -376,15 +375,6 @@ class Blockwise(Expr):
     def _name(self):
         return funcname(self.operation) + "-" + tokenize(*self.operands)
 
-    @property
-    def _indexable_input(self) -> dict:
-        """Return dictionary of indexable task inputs
-
-        Relied upon by `BlockwiseIO` and `Fused` to map
-        file-path information across blockwise tasks.
-        """
-        return {}
-
     def _blockwise_arg(self, arg, i=None):
         """Return a Blockwise-task argument"""
 
@@ -397,20 +387,16 @@ class Blockwise(Expr):
             # This result is being used by `Fused` to
             # construct a task for `SubgraphCallable`
             return arg._name if isinstance(arg, Expr) else arg
-        
-        # if arg in self._indexable_input:
-        #     # This is an indexable blockwise input
-        #     return self._indexable_input[arg][i]
-        
-        if isinstance(arg, BlockwiseInput):
-            return arg[i]
 
-        if isinstance(arg, Expr):
+        if isinstance(arg, BlockwiseInput):
+            # Convert BlockwiseInput to literal input value
+            return arg[i]
+        elif isinstance(arg, Expr):
             # Make key for Expr-based argument
             if self._broadcast_dep(arg):
                 return (arg._name, 0)
             return (arg._name, i)
-    
+
         return arg
 
     def _blockwise_task(self, index: int | None = None):
@@ -450,7 +436,7 @@ class BlockwiseInput(Expr):
     """Indexable Blockwise-task input
 
     This class is used by `BlockwiseIO` and `Fused` to map
-    indexable input arguments over all output partitions.
+    partition-dependent input arguments to blockwise tasks.
 
     Parameters
     ----------
@@ -458,7 +444,7 @@ class BlockwiseInput(Expr):
         Indexable sequence that should return a task argument
         for a given parition index (e.g. ``[0, npartitions]``).
         Note that ``Blockwise._layer`` will eagerly populate
-        leteral partition-dependent task arguments at graph
+        literal partition-dependent task arguments at graph
         creation time using ``BlockwiseInput`` dependencies.
     name: str, optional
         Custom expression name. This operand should be specified
@@ -1040,55 +1026,23 @@ class Fused(Blockwise):
     def _divisions(self):
         return self.exprs[0]._divisions()
 
-    def _blockwise_layer(self):
+    def _fused_task(self):
         block = {self._name: self.exprs[0]._name}
         for _expr in self.exprs:
             if isinstance(_expr, Fused):
-                for k, v in _expr._blockwise_layer().items():
+                for k, v in _expr._fused_task().items():
                     block[k] = v
             else:
                 block[_expr._name] = _expr._blockwise_task()
         return block
 
-    # @functools.cached_property
-    # def _indexable_input(self) -> dict:
-    #     indexable_input = {}
-    #     for _expr in self.exprs:
-    #         for k, v in _expr._indexable_input.items():
-    #             indexable_input[k] = v
-    #     return indexable_input
-
-    # def _fuse_exprs(self):
-    #     dependencies = []
-    #     block = {self._name: self.exprs[0]._name}
-    #     expr_names = [_expr.name for _expr in self.exprs]
-    #     for _expr in self.exprs:
-    #         if isinstance(_expr, Fused):
-    #             dsk, deps = _expr._fuse_exprs()
-    #             for k, v in dsk.items():
-    #                 block[k] = v
-    #         else:
-    #             block[_expr._name] = _expr._blockwise_task()
-    #             deps = _expr.dependencies() + list(_expr._indexable_input)
-    #         dependencies.extend(
-    #             [
-    #                 dep for dep in deps
-    #                 if dep in self._indexable_input or dep._name not in expr_names
-    #             ]
-    #         )
-    #     return block, dependencies
-
     def _layer(self):
-
         # Create SubgraphCallable
-        #dsk, deps = self._fuse_exprs()
-        deps = self.dependencies()
+        dependencies = self.dependencies()
         func = SubgraphCallable(
-            #dsk,
-            self._blockwise_layer(),
+            self._fused_task(),
             self._name,
-            #[dep._name if isinstance(dep, Expr) else dep for dep in deps],
-            [dep._name for dep in deps],
+            [dep._name for dep in dependencies],
             self._name,
         )
 
@@ -1096,7 +1050,7 @@ class Fused(Blockwise):
         return {
             (self._name, i): (
                 func,
-                *[self._blockwise_arg(dep, i) for dep in deps],
+                *[self._blockwise_arg(dep, i) for dep in dependencies],
             )
             for i in range(self.npartitions)
         }

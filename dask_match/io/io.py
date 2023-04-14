@@ -56,27 +56,23 @@ class FromPandas(BlockwiseIO):
     def _divisions(self):
         return [None] * (self.npartitions + 1)
 
-    @functools.cached_property
-    def _chunks(self):
-        chunksize = int(math.ceil(len(self.frame) / self.npartitions))
-        locations = list(range(0, len(self.frame), chunksize)) + [len(self.frame)]
+    def _parts(self):
+        partsize = int(math.ceil(len(self.frame) / self.npartitions))
+        locations = list(range(0, len(self.frame), partsize)) + [len(self.frame)]
         return [
             self.frame.iloc[start:stop]
             for start, stop in zip(locations[:-1], locations[1:])
         ]
 
     @functools.cached_property
-    def _indexable_input(self) -> dict:
-        chunks = self._chunks
-        return {f"arg-{tokenize(chunks)}": chunks}
+    def _blockwise_input(self):
+        return BlockwiseInput(self._parts())
 
-    @functools.lru_cache
     def dependencies(self):
-        return [BlockwiseInput(self._chunks)]
+        return [self._blockwise_input]
 
     def _blockwise_task(self, index: int | None = None):
-        dep = self.dependencies()[0]
-        return self._blockwise_arg(dep, index)
+        return self._blockwise_arg(self._blockwise_input, index)
 
     def __str__(self):
         return "df"
