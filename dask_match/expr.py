@@ -379,7 +379,7 @@ class Blockwise(Expr):
         is_expr = isinstance(arg, Expr)
         if i is None:
             # This code path is used by `Fused._blockwise_layer`
-            # to produce `SubgraphCallable` objects=
+            # to produce `SubgraphCallable` objects
             return arg._name if is_expr else arg
         elif is_expr:
             if self._broadcast_dep(arg):
@@ -390,7 +390,7 @@ class Blockwise(Expr):
 
     def _blockwise_task(self, index: int | None = None):
         """Produce the task for a specific partition
-        
+
         Parameters
         ----------
         index:
@@ -1030,15 +1030,8 @@ class Fused(Blockwise):
         return block
 
     def _layer(self):
-        # Use BlockwiseArg to broadcast dependencies (if necessary)
-        dependencies = [
-            BlockwiseArg([(dep._name, 0)] * self.npartitions, dep._name)
-            if self._broadcast_dep(dep)
-            else dep
-            for dep in self.dependencies()
-        ]
-
         # Create SubgraphCallable
+        dependencies = self.dependencies()
         func = SubgraphCallable(
             self._blockwise_layer(),
             self._name,
@@ -1050,10 +1043,7 @@ class Fused(Blockwise):
         return {
             (self._name, i): (
                 func,
-                *[
-                    dep[i] if isinstance(dep, BlockwiseArg) else (dep._name, i)
-                    for dep in dependencies
-                ],
+                *[self._blockwise_arg(dep, i) for dep in dependencies],
             )
             for i in range(self.npartitions)
         }
