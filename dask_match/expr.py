@@ -402,9 +402,7 @@ class Blockwise(Expr):
         -------
         task: tuple
         """
-        args = tuple(
-            (op._name, index) if isinstance(op, Expr) else op for op in self.operands
-        )
+        args = tuple(self._blockwise_arg(op, index) for op in self.operands)
         if self._kwargs:
             return (apply, self.operation, args, self._kwargs)
         else:
