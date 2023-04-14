@@ -72,7 +72,9 @@ class FromPandas(BlockwiseIO):
         return [self._blockwise_input]
 
     def _blockwise_task(self, index: int | None = None):
-        return self._blockwise_arg(self._blockwise_input, index)
+        if index is None:
+            return self._blockwise_input._name
+        return self._blockwise_input[index]
 
     def __str__(self):
         return "df"

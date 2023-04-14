@@ -294,4 +294,6 @@ class ReadParquet(BlockwiseIO):
 
     def _blockwise_task(self, index: int | None = None):
         dep = self._blockwise_input
-        return (self._plan["func"], self._blockwise_arg(dep, index))
+        if index is None:
+            return (self._plan["func"], self._blockwise_input._name)
+        return (self._plan["func"], dep[index])
