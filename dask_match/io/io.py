@@ -3,7 +3,7 @@ import math
 
 from dask.base import tokenize
 
-from dask_match.expr import Blockwise, BlockwiseArg, Expr
+from dask_match.expr import Blockwise, BlockwiseInput, Expr
 
 
 class IO(Expr):
@@ -65,8 +65,14 @@ class FromPandas(BlockwiseIO):
             for start, stop in zip(locations[:-1], locations[1:])
         ]
 
+    @functools.cached_property
+    def _indexable_input(self) -> dict:
+        chunks = self._chunks
+        return {f"arg-{tokenize(chunks)}": chunks}
+
+    @functools.lru_cache
     def dependencies(self):
-        return [BlockwiseArg(self._chunks)]
+        return [BlockwiseInput(self._chunks)]
 
     def _blockwise_task(self, index: int | None = None):
         dep = self.dependencies()[0]

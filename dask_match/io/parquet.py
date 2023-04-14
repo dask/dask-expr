@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from functools import cached_property, partial
+from functools import cached_property, lru_cache, partial
 
+from dask.base import tokenize
 from dask.dataframe.io.parquet.core import (
     ParquetFunctionWrapper,
     get_engine,
@@ -12,7 +13,7 @@ from dask.dataframe.io.parquet.utils import _split_user_options
 from dask.utils import natural_sort_key
 from matchpy import CustomConstraint, Pattern, ReplacementRule, Wildcard
 
-from dask_match.expr import EQ, GE, GT, LE, LT, NE, BlockwiseArg, Filter
+from dask_match.expr import BlockwiseInput, EQ, GE, GT, LE, LT, NE, Filter
 from dask_match.io import BlockwiseIO
 
 NONE_LABEL = "__null_dask_index__"
@@ -284,9 +285,16 @@ class ReadParquet(BlockwiseIO):
     def _divisions(self):
         return self._plan["divisions"]
 
+    @cached_property
+    def _indexable_input(self) -> dict:
+        plan = self._plan["parts"]
+        return {f"arg-{tokenize(plan)}": plan}
+
+    @lru_cache
     def dependencies(self):
-        return [BlockwiseArg(self._plan["parts"])]
+        return [BlockwiseInput(self._plan["parts"])]
 
     def _blockwise_task(self, index: int | None = None):
+        #dep = list(self._indexable_input)[0]
         dep = self.dependencies()[0]
         return (self._plan["func"], self._blockwise_arg(dep, index))
