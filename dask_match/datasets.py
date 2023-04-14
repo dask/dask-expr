@@ -38,14 +38,15 @@ class Timeseries(BlockwiseIO):
         return np.random.randint(2e9, size=self.npartitions)
 
     def _task(self, index):
-        return make_timeseries_part(
-            start=self.divisions[index],
-            end=self.divisions[index + 1],
-            dtypes=self.operand("dtypes"),
-            columns=self.columns,
-            freq=self.freq,
-            state_data=self.random_state[index],
-            kwargs=self.kwargs,
+        return (
+            make_timeseries_part,
+            self.divisions[index],
+            self.divisions[index + 1],
+            self.operand("dtypes"),
+            self.columns,
+            self.freq,
+            self.random_state[index],
+            self.kwargs,
         )
 
 
