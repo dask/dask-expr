@@ -1,3 +1,5 @@
+import operator
+
 import pandas as pd
 import pytest
 
@@ -276,3 +278,10 @@ def test_simple_shuffle(ignore_index, npartitions):
     # If any values of "x" can be found in multiple
     # partitions, then `len(unique)` will be >20
     assert sorted(unique) == list(range(20))
+
+
+def test_simple_graphs(df):
+    expr = (df + 1).expr
+    graph = expr.__dask_graph__()
+
+    assert graph[(expr._name, 0)] == (operator.add, (df.expr._name, 0), 1)

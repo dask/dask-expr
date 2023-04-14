@@ -279,15 +279,14 @@ class PartitioningIndex(Blockwise):
             index = index._meta
         return make_partitioning_index(self.frame._meta, index, self.npartitions_out)
 
-    def _blockwise_layer(self):
+    def _task(self, index: int):
+        partition_index = index
         index = self.operand("index")
         if isinstance(index, Expr):
-            index = index._name
-        return {
-            self._name: (
-                make_partitioning_index,
-                self.frame._name,
-                index,
-                self.npartitions_out,
-            )
-        }
+            index = (index._name, partition_index)
+        return (
+            make_partitioning_index,
+            (self.frame._name, partition_index),
+            index,
+            self.npartitions_out,
+        )
