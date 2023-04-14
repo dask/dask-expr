@@ -766,7 +766,9 @@ class Partitions(Expr):
         return (self.frame._name, self.partitions[index])
 
     def simplify(self):
-        if isinstance(self.frame, Blockwise):
+        if isinstance(self.frame, Blockwise) and not isinstance(
+            self.frame, BlockwiseIO
+        ):
             operands = [
                 Partitions(op, self.partitions) if isinstance(op, Expr) else op
                 for op in self.frame.operands
@@ -1033,4 +1035,5 @@ class Fused(Blockwise):
         return dask.core.get(graph, name)
 
 
+from dask_match.io import BlockwiseIO
 from dask_match.reductions import Count, Max, Min, Mode, Size, Sum
