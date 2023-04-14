@@ -1,7 +1,5 @@
 import functools
 
-from dask.base import tokenize
-
 from dask_match.io.io import BlockwiseIO
 
 
@@ -37,4 +35,4 @@ class ReadCSV(BlockwiseIO):
         return next(iter(dsk.values()))[0]
 
     def _task(self, index: int):
-        return (self._io_func, self._tasks[index])
+        return (self._io_func, self._tasks[index][1])
