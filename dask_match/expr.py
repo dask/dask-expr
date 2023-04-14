@@ -184,9 +184,6 @@ class Expr(Operation, metaclass=_ExprMeta):
     def simplify(self):
         return None
 
-    def compose(self):
-        return None
-
     @property
     def index(self):
         return Index(self)
@@ -326,7 +323,7 @@ class Expr(Operation, metaclass=_ExprMeta):
 
     def __dask_graph__(self):
         """Traverse expression tree, collect layers"""
-        start = compose(self)[0]
+        start = simplify(self)[0]
         stack = [start]
         seen = set()
         layers = []
@@ -344,7 +341,7 @@ class Expr(Operation, metaclass=_ExprMeta):
         dsk = toolz.merge(layers)
         if self._name != start._name:
             # Need to change the output task names since
-            # `compose` changed the name of the output `Expr`
+            # `simplify` changed the name of the output `Expr`
             for k0, k in zip(self.__dask_keys__(), start.__dask_keys__()):
                 dsk[k0] = dsk.pop(k)
         return dsk
@@ -780,7 +777,9 @@ class Partitions(Expr):
                 Partitions(op, self.partitions) if isinstance(op, Expr) else op
                 for op in self.frame.operands
             ]
-            return type(self.frame)(*operands)
+            out = type(self.frame)(*operands)
+            if out._name != self.frame._name:
+                return out
 
 
 @normalize_token.register(Expr)
@@ -813,8 +812,6 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     last = None
     global _defer_to_matchpy
 
-    expr, _ = compose(expr)
-
     expr, _ = simplify(expr)
 
     _defer_to_matchpy = True  # take over ==/!= when optimizing
@@ -832,18 +829,9 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
 
 
 def simplify(expr: Expr) -> tuple[Expr, bool]:
-    return compose_or_simplify(expr, "simplify")
+    """Simplify an expression
 
-
-def compose(expr: Expr) -> tuple[Expr, bool]:
-    return compose_or_simplify(expr, "compose")
-
-
-def compose_or_simplify(expr: Expr, kind) -> tuple[Expr, bool]:
-    """Lower or simplify an expression
-
-    This leverages the ``.simplify`` or ``.compose`` methods
-    defined on each class
+    This leverages the ``.simplify`` method defined on each class
 
     Parameters
     ----------
@@ -857,14 +845,13 @@ def compose_or_simplify(expr: Expr, kind) -> tuple[Expr, bool]:
     changed:
         whether or not any change occured
     """
-    assert kind in ("compose", "simplify")
     if not isinstance(expr, Expr):
         return expr, False
 
     changed_final = False
 
     while True:
-        out = getattr(expr, kind)()
+        out = expr.simplify()
         if out is None:
             out = expr
         if out._name == expr._name:
@@ -876,14 +863,14 @@ def compose_or_simplify(expr: Expr, kind) -> tuple[Expr, bool]:
     changed_any = False
     new_operands = []
     for operand in expr.operands:
-        new, changed_one = compose_or_simplify(operand, kind)
+        new, changed_one = simplify(operand)
         new_operands.append(new)
         changed_any |= changed_one
 
     if changed_any:
         changed_final = True
         expr = type(expr)(*new_operands)
-        expr, _ = compose_or_simplify(expr, kind)
+        expr, _ = simplify(expr)
 
     return expr, changed_final
 

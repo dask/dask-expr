@@ -39,22 +39,22 @@ class Shuffle(Expr):
     def __str__(self):
         return f"Shuffle({self._name[-7:]})"
 
-    def compose(self):
+    def simplify(self):
         # Use `backend` to decide how to compose a
         # shuffle operation from concerete expressions
         backend = self.backend or "simple"
         if isinstance(backend, ShuffleBackend):
-            compose = backend.from_abstract_shuffle
+            lower = backend.from_abstract_shuffle
         elif backend == "simple":
             # Only support "SimpleShuffle" for now
-            compose = SimpleShuffle.from_abstract_shuffle
+            lower = SimpleShuffle.from_abstract_shuffle
         else:
             raise ValueError(f"{backend} not supported")
-        return compose(self)
+        return lower(self)
 
     def _layer(self):
         raise NotImplementedError(
-            f"{self} is abstract! Please call `compose`"
+            f"{self} is abstract! Please call `simplify`"
             f"before generating a task graph."
         )
 
@@ -87,8 +87,7 @@ class ShuffleBackend(Shuffle):
         """Create an Expr tree that uses this ShuffleBackend class"""
         raise NotImplementedError()
 
-    def compose(self):
-        # Already composed
+    def simplify(self):
         return None
 
 
