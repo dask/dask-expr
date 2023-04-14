@@ -1,5 +1,4 @@
 import functools
-from numbers import Number
 
 import numpy as np
 from dask.base import DaskMethodsMixin, named_schedulers

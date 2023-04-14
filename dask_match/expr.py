@@ -334,6 +334,7 @@ class Expr(Operation, metaclass=_ExprMeta):
             for operand in expr.operands:
                 if isinstance(operand, Expr):
                     stack.append(operand)
+
         return toolz.merge(layers)
 
     def __dask_keys__(self):
@@ -769,9 +770,7 @@ class Partitions(Expr):
                 Partitions(op, self.partitions) if isinstance(op, Expr) else op
                 for op in self.frame.operands
             ]
-            out = type(self.frame)(*operands)
-            if out._name != self.frame._name:
-                return out
+            return type(self.frame)(*operands)
 
 
 @normalize_token.register(Expr)
@@ -791,9 +790,9 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     Parameters
     ----------
     expr:
-        Input expression to optimize.
+        Input expression to optimize
     fuse:
-        Whether or not to turn on blockwise fusion.
+        whether or not to turn on blockwise fusion
 
     See Also
     --------
@@ -827,7 +826,7 @@ def optimize_matchpy(expr: Expr) -> Expr:
 
 
 def simplify(expr: Expr) -> tuple[Expr, bool]:
-    """Simplify an expression
+    """Simplify expression
 
     This leverages the ``.simplify`` method defined on each class
 
