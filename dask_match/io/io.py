@@ -3,7 +3,7 @@ import math
 
 from dask.base import tokenize
 
-from dask_match.expr import Blockwise, BlockwiseInput, Expr
+from dask_match.expr import Blockwise, Expr
 
 
 class IO(Expr):
@@ -56,23 +56,11 @@ class FromPandas(BlockwiseIO):
     def _divisions(self):
         return [None] * (self.npartitions + 1)
 
-    def _parts(self):
+    def _task(self, index: int | None = None):
         partsize = int(math.ceil(len(self.frame) / self.npartitions))
-        locations = list(range(0, len(self.frame), partsize)) + [len(self.frame)]
-        return [
-            self.frame.iloc[start:stop]
-            for start, stop in zip(locations[:-1], locations[1:])
-        ]
-
-    @functools.cached_property
-    def _blockwise_input(self):
-        return BlockwiseInput(self._parts())
-
-    def dependencies(self):
-        return [self._blockwise_input]
-
-    def _blockwise_task(self, index: int | None = None):
-        return self._blockwise_arg(self._blockwise_input, index)
+        start = partsize * index
+        stop = partsize * (index + 1)
+        return self.frame.iloc[start:stop]
 
     def __str__(self):
         return "df"
