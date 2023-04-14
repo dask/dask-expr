@@ -181,7 +181,7 @@ class Expr(Operation, metaclass=_ExprMeta):
 
         return {(self._name, i): self._task(i) for i in range(self.npartitions)}
 
-    def simplify(self):
+    def simplify(self, lower: bool = False):
         return None
 
     @property
@@ -323,7 +323,7 @@ class Expr(Operation, metaclass=_ExprMeta):
 
     def __dask_graph__(self):
         """Traverse expression tree, collect layers"""
-        start = simplify(self)[0]
+        start = simplify(self, lower=True)[0]
         stack = [start]
         seen = set()
         layers = []
@@ -564,7 +564,7 @@ class Projection(Elemwise):
             base = "(" + base + ")"
         return f"{base}[{repr(self.columns)}]"
 
-    def simplify(self):
+    def simplify(self, lower: bool = False):
         if isinstance(self.frame, Projection):
             # df[a][b]
             a = self.frame.operand("columns")
@@ -638,7 +638,7 @@ class Head(Expr):
         assert index == 0
         return (M.head, (self.frame._name, 0), self.n)
 
-    def simplify(self):
+    def simplify(self, lower: bool = False):
         if isinstance(self.frame, Elemwise):
             operands = [
                 Head(op, self.n) if isinstance(op, Expr) else op
@@ -771,7 +771,7 @@ class Partitions(Expr):
     def _task(self, index: int):
         return (self.frame._name, self.partitions[index])
 
-    def simplify(self):
+    def simplify(self, lower: bool = False):
         if isinstance(self.frame, Blockwise):
             operands = [
                 Partitions(op, self.partitions) if isinstance(op, Expr) else op
@@ -787,7 +787,7 @@ def normalize_expression(expr):
     return expr._name
 
 
-def optimize(expr: Expr, fuse: bool = True) -> Expr:
+def optimize(expr: Expr, fuse: bool = True, lower: bool = True) -> Expr:
     """High level query optimization
 
     This leverages three optimization passes:
@@ -799,9 +799,12 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     Parameters
     ----------
     expr:
-        Input expression to optimize
+        Input expression to optimize.
     fuse:
-        whether or not to turn on blockwise fusion
+        Whether or not to turn on blockwise fusion.
+    lower:
+        Whether to lower abstract expressions in `simplify`.
+        Default is `True`.
 
     See Also
     --------
@@ -812,7 +815,7 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     last = None
     global _defer_to_matchpy
 
-    expr, _ = simplify(expr)
+    expr, _ = simplify(expr, lower=lower)
 
     _defer_to_matchpy = True  # take over ==/!= when optimizing
     try:
@@ -828,7 +831,7 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     return expr
 
 
-def simplify(expr: Expr) -> tuple[Expr, bool]:
+def simplify(expr: Expr, lower: bool = False) -> tuple[Expr, bool]:
     """Simplify an expression
 
     This leverages the ``.simplify`` method defined on each class
@@ -851,7 +854,7 @@ def simplify(expr: Expr) -> tuple[Expr, bool]:
     changed_final = False
 
     while True:
-        out = expr.simplify()
+        out = expr.simplify(lower=lower)
         if out is None:
             out = expr
         if out._name == expr._name:
@@ -863,14 +866,14 @@ def simplify(expr: Expr) -> tuple[Expr, bool]:
     changed_any = False
     new_operands = []
     for operand in expr.operands:
-        new, changed_one = simplify(operand)
+        new, changed_one = simplify(operand, lower=lower)
         new_operands.append(new)
         changed_any |= changed_one
 
     if changed_any:
         changed_final = True
         expr = type(expr)(*new_operands)
-        expr, _ = simplify(expr)
+        expr, _ = simplify(expr, lower=lower)
 
     return expr, changed_final
 
