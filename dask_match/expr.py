@@ -4,12 +4,12 @@ import operator
 from collections import defaultdict
 from collections.abc import Iterator
 
+import dask
 import pandas as pd
 import toolz
 from dask.base import normalize_token, tokenize
 from dask.core import ishashable
 from dask.dataframe import methods
-from dask.optimization import SubgraphCallable
 from dask.utils import M, apply, funcname
 from matchpy import (
     Arity,
@@ -411,8 +411,6 @@ class Blockwise(Expr):
             return (self.operation,) + args
 
     def _layer(self):
-        # WARNING: This method should only be overriden by `Fused`.
-        # Other `Blockwise` subclasses should implement `_task`
         return {(self._name, i): self._task(i) for i in range(self.npartitions)}
 
 
@@ -966,34 +964,16 @@ class Fused(Blockwise):
     def _divisions(self):
         return self.exprs[0]._divisions()
 
-    def _fused_task(self):
-        block = {self._name: (self.exprs[0]._name, 0)}
+    def _task(self, index):
+        graph = {self._name: (self.exprs[0]._name, index)}
         for _expr in self.exprs:
             if isinstance(_expr, Fused):
-                for k, v in _expr._fused_task().items():
-                    block[k] = v
+                for k, v in _expr._task(index).items():
+                    graph[k] = v
             else:
-                block[(_expr._name, 0)] = _expr._task(0)
-        return block
+                graph[(_expr._name, index)] = _expr._task(index)
 
-    def _layer(self):
-        # Create SubgraphCallable
-        dependencies = self.dependencies()
-        func = SubgraphCallable(
-            self._fused_task(),
-            self._name,
-            [dep._name for dep in dependencies],
-            self._name,
-        )
-
-        # Tasks depend on external-dependency keys only
-        return {
-            (self._name, i): (
-                func,
-                *[self._blockwise_arg(dep, i) for dep in dependencies],
-            )
-            for i in range(self.npartitions)
-        }
+        return (dask.get, graph, self._name)
 
 
 from dask_match.reductions import Count, Max, Min, Mode, Size, Sum
