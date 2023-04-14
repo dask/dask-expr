@@ -280,6 +280,14 @@ def test_simple_shuffle(ignore_index, npartitions):
     assert sorted(unique) == list(range(20))
 
 
+def test_column_getattr(df):
+    df = df.expr
+    assert df.x._name == df["x"]._name
+
+    with pytest.raises(AttributeError):
+        df.foo
+
+
 def test_simple_graphs(df):
     expr = (df + 1).expr
     graph = expr.__dask_graph__()
