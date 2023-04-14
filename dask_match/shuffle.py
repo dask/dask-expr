@@ -39,9 +39,7 @@ class Shuffle(Expr):
     def __str__(self):
         return f"Shuffle({self._name[-7:]})"
 
-    def simplify(self, lower: bool = True):
-        if lower is False:
-            return None
+    def simplify(self):
         # Use `backend` to decide how to compose a
         # shuffle operation from concerete expressions
         backend = self.backend or "simple"
@@ -89,7 +87,7 @@ class ShuffleBackend(Shuffle):
         """Create an Expr tree that uses this ShuffleBackend class"""
         raise NotImplementedError()
 
-    def simplify(self, lower: bool = True):
+    def simplify(self):
         return None
 
 

@@ -181,7 +181,7 @@ class Expr(Operation, metaclass=_ExprMeta):
 
         return {(self._name, i): self._task(i) for i in range(self.npartitions)}
 
-    def simplify(self, lower: bool = True):
+    def simplify(self):
         return None
 
     @property
@@ -323,8 +323,7 @@ class Expr(Operation, metaclass=_ExprMeta):
 
     def __dask_graph__(self):
         """Traverse expression tree, collect layers"""
-        start = simplify(self, lower=True)[0]
-        stack = [start]
+        stack = [self]
         seen = set()
         layers = []
         while stack:
@@ -338,13 +337,7 @@ class Expr(Operation, metaclass=_ExprMeta):
             for operand in expr.operands:
                 if isinstance(operand, Expr):
                     stack.append(operand)
-        dsk = toolz.merge(layers)
-        if self._name != start._name:
-            # Need to change the output task names since
-            # `simplify` changed the name of the output `Expr`
-            for k0, k in zip(self.__dask_keys__(), start.__dask_keys__()):
-                dsk[k0] = dsk.pop(k)
-        return dsk
+        return toolz.merge(layers)
 
     def __dask_keys__(self):
         return [(self._name, i) for i in range(self.npartitions)]
@@ -564,7 +557,7 @@ class Projection(Elemwise):
             base = "(" + base + ")"
         return f"{base}[{repr(self.columns)}]"
 
-    def simplify(self, lower: bool = True):
+    def simplify(self):
         if isinstance(self.frame, Projection):
             # df[a][b]
             a = self.frame.operand("columns")
@@ -638,7 +631,7 @@ class Head(Expr):
         assert index == 0
         return (M.head, (self.frame._name, 0), self.n)
 
-    def simplify(self, lower: bool = True):
+    def simplify(self):
         if isinstance(self.frame, Elemwise):
             operands = [
                 Head(op, self.n) if isinstance(op, Expr) else op
@@ -771,7 +764,7 @@ class Partitions(Expr):
     def _task(self, index: int):
         return (self.frame._name, self.partitions[index])
 
-    def simplify(self, lower: bool = True):
+    def simplify(self):
         if isinstance(self.frame, Blockwise):
             operands = [
                 Partitions(op, self.partitions) if isinstance(op, Expr) else op
@@ -787,7 +780,7 @@ def normalize_expression(expr):
     return expr._name
 
 
-def optimize(expr: Expr, fuse: bool = True, lower: bool = True) -> Expr:
+def optimize(expr: Expr, fuse: bool = True) -> Expr:
     """High level query optimization
 
     This leverages three optimization passes:
@@ -802,9 +795,6 @@ def optimize(expr: Expr, fuse: bool = True, lower: bool = True) -> Expr:
         Input expression to optimize.
     fuse:
         Whether or not to turn on blockwise fusion.
-    lower:
-        Whether to lower abstract expressions in `simplify`.
-        Default is `True`.
 
     See Also
     --------
@@ -815,7 +805,7 @@ def optimize(expr: Expr, fuse: bool = True, lower: bool = True) -> Expr:
     last = None
     global _defer_to_matchpy
 
-    expr, _ = simplify(expr, lower=lower)
+    expr, _ = simplify(expr)
 
     _defer_to_matchpy = True  # take over ==/!= when optimizing
     try:
@@ -831,7 +821,7 @@ def optimize(expr: Expr, fuse: bool = True, lower: bool = True) -> Expr:
     return expr
 
 
-def simplify(expr: Expr, lower: bool = True) -> tuple[Expr, bool]:
+def simplify(expr: Expr) -> tuple[Expr, bool]:
     """Simplify an expression
 
     This leverages the ``.simplify`` method defined on each class
@@ -854,7 +844,7 @@ def simplify(expr: Expr, lower: bool = True) -> tuple[Expr, bool]:
     changed_final = False
 
     while True:
-        out = expr.simplify(lower=lower)
+        out = expr.simplify()
         if out is None:
             out = expr
         if out._name == expr._name:
@@ -866,14 +856,14 @@ def simplify(expr: Expr, lower: bool = True) -> tuple[Expr, bool]:
     changed_any = False
     new_operands = []
     for operand in expr.operands:
-        new, changed_one = simplify(operand, lower=lower)
+        new, changed_one = simplify(operand)
         new_operands.append(new)
         changed_any |= changed_one
 
     if changed_any:
         changed_final = True
         expr = type(expr)(*new_operands)
-        expr, _ = simplify(expr, lower=lower)
+        expr, _ = simplify(expr)
 
     return expr, changed_final
 
