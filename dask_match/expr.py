@@ -117,6 +117,8 @@ class Expr(Operation, metaclass=_ExprMeta):
             if key in _parameters:
                 idx = _parameters.index(key)
                 return self.operands[idx]
+            if isinstance(self._meta, pd.DataFrame) and key in self._meta.columns:
+                return self[key]
             raise err
 
     def operand(self, key):
