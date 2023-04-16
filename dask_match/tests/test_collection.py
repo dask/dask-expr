@@ -288,3 +288,8 @@ def test_simple_graphs(df):
     graph = expr.__dask_graph__()
 
     assert graph[(expr._name, 0)] == (operator.add, (df.expr._name, 0), 1)
+
+
+def test_statistics(df, pdf):
+    assert (df + 1).statistics()["length"] == len(pdf)
+    assert df[df.x > 5].statistics().get("length") is None

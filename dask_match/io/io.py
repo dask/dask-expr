@@ -58,4 +58,7 @@ class FromPandas(BlockwiseIO):
     def __str__(self):
         return "df"
 
+    def _statistics(self):
+        return {"length": len(self.frame)}
+
     __repr__ = __str__

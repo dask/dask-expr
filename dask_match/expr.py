@@ -198,6 +198,30 @@ class Expr(Operation, metaclass=_ExprMeta):
     def size(self):
         return Size(self)
 
+    def _statistics(self):
+        return {}
+
+    def statistics(self) -> dict:
+        """Known quantities of an expression, like length or min/max
+
+        To define this on a class create a `._statistics` method that returns a
+        dictionary of new statistics known by that class.  If nothing is known it
+        is ok to return None.  Superclasses will also be consulted.
+
+        Examples
+        --------
+        >>> df.statistics()
+        {"length": 1000000}
+        """
+        out = {}
+        for typ in type(self).mro()[::-1]:
+            if not issubclass(typ, Expr):
+                continue
+            d = typ._statistics(self)  # TODO: maybe this should be cached
+            if d:
+                out.update(d)  # TODO: this is fragile
+        return out
+
     def __getitem__(self, other):
         if isinstance(other, Expr):
             return Filter(self, other)  # df[df.x > 1]
@@ -468,7 +492,10 @@ class Elemwise(Blockwise):
     optimizations, like `len` will care about which operations preserve length
     """
 
-    pass
+    def _statistics(self):
+        for dep in self.dependencies():
+            if dep.npartitions == self.npartitions and "length" in dep.statistics():
+                return {"length": dep.statistics()["length"]}
 
 
 class AsType(Elemwise):
