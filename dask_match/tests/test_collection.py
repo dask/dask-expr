@@ -294,7 +294,7 @@ def test_tree_repr(df):
     assert "Add" in s
     assert "1" in s
     assert "True" not in s
-    # assert "None" not in s
+    assert "None" not in s
     assert "skipna=False" in s
     assert str(df.seed) in s.lower()
 
