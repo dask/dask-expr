@@ -238,7 +238,7 @@ class Size(Reduction):
 
 
 class Count(Reduction):
-    _parameters = ["frame"]
+    _parameters = ["frame", "numeric_only"]
     split_every = 16
     reduction_chunk = M.count
 

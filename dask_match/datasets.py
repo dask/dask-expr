@@ -2,8 +2,10 @@ import functools
 
 import numpy as np
 import pandas as pd
+from matchpy import CustomConstraint, Pattern, ReplacementRule, Wildcard
 
 from dask_match.collection import new_collection
+from dask_match.expr import Projection
 from dask_match.io import BlockwiseIO
 
 __all__ = ["timeseries"]
@@ -13,10 +15,10 @@ class Timeseries(BlockwiseIO):
     _parameters = ["start", "end", "dtypes", "freq", "partition_freq", "seed", "kwargs"]
     _defaults = {
         "start": "2000-01-01",
-        "end": "2000-12-31",
-        "dtypes": None,
-        "freq": "10s",
-        "partition_freq": "1M",
+        "end": "2000-01-31",
+        "dtypes": {"name": "string", "id": int, "x": float, "y": float},
+        "freq": "1s",
+        "partition_freq": "1d",
         "seed": None,
         "kwargs": {},
     }
@@ -47,6 +49,47 @@ class Timeseries(BlockwiseIO):
             self.freq,
             self.random_state[index],
             self.kwargs,
+        )
+
+    @classmethod
+    def _replacement_rules(self):
+        start, end, dtypes, freq, partition_freq, seed, kwargs = map(
+            Wildcard.dot,
+            ["start", "end", "dtypes", "freq", "partition_freq", "seed", "kwargs"],
+        )
+        columns = Wildcard.dot("columns")
+
+        def optimize_timeseries_projection(
+            start, end, dtypes, freq, partition_freq, seed, kwargs, columns
+        ):
+            # TODO: This isn't quite kosher.
+            # The seed will produce different values now that dtypes are
+            # different.
+            # We maybe need to have a different seed per column.
+            if isinstance(columns, (list, pd.Index)):
+                dtypes = {col: dtypes[col] for col in columns}
+                return Timeseries(
+                    start, end, dtypes, freq, partition_freq, seed, kwargs
+                )
+            else:
+                dtypes = {columns: dtypes[columns]}
+                return Timeseries(
+                    start, end, dtypes, freq, partition_freq, seed, kwargs
+                )[columns]
+
+        def constraint(dtypes, columns):
+            """Avoid infinite loop with df["x"] -> df["x"]"""
+            return isinstance(columns, (list, pd.Index)) or len(dtypes) > 1
+
+        yield ReplacementRule(
+            Pattern(
+                Projection(
+                    Timeseries(start, end, dtypes, freq, partition_freq, seed, kwargs),
+                    columns,
+                ),
+                CustomConstraint(constraint),
+            ),
+            optimize_timeseries_projection,
         )
 
 
