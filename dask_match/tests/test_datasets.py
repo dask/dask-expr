@@ -9,11 +9,19 @@ def test_timeseries():
 
 
 def test_optimization():
-    df = timeseries(dtypes={"x": int, "y": float}, seed=123)
-    expected = timeseries(dtypes={"x": int}, seed=123)
+    dtypes = {"x": int, "y": float}
+    df = timeseries(dtypes=dtypes, seed=123)
+    expected = timeseries(dtypes=dtypes, _projection=["x"], seed=123)
     result = df[["x"]].optimize()
     assert expected._name == result._name
 
-    expected = timeseries(dtypes={"x": int}, seed=123)["x"]
+    expected = timeseries(dtypes=dtypes, _projection="x", seed=123)["x"]
     result = df["x"].optimize(fuse=False)
     assert expected._name == result._name
+
+
+def test_column_projection_deterministic():
+    df = timeseries(freq="1H", start="2000-01-01", end="2000-01-02", seed=123)
+    result_id = df[["id"]].optimize()
+    result_id_x = df[["id", "x"]].optimize()
+    assert_eq(result_id["id"], result_id_x["id"])
