@@ -14,7 +14,16 @@ __all__ = ["timeseries"]
 
 
 class Timeseries(BlockwiseIO):
-    _parameters = ["start", "end", "dtypes", "_projection", "freq", "partition_freq", "seed", "kwargs"]
+    _parameters = [
+        "start",
+        "end",
+        "dtypes",
+        "_projection",
+        "freq",
+        "partition_freq",
+        "seed",
+        "kwargs",
+    ]
     _defaults = {
         "start": "2000-01-01",
         "end": "2000-12-31",
@@ -72,7 +81,16 @@ class Timeseries(BlockwiseIO):
     def _replacement_rules(self):
         start, end, dtypes, _projection, freq, partition_freq, seed, kwargs = map(
             Wildcard.dot,
-            ["start", "end", "dtypes", "_projection", "freq", "partition_freq", "seed", "kwargs"],
+            [
+                "start",
+                "end",
+                "dtypes",
+                "_projection",
+                "freq",
+                "partition_freq",
+                "seed",
+                "kwargs",
+            ],
         )
         columns = Wildcard.dot("columns")
 
@@ -95,7 +113,16 @@ class Timeseries(BlockwiseIO):
         yield ReplacementRule(
             Pattern(
                 Projection(
-                    Timeseries(start, end, dtypes, _projection, freq, partition_freq, seed, kwargs),
+                    Timeseries(
+                        start,
+                        end,
+                        dtypes,
+                        _projection,
+                        freq,
+                        partition_freq,
+                        seed,
+                        kwargs,
+                    ),
                     columns,
                 ),
                 CustomConstraint(constraint),
@@ -236,5 +263,7 @@ def timeseries(
         seed = np.random.randint(2e9)
 
     projection = kwargs.pop("_projection", None)  # Not intended for public use
-    expr = Timeseries(start, end, dtypes, projection, freq, partition_freq, seed, kwargs)
+    expr = Timeseries(
+        start, end, dtypes, projection, freq, partition_freq, seed, kwargs
+    )
     return new_collection(expr)
