@@ -39,18 +39,20 @@ class BlockwiseIO(Blockwise, IO):
 class FromPandas(BlockwiseIO):
     """The only way today to get a real dataframe"""
 
-    _parameters = ["frame", "npartitions"]
-    _defaults = {"npartitions": 1}
+    _parameters = ["frame", "npartitions", "_take_partitions"]
+    _defaults = {"npartitions": 1, "_take_partitions": None}
 
     @property
     def _meta(self):
         return self.frame.head(0)
 
     def _divisions(self):
-        return [None] * (self.npartitions + 1)
+        return [None] * (self.operand("npartitions") + 1)
 
-    def _task(self, index: int | None = None):
-        partsize = int(math.ceil(len(self.frame) / self.npartitions))
+    def _task(self, index: int):
+        if self._take_partitions is not None:
+            index = self._take_partitions[index]
+        partsize = int(math.ceil(len(self.frame) / self.operand("npartitions")))
         start = partsize * index
         stop = partsize * (index + 1)
         return self.frame.iloc[start:stop]

@@ -328,7 +328,17 @@ class Expr(Operation, metaclass=_ExprMeta):
 
     @functools.cached_property
     def divisions(self):
-        return tuple(self._divisions())
+        # Common case: Use self._divisions()
+        full_divisions = tuple(self._divisions())
+        if "_take_partitions" not in self._parameters or self._take_partitions is None:
+            return full_divisions
+
+        # Specific case: Specific partitions were selected
+        new_divisions = []
+        for part in self._take_partitions:
+            new_divisions.append(full_divisions[part])
+        new_divisions.append(full_divisions[part + 1])
+        return tuple(new_divisions)
 
     def _divisions(self):
         raise NotImplementedError()
@@ -340,7 +350,10 @@ class Expr(Operation, metaclass=_ExprMeta):
 
     @property
     def npartitions(self):
-        if "npartitions" in self._parameters:
+        if "_take_partitions" in self._parameters and self._take_partitions is not None:
+            # Special case: Specific partitions were selected
+            return len(self._take_partitions)
+        elif "npartitions" in self._parameters:
             idx = self._parameters.index("npartitions")
             return self.operands[idx]
         else:
@@ -662,7 +675,13 @@ class Index(Elemwise):
         )
 
 
-class Head(Expr):
+class Head(Blockwise):
+    """Take the first `n` rows of every partition
+
+    Typically used after `Partition(..., [0])` to take
+    the first `n` rows of an entire collection.
+    """
+
     _parameters = ["frame", "n"]
     _defaults = {"n": 5}
 
@@ -817,6 +836,19 @@ class Partitions(Expr):
             operands = [
                 Partitions(op, self.partitions) if isinstance(op, Expr) else op
                 for op in self.frame.operands
+            ]
+            return type(self.frame)(*operands)
+        elif (
+            "_take_partitions" in self.frame._parameters
+            and self.frame._take_partitions is None
+        ):
+            # We assume that expressions defining a special "_take_partitions"
+            # parameter can internally capture the same logic as `Partitions`
+            operands = [
+                self.partitions
+                if self.frame._parameters[i] == "_take_partitions"
+                else op
+                for i, op in enumerate(self.frame.operands)
             ]
             return type(self.frame)(*operands)
 

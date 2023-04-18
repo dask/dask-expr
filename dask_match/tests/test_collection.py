@@ -255,6 +255,11 @@ def test_partitions(pdf, df):
     assert isinstance(out.expr, expr.Add)
     assert isinstance(out.expr.left, expr.Partitions)
 
+    # Check culling
+    out = optimize(df.partitions[1])
+    assert len(out.dask) == 1
+    assert_eq(out, pdf.iloc[10:20])
+
 
 def test_column_getattr(df):
     df = df.expr

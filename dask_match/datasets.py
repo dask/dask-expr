@@ -12,7 +12,16 @@ __all__ = ["timeseries"]
 
 
 class Timeseries(BlockwiseIO):
-    _parameters = ["start", "end", "dtypes", "freq", "partition_freq", "seed", "kwargs"]
+    _parameters = [
+        "start",
+        "end",
+        "dtypes",
+        "freq",
+        "partition_freq",
+        "seed",
+        "kwargs",
+        "_take_partitions",
+    ]
     _defaults = {
         "start": "2000-01-01",
         "end": "2000-01-31",
@@ -21,6 +30,7 @@ class Timeseries(BlockwiseIO):
         "partition_freq": "1d",
         "seed": None,
         "kwargs": {},
+        "_take_partitions": None,
     }
 
     @property
@@ -37,9 +47,17 @@ class Timeseries(BlockwiseIO):
 
     @functools.cached_property
     def random_state(self):
-        return np.random.randint(2e9, size=self.npartitions)
+        size = (
+            len(pd.date_range(start=self.start, end=self.end, freq=self.partition_freq))
+            + 1
+        )
+        return np.random.randint(2e9, size=size)
 
     def _task(self, index):
+        original_index = index
+        if self._take_partitions is not None:
+            # Need original index for random_state
+            original_index = self._take_partitions[index]
         return (
             make_timeseries_part,
             self.divisions[index],
@@ -47,7 +65,7 @@ class Timeseries(BlockwiseIO):
             self.operand("dtypes"),
             self.columns,
             self.freq,
-            self.random_state[index],
+            self.random_state[original_index],
             self.kwargs,
         )
 

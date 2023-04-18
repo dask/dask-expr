@@ -1,6 +1,7 @@
 from dask.dataframe.utils import assert_eq
 
 from dask_match.datasets import timeseries
+from dask_match.utils import _check_take_partitions
 
 
 def test_timeseries():
@@ -17,3 +18,23 @@ def test_optimization():
     expected = timeseries(dtypes={"x": int}, seed=123)["x"]
     result = df["x"].optimize(fuse=False)
     assert expected._name == result._name
+
+
+def test_timeseries_culling():
+    df = timeseries(dtypes={"x": int, "y": float}, seed=123)
+    pdf = df.compute()
+    offset = len(df.partitions[0].compute())
+    df = (df[["x"]] + 1).partitions[1]
+    df2 = df.optimize()
+
+    # All tasks should be fused for the single output partition
+    assert df2.npartitions == 1
+    assert len(df2.dask) == df2.npartitions
+    expected = pdf.iloc[offset : 2 * offset][["x"]] + 1
+    # TODO: Compare values in "x" after #41
+    assert_eq(df2.index, expected.index)
+
+    # Check that we still get culling without fusion
+    df3 = df.optimize(fuse=False)
+    _check_take_partitions(df3.expr, [1])
+    assert_eq(df2.index, expected.index)
