@@ -8,14 +8,25 @@ def test_timeseries():
     assert_eq(df, df)
 
 
+# def test_optimization():
+#     dtypes = {"x": int, "y": float}
+#     df = timeseries(dtypes=dtypes, seed=123)
+#     expected = timeseries(dtypes=dtypes, _projection=["x"], seed=123)
+#     result = df[["x"]].optimize()
+#     assert expected._name == result._name
+
+#     expected = timeseries(dtypes=dtypes, _projection="x", seed=123)["x"]
+#     result = df["x"].optimize(fuse=False)
+#     assert expected._name == result._name
+
+
 def test_optimization():
-    dtypes = {"x": int, "y": float}
-    df = timeseries(dtypes=dtypes, seed=123)
-    expected = timeseries(dtypes=dtypes, _projection=["x"], seed=123)
+    df = timeseries(dtypes={"x": int, "y": float}, seed=123)
+    expected = timeseries(dtypes={"x": int}, seed=123)
     result = df[["x"]].optimize()
     assert expected._name == result._name
 
-    expected = timeseries(dtypes=dtypes, _projection="x", seed=123)["x"]
+    expected = timeseries(dtypes={"x": int}, seed=123)["x"]
     result = df["x"].optimize(fuse=False)
     assert expected._name == result._name
 

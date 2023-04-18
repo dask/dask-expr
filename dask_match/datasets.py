@@ -18,7 +18,6 @@ class Timeseries(BlockwiseIO):
         "start",
         "end",
         "dtypes",
-        "_projection",
         "freq",
         "partition_freq",
         "seed",
@@ -28,7 +27,6 @@ class Timeseries(BlockwiseIO):
         "start": "2000-01-01",
         "end": "2000-01-31",
         "dtypes": {"name": "string", "id": int, "x": float, "y": float},
-        "_projection": None,
         "freq": "1s",
         "partition_freq": "1d",
         "seed": None,
@@ -36,21 +34,11 @@ class Timeseries(BlockwiseIO):
     }
 
     @property
-    def projection(self):
-        if self._projection is None:
-            dtypes = self.operand("dtypes")
-            return None if dtypes is None else list(dtypes.keys())
-        return (
-            self._projection
-            if isinstance(self._projection, (list, pd.Index))
-            else [self._projection]
-        )
-
-    @property
     def _meta(self):
         dtypes = self.operand("dtypes")
+        states = [0] * len(dtypes)
         return make_timeseries_part(
-            "2000", "2000", dtypes, self.projection, "1H", 0, self.kwargs
+            "2000", "2000", dtypes, list(dtypes.keys()), "1H", states, self.kwargs
         )
 
     def _divisions(self):
@@ -61,68 +49,54 @@ class Timeseries(BlockwiseIO):
     @functools.cached_property
     def random_state(self):
         if self.seed is None:
-            return np.random.randint(2e9, size=self.npartitions)
+            return np.random.randint(2e9, size=self.npartitions * len(self.dtypes))
         else:
-            return random_state_data(self.npartitions, self.seed)
+            return random_state_data(self.npartitions * len(self.dtypes), self.seed)
 
     def _task(self, index):
+        num_columns = len(self.columns)
+        offset = index * num_columns
         return (
             make_timeseries_part,
             self.divisions[index],
             self.divisions[index + 1],
             self.operand("dtypes"),
-            self.projection,
+            self.columns,
             self.freq,
-            self.random_state[index],
+            self.random_state[offset: offset + num_columns],
             self.kwargs,
         )
 
     @classmethod
     def _replacement_rules(self):
-        start, end, dtypes, _projection, freq, partition_freq, seed, kwargs = map(
+        start, end, dtypes, freq, partition_freq, seed, kwargs = map(
             Wildcard.dot,
-            [
-                "start",
-                "end",
-                "dtypes",
-                "_projection",
-                "freq",
-                "partition_freq",
-                "seed",
-                "kwargs",
-            ],
+            ["start", "end", "dtypes", "freq", "partition_freq", "seed", "kwargs"],
         )
         columns = Wildcard.dot("columns")
 
         def optimize_timeseries_projection(
-            start, end, dtypes, _projection, freq, partition_freq, seed, kwargs, columns
+            start, end, dtypes, freq, partition_freq, seed, kwargs, columns
         ):
             if isinstance(columns, (list, pd.Index)):
+                dtypes = {col: dtypes[col] for col in columns}
                 return Timeseries(
-                    start, end, dtypes, columns, freq, partition_freq, seed, kwargs
+                    start, end, dtypes, freq, partition_freq, seed, kwargs
                 )
             else:
+                dtypes = {columns: dtypes[columns]}
                 return Timeseries(
-                    start, end, dtypes, columns, freq, partition_freq, seed, kwargs
+                    start, end, dtypes, freq, partition_freq, seed, kwargs
                 )[columns]
 
-        def constraint(_projection, columns):
+        def constraint(dtypes, columns):
             """Avoid infinite loop with df["x"] -> df["x"]"""
-            return isinstance(columns, (list, pd.Index)) or _projection is None
+            return isinstance(columns, (list, pd.Index)) or len(dtypes) > 1
 
         yield ReplacementRule(
             Pattern(
                 Projection(
-                    Timeseries(
-                        start,
-                        end,
-                        dtypes,
-                        _projection,
-                        freq,
-                        partition_freq,
-                        seed,
-                        kwargs,
-                    ),
+                    Timeseries(start, end, dtypes, freq, partition_freq, seed, kwargs),
                     columns,
                 ),
                 CustomConstraint(constraint),
@@ -189,9 +163,9 @@ make = {
 
 def make_timeseries_part(start, end, dtypes, columns, freq, state_data, kwargs):
     index = pd.date_range(start=start, end=end, freq=freq, name="timestamp")
-    state = np.random.RandomState(state_data)
     data = {}
-    for k, dt in dtypes.items():
+    for i, (k, dt) in enumerate(dtypes.items()):
+        state = np.random.RandomState(state_data[i])
         kws = {
             kk.rsplit("_", 1)[1]: v
             for kk, v in kwargs.items()
@@ -262,8 +236,5 @@ def timeseries(
     if seed is None:
         seed = np.random.randint(2e9)
 
-    projection = kwargs.pop("_projection", None)  # Not intended for public use
-    expr = Timeseries(
-        start, end, dtypes, projection, freq, partition_freq, seed, kwargs
-    )
+    expr = Timeseries(start, end, dtypes, freq, partition_freq, seed, kwargs)
     return new_collection(expr)
