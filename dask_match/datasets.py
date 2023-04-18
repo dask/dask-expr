@@ -63,7 +63,7 @@ class Timeseries(BlockwiseIO):
             self.operand("dtypes"),
             self.columns,
             self.freq,
-            self.random_state[offset: offset + num_columns],
+            self.random_state[offset : offset + num_columns],
             self.kwargs,
         )
 
