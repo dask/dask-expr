@@ -264,10 +264,6 @@ def optimize(collection, fuse=True):
     return new_collection(expr.optimize(collection.expr, fuse=fuse))
 
 
-def simplify(collection):
-    return new_collection(expr.simplify(collection.expr)[0])
-
-
 def from_pandas(*args, **kwargs):
     from dask_match.io.io import FromPandas
 
