@@ -13,6 +13,7 @@ from fsspec.utils import stringify_path
 from tlz import first
 
 from dask_match import expr
+from dask_match.expr import no_default
 
 #
 # Utilities to wrap Expr API
@@ -152,6 +153,36 @@ class FrameBase(DaskMethodsMixin):
         >>> df.partitions[::10]
         """
         return IndexCallable(self._partitions)
+
+
+    def map_partitions(
+        self,
+        func,
+        *args,
+        meta=no_default,
+        enforce_metadata=True,
+        transform_divisions=False,
+        align_dataframes=False,
+        **kwargs,
+    ):
+        new_expr = expr.MapPartitions(
+            self.expr,
+            func,
+            meta,
+            {
+                "enforce_metadata": enforce_metadata,
+                "transform_divisions": transform_divisions,
+                "align_dataframes": align_dataframes,
+            },
+            kwargs,
+            *[
+                arg.expr
+                if isinstance(arg, FrameBase)
+                else arg
+                for arg in args
+            ],
+        )
+        return new_collection(new_expr)
 
 
 # Add operator attributes

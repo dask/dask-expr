@@ -316,3 +316,8 @@ def test_simple_graphs(df):
     graph = expr.__dask_graph__()
 
     assert graph[(expr._name, 0)] == (operator.add, (df.expr._name, 0), 1)
+
+
+def test_map_partitions(df):
+    df2 = df.map_partitions(lambda x: x + 1)
+    assert_eq(df2, df + 1)
