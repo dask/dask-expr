@@ -726,6 +726,9 @@ class BlockwiseHead(Head, Blockwise):
     the first `n` rows of an entire collection.
     """
 
+    def _divisions(self):
+        return self.frame.divisions
+
     def _task(self, index: int):
         return (M.head, (self.frame._name, index), self.n)
 
