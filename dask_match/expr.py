@@ -691,12 +691,8 @@ class Index(Elemwise):
         )
 
 
-class Head(Blockwise):
-    """Take the first `n` rows of every partition
-
-    Typically used after `Partition(..., [0])` to take
-    the first `n` rows of an entire collection.
-    """
+class Head(Expr):
+    """Take the first `n` rows of the first partition"""
 
     _parameters = ["frame", "n"]
     _defaults = {"n": 5}
@@ -709,8 +705,7 @@ class Head(Blockwise):
         return self.frame.divisions[:2]
 
     def _task(self, index: int):
-        assert index == 0
-        return (M.head, (self.frame._name, 0), self.n)
+        raise NotImplementedError()
 
     def simplify(self):
         if isinstance(self.frame, Elemwise):
@@ -719,6 +714,20 @@ class Head(Blockwise):
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
+        elif not isinstance(self, BlockwiseHead):
+            # Lower to Blockwise
+            return BlockwiseHead(Partitions(self.frame, [0]), self.n)
+
+
+class BlockwiseHead(Head, Blockwise):
+    """Take the first `n` rows of every partition
+
+    Typically used after `Partition(..., [0])` to take
+    the first `n` rows of an entire collection.
+    """
+
+    def _task(self, index: int):
+        return (M.head, (self.frame._name, 0), self.n)
 
 
 class Binop(Elemwise):
