@@ -319,5 +319,18 @@ def test_simple_graphs(df):
 
 
 def test_map_partitions(df):
-    df2 = df.map_partitions(lambda x: x + 1)
-    assert_eq(df2, df + 1)
+    def combine_x_y(x, y, foo=None):
+        assert foo == "bar"
+        return x + y
+
+    df2 = df.map_partitions(combine_x_y, df + 1, foo="bar")
+    assert_eq(df2, df + (df + 1))
+
+
+def test_map_partitions_broadcast(df):
+    def combine_x_y(x, y, val, foo=None):
+        assert foo == "bar"
+        return x + y + val
+
+    df2 = df.map_partitions(combine_x_y, df["x"].sum(), 123, foo="bar")
+    assert_eq(df2, df + df["x"].sum() + 123)

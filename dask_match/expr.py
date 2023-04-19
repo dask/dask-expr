@@ -11,7 +11,12 @@ import toolz
 from dask.base import normalize_token, tokenize
 from dask.core import ishashable
 from dask.dataframe import methods
-from dask.dataframe.core import is_dataframe_like, apply_and_enforce
+from dask.dataframe.core import (
+    is_dataframe_like,
+    apply_and_enforce,
+    _get_meta_map_partitions,
+    _get_divisions_map_partitions,
+)
 from dask.utils import M, apply, funcname
 from matchpy import (
     Arity,
@@ -511,6 +516,10 @@ class MapPartitions(Blockwise):
         "kwargs",
     ]
 
+    def _broadcast_dep(self, dep: Expr):
+        # Always broadcast single-partition dependencies in MapPartitions
+        return dep.npartitions == 1
+
     @property
     def args(self):
         return [self.frame] + self.operands[len(self._parameters) :]
@@ -523,24 +532,16 @@ class MapPartitions(Blockwise):
     def transform_divisions(self):
         return self.options.get("transform_divisions", True)
 
-    @property
-    def align_dataframes(self):
-        return self.options.get("align_dataframes", True)
-
     @functools.cached_property
     def _meta(self):
-        from dask.dataframe.core import _get_meta_map_partitions
-
         meta = self.operand("meta")
         args = [arg._meta if isinstance(arg, Expr) else arg for arg in self.args]
         return _get_meta_map_partitions(args, [], self.func, self.kwargs, meta, None)
 
     def _divisions(self):
-        from dask.dataframe.core import _get_divisions_map_partitions
-
         dfs = [arg for arg in self.args if isinstance(arg, Expr)]
         return _get_divisions_map_partitions(
-            self.align_dataframes,
+            False,  # Partitions must already be "aligned"
             self.transform_divisions,
             dfs,
             self.func,
