@@ -727,7 +727,7 @@ class BlockwiseHead(Head, Blockwise):
     """
 
     def _task(self, index: int):
-        return (M.head, (self.frame._name, 0), self.n)
+        return (M.head, (self.frame._name, index), self.n)
 
 
 class Binop(Elemwise):
