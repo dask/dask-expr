@@ -322,7 +322,7 @@ class Expr(Operation, metaclass=_ExprMeta):
         return Sum(self, skipna, numeric_only, min_count)
 
     def mean(self, skipna=True, numeric_only=None, min_count=0):
-        return self.sum(skipna=skipna) / self.count()
+        return Mean(self, skipna=skipna, numeric_only=numeric_only)
 
     def max(self, skipna=True, numeric_only=None, min_count=0):
         return Max(self, skipna, numeric_only, min_count)
@@ -1133,4 +1133,4 @@ class Fused(Blockwise):
 
 
 from dask_match.io import BlockwiseIO
-from dask_match.reductions import Count, Max, Min, Mode, Size, Sum
+from dask_match.reductions import Count, Max, Mean, Min, Mode, Size, Sum
