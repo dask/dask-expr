@@ -154,7 +154,6 @@ class FrameBase(DaskMethodsMixin):
         """
         return IndexCallable(self._partitions)
 
-
     def map_partitions(
         self,
         func,
@@ -175,12 +174,7 @@ class FrameBase(DaskMethodsMixin):
                 "align_dataframes": align_dataframes,
             },
             kwargs,
-            *[
-                arg.expr
-                if isinstance(arg, FrameBase)
-                else arg
-                for arg in args
-            ],
+            *[arg.expr if isinstance(arg, FrameBase) else arg for arg in args],
         )
         return new_collection(new_expr)
 

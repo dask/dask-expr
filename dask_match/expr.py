@@ -503,7 +503,6 @@ class Blockwise(Expr):
 
 
 class MapPartitions(Blockwise):
-
     _parameters = [
         "frame",
         "func",
@@ -514,16 +513,16 @@ class MapPartitions(Blockwise):
 
     @property
     def args(self):
-        return [self.frame] + self.operands[len(self._parameters):]
-    
+        return [self.frame] + self.operands[len(self._parameters) :]
+
     @property
     def enforce_metadata(self):
         return self.options.get("enforce_metadata", True)
-    
+
     @property
     def transform_divisions(self):
         return self.options.get("transform_divisions", True)
-    
+
     @property
     def align_dataframes(self):
         return self.options.get("align_dataframes", True)
@@ -548,7 +547,7 @@ class MapPartitions(Blockwise):
             self.args,
             self.kwargs,
         )
-    
+
     def _task(self, index: int):
         args = [self._blockwise_arg(op, index) for op in self.args]
         if self.enforce_metadata:
