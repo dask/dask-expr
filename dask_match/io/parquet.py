@@ -291,6 +291,4 @@ class ReadParquet(BlockwiseIO):
         return self._plan["divisions"]
 
     def _task(self, index: int):
-        if self._take_partitions is not None:
-            index = self._take_partitions[index]
         return (self._plan["func"], self._plan["parts"][index])

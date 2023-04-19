@@ -43,6 +43,7 @@ class Timeseries(BlockwiseIO):
             "2000", "2000", dtypes, list(dtypes.keys()), "1H", states, self.kwargs
         )
 
+    @functools.lru_cache
     def _divisions(self):
         return list(
             pd.date_range(start=self.start, end=self.end, freq=self.partition_freq)
@@ -58,16 +59,13 @@ class Timeseries(BlockwiseIO):
             return random_state_data(size, self.seed)
 
     def _task(self, index):
-        original_index = index
-        if self._take_partitions is not None:
-            # Need original index for random_state
-            original_index = self._take_partitions[index]
         num_columns = len(self.columns)
-        offset = original_index * num_columns
+        offset = index * num_columns
+        full_divisions = self._divisions()
         return (
             make_timeseries_part,
-            self.divisions[index],
-            self.divisions[index + 1],
+            full_divisions[index],
+            full_divisions[index + 1],
             self.operand("dtypes"),
             self.columns,
             self.freq,

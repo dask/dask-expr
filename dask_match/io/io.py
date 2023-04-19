@@ -50,8 +50,6 @@ class FromPandas(BlockwiseIO):
         return [None] * (self.operand("npartitions") + 1)
 
     def _task(self, index: int):
-        if self._take_partitions is not None:
-            index = self._take_partitions[index]
         partsize = int(math.ceil(len(self.frame) / self.operand("npartitions")))
         start = partsize * index
         stop = partsize * (index + 1)

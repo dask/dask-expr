@@ -169,6 +169,22 @@ class Expr(Operation, metaclass=_ExprMeta):
         # Dependencies are `Expr` operands only
         return [operand for operand in self.operands if isinstance(operand, Expr)]
 
+    @property
+    def _culling(self) -> bool:
+        """Whether or not output partitions have been culled"""
+        return (
+            "_take_partitions" in self._parameters
+            and self.operand("_take_partitions") is not None
+        )
+
+    @property
+    def _partitions(self) -> list | tuple | range:
+        """Selected partition indices"""
+        if self._culling:
+            return self.operand("_take_partitions")
+        else:
+            return range(self.npartitions)
+
     def _task(self, index: int):
         """The task for the i'th partition
 
@@ -220,7 +236,7 @@ class Expr(Operation, metaclass=_ExprMeta):
         Expr.__dask_graph__
         """
 
-        return {(self._name, i): self._task(i) for i in range(self.npartitions)}
+        return {(self._name, i): self._task(k) for i, k in enumerate(self._partitions)}
 
     def simplify(self):
         return self
@@ -330,12 +346,12 @@ class Expr(Operation, metaclass=_ExprMeta):
     def divisions(self):
         # Common case: Use self._divisions()
         full_divisions = tuple(self._divisions())
-        if "_take_partitions" not in self._parameters or self._take_partitions is None:
+        if not self._culling:
             return full_divisions
 
         # Specific case: Specific partitions were selected
         new_divisions = []
-        for part in self._take_partitions:
+        for part in self._partitions:
             new_divisions.append(full_divisions[part])
         new_divisions.append(full_divisions[part + 1])
         return tuple(new_divisions)
@@ -350,9 +366,9 @@ class Expr(Operation, metaclass=_ExprMeta):
 
     @property
     def npartitions(self):
-        if "_take_partitions" in self._parameters and self._take_partitions is not None:
+        if self._culling:
             # Special case: Specific partitions were selected
-            return len(self._take_partitions)
+            return len(self._partitions)
         elif "npartitions" in self._parameters:
             idx = self._parameters.index("npartitions")
             return self.operands[idx]
@@ -838,10 +854,7 @@ class Partitions(Expr):
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
-        elif (
-            "_take_partitions" in self.frame._parameters
-            and self.frame._take_partitions is None
-        ):
+        elif "_take_partitions" in self.frame._parameters and not self.frame._culling:
             # We assume that expressions defining a special "_take_partitions"
             # parameter can internally capture the same logic as `Partitions`
             operands = [
@@ -1088,12 +1101,13 @@ class Fused(Blockwise):
     def _task(self, index):
         graph = {self._name: (self.exprs[0]._name, index)}
         for _expr in self.exprs:
+            task_index = _expr._partitions[index]
             if isinstance(_expr, Fused):
-                (_, subgraph, name) = _expr._task(index)
+                (_, subgraph, name) = _expr._task(task_index)
                 graph.update(subgraph)
                 graph[(name, index)] = name
             else:
-                graph[(_expr._name, index)] = _expr._task(index)
+                graph[(_expr._name, index)] = _expr._task(task_index)
 
         for i, dep in enumerate(self.dependencies()):
             graph[self._blockwise_arg(dep, index)] = "_" + str(i)

@@ -35,6 +35,4 @@ class ReadCSV(BlockwiseIO):
         return next(iter(dsk.values()))[0]
 
     def _task(self, index: int):
-        if self._take_partitions is not None:
-            index = self._take_partitions[index]
         return (self._io_func, self._tasks[index][1])
