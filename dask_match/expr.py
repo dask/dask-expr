@@ -858,9 +858,7 @@ class Partitions(Expr):
             # We assume that expressions defining a special "_partitions"
             # parameter can internally capture the same logic as `Partitions`
             operands = [
-                self.partitions
-                if self.frame._parameters[i] == "_partitions"
-                else op
+                self.partitions if self.frame._parameters[i] == "_partitions" else op
                 for i, op in enumerate(self.frame.operands)
             ]
             return type(self.frame)(*operands)
