@@ -1,7 +1,7 @@
 from dask.dataframe.utils import assert_eq
 
 from dask_match.datasets import timeseries
-from dask_match.utils import _check_take_partitions
+from dask_match.utils import _check_culling
 
 
 def test_timeseries():
@@ -43,5 +43,5 @@ def test_timeseries_culling():
 
     # Check that we still get culling without fusion
     df3 = df.optimize(fuse=False)
-    _check_take_partitions(df3.expr, [1])
+    _check_culling(df3.expr, [1])
     assert_eq(df2.index, expected.index)

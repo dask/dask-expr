@@ -22,7 +22,7 @@ class Timeseries(BlockwiseIO):
         "partition_freq",
         "seed",
         "kwargs",
-        "_take_partitions",
+        "_partitions",
     ]
     _defaults = {
         "start": "2000-01-01",
@@ -32,7 +32,7 @@ class Timeseries(BlockwiseIO):
         "partition_freq": "1d",
         "seed": None,
         "kwargs": {},
-        "_take_partitions": None,
+        "_partitions": None,
     }
 
     @property

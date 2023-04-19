@@ -47,7 +47,7 @@ class ReadParquet(BlockwiseIO):
         "parquet_file_extension",
         "filesystem",
         "kwargs",
-        "_take_partitions",
+        "_partitions",
     ]
     _defaults = {
         "columns": None,
@@ -64,7 +64,7 @@ class ReadParquet(BlockwiseIO):
         "parquet_file_extension": (".parq", ".parquet", ".pq"),
         "filesystem": "fsspec",
         "kwargs": None,
-        "_take_partitions": None,
+        "_partitions": None,
     }
 
     @property

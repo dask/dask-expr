@@ -4,8 +4,8 @@ from dask_match.io.io import BlockwiseIO
 
 
 class ReadCSV(BlockwiseIO):
-    _parameters = ["filename", "usecols", "header", "_take_partitions"]
-    _defaults = {"usecols": None, "header": "infer", "_take_partitions": None}
+    _parameters = ["filename", "usecols", "header", "_partitions"]
+    _defaults = {"usecols": None, "header": "infer", "_partitions": None}
 
     @functools.cached_property
     def _ddf(self):

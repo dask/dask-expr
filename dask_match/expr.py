@@ -170,18 +170,18 @@ class Expr(Operation, metaclass=_ExprMeta):
         return [operand for operand in self.operands if isinstance(operand, Expr)]
 
     @property
-    def _culling(self) -> bool:
+    def _culled(self) -> bool:
         """Whether or not output partitions have been culled"""
         return (
-            "_take_partitions" in self._parameters
-            and self.operand("_take_partitions") is not None
+            "_partitions" in self._parameters
+            and self.operand("_partitions") is not None
         )
 
     @property
     def _partitions(self) -> list | tuple | range:
         """Selected partition indices"""
-        if self._culling:
-            return self.operand("_take_partitions")
+        if self._culled:
+            return self.operand("_partitions")
         else:
             return range(self.npartitions)
 
@@ -346,7 +346,7 @@ class Expr(Operation, metaclass=_ExprMeta):
     def divisions(self):
         # Common case: Use self._divisions()
         full_divisions = tuple(self._divisions())
-        if not self._culling:
+        if not self._culled:
             return full_divisions
 
         # Specific case: Specific partitions were selected
@@ -366,7 +366,7 @@ class Expr(Operation, metaclass=_ExprMeta):
 
     @property
     def npartitions(self):
-        if self._culling:
+        if self._culled:
             # Special case: Specific partitions were selected
             return len(self._partitions)
         elif "npartitions" in self._parameters:
@@ -854,12 +854,12 @@ class Partitions(Expr):
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
-        elif "_take_partitions" in self.frame._parameters and not self.frame._culling:
-            # We assume that expressions defining a special "_take_partitions"
+        elif "_partitions" in self.frame._parameters and not self.frame._culled:
+            # We assume that expressions defining a special "_partitions"
             # parameter can internally capture the same logic as `Partitions`
             operands = [
                 self.partitions
-                if self.frame._parameters[i] == "_take_partitions"
+                if self.frame._parameters[i] == "_partitions"
                 else op
                 for i, op in enumerate(self.frame.operands)
             ]

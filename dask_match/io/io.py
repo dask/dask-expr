@@ -39,8 +39,8 @@ class BlockwiseIO(Blockwise, IO):
 class FromPandas(BlockwiseIO):
     """The only way today to get a real dataframe"""
 
-    _parameters = ["frame", "npartitions", "_take_partitions"]
-    _defaults = {"npartitions": 1, "_take_partitions": None}
+    _parameters = ["frame", "npartitions", "_partitions"]
+    _defaults = {"npartitions": 1, "_partitions": None}
 
     @property
     def _meta(self):

@@ -6,7 +6,7 @@ import dask.dataframe as dd
 from dask.dataframe.utils import assert_eq
 
 from dask_match import from_pandas, optimize, read_parquet, read_csv
-from dask_match.utils import _check_take_partitions
+from dask_match.utils import _check_culling
 
 
 def _make_file(dir, format="parquet", df=None):
@@ -135,5 +135,5 @@ def test_io_culling(tmpdir, fmt):
 
     # Check that we still get culling without fusion
     df3 = optimize(df, fuse=False)
-    _check_take_partitions(df3.expr, [1])
+    _check_culling(df3.expr, [1])
     assert_eq(df3, expected, check_index=False)
