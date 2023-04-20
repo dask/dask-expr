@@ -259,7 +259,7 @@ def test_partitions(pdf, df):
 
 
 @pytest.mark.parametrize("ignore_index", [True, False])
-@pytest.mark.parametrize("npartitions", [None, 2])
+@pytest.mark.parametrize("npartitions", [None, 3])
 @pytest.mark.parametrize("max_branch", [32, 8])
 def test_task_shuffle(ignore_index, npartitions, max_branch):
     pdf = pd.DataFrame({"x": list(range(20)) * 5, "y": range(100)})

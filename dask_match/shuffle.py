@@ -3,7 +3,12 @@ import numpy as np
 import math
 
 from dask.dataframe.core import _concat
-from dask.dataframe.shuffle import partitioning_index, shuffle_group
+from dask.dataframe.shuffle import (
+    partitioning_index,
+    shuffle_group,
+    shuffle_group_2,
+    shuffle_group_get,
+)
 from dask.utils import digit, insert
 
 from dask_match.expr import Assign, Expr, Blockwise
@@ -221,7 +226,7 @@ class TaskShuffle(SimpleShuffle):
         for stage in range(stages):
             # Define names for the current stage
             name_input = name
-            if stage == (stages - 1):
+            if stage == (stages - 1) and npartitions == npartitions_input:
                 name = self._name
             else:
                 name = f"stage-{stage}-{self._name}"
@@ -279,6 +284,28 @@ class TaskShuffle(SimpleShuffle):
                             npartitions,
                         )
 
+        if npartitions != npartitions_input:
+            repartition_group_token = "repartition-group-" + name
+
+            dsk2 = {
+                (repartition_group_token, i): (
+                    shuffle_group_2,
+                    (name, k),
+                    partitioning_index,
+                    self.ignore_index,
+                    npartitions,
+                )
+                for i, k in enumerate(parts_out)
+            }
+
+            for p in range(npartitions):
+                dsk2[(name, p)] = (
+                    shuffle_group_get,
+                    (repartition_group_token, p % npartitions_input),
+                    p,
+                )
+
+            dsk.update(dsk2)
         return dsk
 
 

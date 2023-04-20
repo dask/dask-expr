@@ -116,7 +116,7 @@ class Expr(Operation, metaclass=_ExprMeta):
                     param = self._parameters[i]
                     default = self._defaults[param]
                 except (IndexError, KeyError):
-                    param = ""
+                    param = self._parameters[i] if i < len(self._parameters) else ""
                     default = "--no-default--"
 
                 if isinstance(op, pd.core.base.PandasObject):
