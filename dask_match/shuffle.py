@@ -51,15 +51,14 @@ class Shuffle(Expr):
         # shuffle operation from concerete expressions
         backend = self.backend or "tasks"
         if isinstance(backend, ShuffleBackend):
-            lower = backend.from_abstract_shuffle
+            return backend.from_abstract_shuffle(self)
         elif backend == "simple":
-            lower = SimpleShuffle.from_abstract_shuffle
+            return SimpleShuffle.from_abstract_shuffle(self)
         elif backend == "tasks":
-            lower = TaskShuffle.from_abstract_shuffle
+            return TaskShuffle.from_abstract_shuffle(self)            
         else:
             # Only support task-based shuffling for now
             raise ValueError(f"{backend} not supported")
-        return lower(self)
 
     def _layer(self):
         raise NotImplementedError(
