@@ -260,12 +260,19 @@ def test_partitions(pdf, df):
 
 @pytest.mark.parametrize("ignore_index", [True, False])
 @pytest.mark.parametrize("npartitions", [None, 2])
-def test_simple_shuffle(ignore_index, npartitions):
+@pytest.mark.parametrize("max_branch", [32, 8])
+def test_task_shuffle(ignore_index, npartitions, max_branch):
     df = from_pandas(
         pd.DataFrame({"x": list(range(20)) * 5, "y": range(100)}),
         npartitions=10,
     )
-    df2 = df.shuffle("x", npartitions=npartitions, ignore_index=ignore_index)
+    df2 = df.shuffle(
+        "x",
+        npartitions=npartitions,
+        ignore_index=ignore_index,
+        max_branch=max_branch,
+    )
+
     # Check that the output partition count is correct
     assert df2.npartitions == (npartitions or df.npartitions)
 

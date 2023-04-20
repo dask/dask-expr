@@ -1,8 +1,10 @@
 import operator
 import numpy as np
+import math
 
 from dask.dataframe.core import _concat
 from dask.dataframe.shuffle import partitioning_index, shuffle_group
+from dask.utils import digit, insert
 
 from dask_match.expr import Assign, Expr, Blockwise
 
@@ -42,13 +44,15 @@ class Shuffle(Expr):
     def simplify(self):
         # Use `backend` to decide how to compose a
         # shuffle operation from concerete expressions
-        backend = self.backend or "simple"
+        backend = self.backend or "tasks"
         if isinstance(backend, ShuffleBackend):
             lower = backend.from_abstract_shuffle
         elif backend == "simple":
-            # Only support "SimpleShuffle" for now
             lower = SimpleShuffle.from_abstract_shuffle
+        elif backend == "tasks":
+            lower = TaskShuffle.from_abstract_shuffle
         else:
+            # Only support task-based shuffling for now
             raise ValueError(f"{backend} not supported")
         return lower(self)
 
@@ -168,6 +172,100 @@ class SimpleShuffle(ShuffleBackend):
                         self.ignore_index,
                         self.npartitions,
                     )
+
+        return dsk
+
+
+class TaskShuffle(SimpleShuffle):
+    """Staged task-based shuffle implementation"""
+
+    def _layer(self):
+        max_branch = self.options.get("max_branch", 32)
+        npartitions = self.npartitions_out
+        if npartitions <= max_branch:
+            # We are creating a small number of output partitions.
+            # No need for staged shuffling. Staged shuffling will
+            # sometimes require extra work/communication in this case.
+            return super()._layer()
+
+        # Calculate number of stages and splits per stage
+        npartitions_input = self.frame.npartitions
+        stages = int(math.ceil(math.log(npartitions_input) / math.log(max_branch)))
+        if stages > 1:
+            nsplits = int(math.ceil(npartitions_input ** (1 / stages)))
+        else:
+            nsplits = npartitions_input
+
+        # Figure out how many
+        inputs = [
+            tuple(digit(i, j, nsplits) for j in range(stages))
+            for i in range(nsplits**stages)
+        ]
+        parts_out = range(len(inputs))  # Could apply culling here
+
+        # Build graph
+        dsk = {}
+        name = self.frame._name
+        for stage in range(stages):
+            # Define names for the current stage
+            name_input = name
+            if stage == (stages - 1):
+                name = self._name
+            else:
+                name = f"stage-{stage}-{self._name}"
+            shuffle_group_name = "group-" + name
+            split_name = "split-" + name
+
+            inp_part_map = {inp: i for i, inp in enumerate(inputs)}
+            for part in parts_out:
+                out = inputs[part]
+
+                _concat_list = []  # get_item tasks to concat for this output partition
+                for i in range(nsplits):
+                    # Get out each individual dataframe piece from the dicts
+                    _inp = insert(out, stage, i)
+                    _idx = out[stage]
+                    _concat_list.append((split_name, _idx, _inp))
+
+                # concatenate those pieces together, with their friends
+                dsk[(name, part)] = (
+                    _concat,
+                    _concat_list,
+                    self.ignore_index,
+                )
+
+                for _, _idx, _inp in _concat_list:
+                    dsk[(split_name, _idx, _inp)] = (
+                        operator.getitem,
+                        (shuffle_group_name, _inp),
+                        _idx,
+                    )
+
+                    if (shuffle_group_name, _inp) not in dsk:
+                        # Initial partitions (output of previous stage)
+                        _part = inp_part_map[_inp]
+                        if stage == 0:
+                            if _part < npartitions_input:
+                                input_key = (name_input, _part)
+                            else:
+                                # In order to make sure that to_serialize() serialize the
+                                # empty dataframe input, we add it as a key.
+                                input_key = (shuffle_group_name, _inp, "empty")
+                                dsk[input_key] = self.frame._meta
+                        else:
+                            input_key = (name_input, _part)
+
+                        # Convert partition into dict of dataframe pieces
+                        dsk[(shuffle_group_name, _inp)] = (
+                            shuffle_group,
+                            input_key,
+                            self.partitioning_index,
+                            stage,
+                            nsplits,
+                            npartitions_input,
+                            self.ignore_index,
+                            npartitions,
+                        )
 
         return dsk
 

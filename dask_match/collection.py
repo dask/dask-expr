@@ -160,7 +160,7 @@ class FrameBase(DaskMethodsMixin):
         ignore_index: bool = False,
         npartitions: int | None = None,
         backend: str | None = None,
-        options: dict | None = None,
+        **options,
     ):
         """Shuffle a collection by column names
 
@@ -175,7 +175,7 @@ class FrameBase(DaskMethodsMixin):
             be preserved by default.
         backend: optional
             Desired shuffle backend. Default chosen at optimization time.
-        options: optional
+        **options: optional
             Algorithm-specific options.
         """
         from dask_match.shuffle import Shuffle
@@ -191,7 +191,7 @@ class FrameBase(DaskMethodsMixin):
                 npartitions,
                 ignore_index,
                 backend,
-                options or {},
+                options,
             )
         )
 
