@@ -118,9 +118,21 @@ class SimpleShuffle(ShuffleBackend):
             raise ValueError(
                 f"{type(partitioning_index)} not a supported type for partitioning_index"
             )
-        partitioning_index = _select_columns_or_index(frame, partitioning_index)
+
+        # Don't need to assign "_partitions" column if we are
+        # shuffling on a list of columns
+        nset = set(partitioning_index)
+        if nset & set(frame.columns) == nset:
+            return cls(
+                frame,
+                partitioning_index,
+                npartitions_out,
+                ignore_index,
+                options,
+            )
 
         # Assign partitioning-index as a new "_partitions" column
+        partitioning_index = _select_columns_or_index(frame, partitioning_index)
         index_added = Assign(
             frame,
             "_partitions",
@@ -340,11 +352,12 @@ def _is_index_level_reference(expr, key):
     To be considered an index level reference, `key` must match the index name
     and must NOT match the name of any column.
     """
+    index_name = expr.index._meta.name
     return (
-        expr.index.name is not None
+        index_name is not None
         and not isinstance(key, Expr)
         and (np.isscalar(key) or isinstance(key, tuple))
-        and key == expr.index.name
+        and key == index_name
         and key not in getattr(expr, "columns", ())
     )
 

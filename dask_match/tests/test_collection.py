@@ -262,10 +262,8 @@ def test_partitions(pdf, df):
 @pytest.mark.parametrize("npartitions", [None, 2])
 @pytest.mark.parametrize("max_branch", [32, 8])
 def test_task_shuffle(ignore_index, npartitions, max_branch):
-    df = from_pandas(
-        pd.DataFrame({"x": list(range(20)) * 5, "y": range(100)}),
-        npartitions=10,
-    )
+    pdf = pd.DataFrame({"x": list(range(20)) * 5, "y": range(100)})
+    df = from_pandas(pdf, npartitions=10)
     df2 = df.shuffle(
         "x",
         npartitions=npartitions,
@@ -282,6 +280,32 @@ def test_task_shuffle(ignore_index, npartitions, max_branch):
     # Check that df was really partitioned by "x"
     unique = []
     for part in dask.compute(list(df2["x"].partitions))[0]:
+        unique.extend(part.unique().tolist())
+    # If any values of "x" can be found in multiple
+    # partitions, then `len(unique)` will be >20
+    assert sorted(unique) == list(range(20))
+
+
+@pytest.mark.parametrize("npartitions", [None, 2])
+@pytest.mark.parametrize("max_branch", [32, 8])
+def test_task_shuffle_index(npartitions, max_branch):
+    pdf = pd.DataFrame({"x": list(range(20)) * 5, "y": range(100)}).set_index("x")
+    df = from_pandas(pdf, npartitions=10)
+    df2 = df.shuffle(
+        "x",
+        npartitions=npartitions,
+        max_branch=max_branch,
+    )
+
+    # Check that the output partition count is correct
+    assert df2.npartitions == (npartitions or df.npartitions)
+
+    # Check the computed (re-ordered) result
+    assert_eq(df, df2)
+
+    # Check that df was really partitioned by "x"
+    unique = []
+    for part in dask.compute(list(df2.index.partitions))[0]:
         unique.extend(part.unique().tolist())
     # If any values of "x" can be found in multiple
     # partitions, then `len(unique)` will be >20
