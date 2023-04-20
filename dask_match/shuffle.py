@@ -108,6 +108,8 @@ class ShuffleBackend(Shuffle):
 class SimpleShuffle(ShuffleBackend):
     """Simple task-based shuffle implementation"""
 
+    lazy_hash_support = True
+
     @classmethod
     def from_abstract_shuffle(cls, expr: Shuffle) -> Expr:
         frame = expr.frame
@@ -124,17 +126,24 @@ class SimpleShuffle(ShuffleBackend):
                 f"{type(partitioning_index)} not a supported type for partitioning_index"
             )
 
-        # Don't need to assign "_partitions" column if we are
-        # shuffling on a list of columns
-        nset = set(partitioning_index)
-        if nset & set(frame.columns) == nset:
-            return cls(
-                frame,
-                partitioning_index,
-                npartitions_out,
-                ignore_index,
-                options,
-            )
+        # Reduce partition count if necessary
+        if npartitions_out < frame.npartitions:
+            from dask_match.repartition import ReducePartitionCount
+
+            frame = ReducePartitionCount(frame, npartitions_out)
+
+        if cls.lazy_hash_support:
+            # Don't need to assign "_partitions" column
+            # if we are shuffling on a list of columns
+            nset = set(partitioning_index)
+            if nset & set(frame.columns) == nset:
+                return cls(
+                    frame,
+                    partitioning_index,
+                    npartitions_out,
+                    ignore_index,
+                    options,
+                )
 
         # Assign partitioning-index as a new "_partitions" column
         partitioning_index = _select_columns_or_index(frame, partitioning_index)
