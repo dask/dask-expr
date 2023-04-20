@@ -2,7 +2,7 @@ import operator
 import numpy as np
 import math
 
-from dask.dataframe.core import _concat
+from dask.dataframe.core import _concat, make_meta
 from dask.dataframe.shuffle import (
     partitioning_index,
     shuffle_group,
@@ -222,14 +222,20 @@ class TaskShuffle(SimpleShuffle):
 
         # Build graph
         dsk = {}
-        name = self.frame._name
+        meta_input = make_meta(self.frame._meta)
         for stage in range(stages):
-            # Define names for the current stage
-            name_input = name
+            # Define input-stage name
+            if stage == 0:
+                name_input = self.frame._name
+            else:
+                name_input = name
+
+            # Define current stage name
             if stage == (stages - 1) and npartitions == npartitions_input:
                 name = self._name
             else:
                 name = f"stage-{stage}-{self._name}"
+
             shuffle_group_name = "group-" + name
             split_name = "split-" + name
 
@@ -268,7 +274,7 @@ class TaskShuffle(SimpleShuffle):
                                 # In order to make sure that to_serialize() serialize the
                                 # empty dataframe input, we add it as a key.
                                 input_key = (shuffle_group_name, _inp, "empty")
-                                dsk[input_key] = self.frame._meta
+                                dsk[input_key] = meta_input
                         else:
                             input_key = (name_input, _part)
 
@@ -285,23 +291,23 @@ class TaskShuffle(SimpleShuffle):
                         )
 
         if npartitions != npartitions_input:
-            repartition_group_token = "repartition-group-" + name
+            repartition_group_name = "repartition-group-" + name
 
             dsk2 = {
-                (repartition_group_token, i): (
+                (repartition_group_name, i): (
                     shuffle_group_2,
-                    (name, k),
-                    partitioning_index,
+                    (name, i),
+                    self.partitioning_index,
                     self.ignore_index,
                     npartitions,
                 )
-                for i, k in enumerate(parts_out)
+                for i in range(npartitions_input)
             }
 
             for p in range(npartitions):
-                dsk2[(name, p)] = (
+                dsk2[(self._name, p)] = (
                     shuffle_group_get,
-                    (repartition_group_token, p % npartitions_input),
+                    (repartition_group_name, p % npartitions_input),
                     p,
                 )
 
