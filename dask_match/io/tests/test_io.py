@@ -137,3 +137,12 @@ def test_io_culling(tmpdir, fmt):
     df3 = optimize(df, fuse=False)
     _check_culling(df3.expr, [1])
     assert_eq(df3, expected, check_index=False)
+
+
+@pytest.mark.parametrize("sort", [True, False])
+def test_from_pandas(sort):
+    pdf = pd.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
+    df = from_pandas(pdf, npartitions=2, sort=sort)
+
+    assert df.divisions == (0, 3, 5) if sort else (None,) * 3
+    assert_eq(df, pdf)

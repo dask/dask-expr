@@ -1,4 +1,7 @@
 import math
+import functools
+
+from dask.dataframe.io.io import sorted_division_locations
 
 from dask_match.expr import Blockwise, Expr
 
@@ -39,20 +42,40 @@ class BlockwiseIO(Blockwise, IO):
 class FromPandas(BlockwiseIO):
     """The only way today to get a real dataframe"""
 
-    _parameters = ["frame", "npartitions", "_partitions"]
-    _defaults = {"npartitions": 1, "_partitions": None}
+    _parameters = ["frame", "npartitions", "sort", "_partitions"]
+    _defaults = {"npartitions": 1, "sort": True, "_partitions": None}
 
     @property
     def _meta(self):
         return self.frame.head(0)
 
+    @functools.cached_property
+    def _divisions_and_locations(self):
+        data = self.frame
+        nrows = len(data)
+        npartitions = self.operand("npartitions")
+        if self.sort:
+            if not data.index.is_monotonic_increasing:
+                data = data.sort_index(ascending=True)
+            divisions, locations = sorted_division_locations(
+                data.index,
+                npartitions=npartitions,
+                chunksize=None,
+            )
+        else:
+            chunksize = int(math.ceil(nrows / npartitions))
+            locations = list(range(0, nrows, chunksize)) + [len(data)]
+            divisions = (None,) * len(locations)
+        return divisions, locations
+
     def _divisions(self):
-        return [None] * (self.operand("npartitions") + 1)
+        return self._divisions_and_locations[0]
+
+    def _locations(self):
+        return self._divisions_and_locations[1]
 
     def _task(self, index: int):
-        partsize = int(math.ceil(len(self.frame) / self.operand("npartitions")))
-        start = partsize * index
-        stop = partsize * (index + 1)
+        start, stop = self._locations()[index : index + 2]
         return self.frame.iloc[start:stop]
 
     def __str__(self):
