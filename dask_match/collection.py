@@ -210,24 +210,36 @@ class FrameBase(DaskMethodsMixin):
         )
         return new_collection(new_expr)
 
-    def repartition(self, npartitions=None):
+    def repartition(self, npartitions=None, divisions=None, force=False):
         """Repartition a collection
+
+        Exactly one of `divisions` or `npartitions` should be specified.
+        A ``ValueError`` will be raised when that is not the case.
 
         Parameters
         ----------
-
         npartitions : int, optional
             Approximate number of partitions of output. The number of
             partitions used may be slightly lower than npartitions depending
             on data distribution, but will never be higher.
+        divisions : list, optional
+            The "dividing lines" used to split the dataframe into partitions.
+            For ``divisions=[0, 10, 50, 100]``, there would be three output partitions,
+            where the new index contained [0, 10), [10, 50), and [50, 100), respectively.
+            See https://docs.dask.org/en/latest/dataframe-design.html#partitions.
+        force : bool, default False
+            Allows the expansion of the existing divisions.
+            If False then the new divisions' lower and upper bounds must be
+            the same as the old divisions'.
         """
 
-        if npartitions is None:
-            # TODO: Support `divisions=`
-            raise ValueError("Please provide an ``npartitions=`` keyword argument.")
+        if sum([divisions is not None, npartitions is not None]) != 1:
+            raise ValueError(
+                "Please provide exactly one of the ``npartitions=`` or "
+                "``divisions=`` keyword arguments."
+            )
 
-        new_divisions = None
-        return new_collection(Repartition(self.expr, npartitions, new_divisions))
+        return new_collection(Repartition(self.expr, npartitions, divisions, force))
 
 
 # Add operator attributes

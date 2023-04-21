@@ -3,6 +3,8 @@ import pickle
 
 import pandas as pd
 import pytest
+
+import dask
 from dask.dataframe.utils import assert_eq
 from dask.utils import M
 
@@ -336,8 +338,25 @@ def test_map_partitions_broadcast(df):
     assert_eq(df2, df + df["x"].sum() + 123)
 
 
+@pytest.mark.parametrize("sort", [True, False])
 @pytest.mark.parametrize("npartitions", [7, 12])
-def test_repartition_npartitions(df, npartitions):
+def test_repartition_npartitions(pdf, npartitions, sort):
+    df = from_pandas(pdf, sort=sort) + 1
     df2 = df.repartition(npartitions=npartitions)
     assert df2.npartitions == npartitions
     assert_eq(df, df2)
+
+
+def test_repartition_divisions(df):
+    end = df.divisions[-1] + 100
+    stride = end // (df.npartitions + 2)
+    divisions = tuple(range(0, end, stride))
+    df2 = (df + 1).repartition(divisions=divisions, force=True)
+    assert df2.divisions == divisions
+    assert_eq(df + 1, df2)
+
+    # Check partitions
+    for p, part in enumerate(dask.compute(list(df2.index.partitions))[0]):
+        if len(part):
+            assert part.min() >= df2.divisions[p]
+            assert part.max() < df2.divisions[p + 1]
