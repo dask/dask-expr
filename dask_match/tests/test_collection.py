@@ -347,13 +347,15 @@ def test_repartition_npartitions(pdf, npartitions, sort):
     assert_eq(df, df2)
 
 
-def test_repartition_divisions(df):
+@pytest.mark.parametrize("opt", [True, False])
+def test_repartition_divisions(df, opt):
     end = df.divisions[-1] + 100
     stride = end // (df.npartitions + 2)
     divisions = tuple(range(0, end, stride))
-    df2 = (df + 1).repartition(divisions=divisions, force=True)
+    df2 = (df + 1).repartition(divisions=divisions, force=True)["x"]
+    df2 = optimize(df2) if opt else df2
     assert df2.divisions == divisions
-    assert_eq(df + 1, df2)
+    assert_eq((df + 1)["x"], df2)
 
     # Check partitions
     for p, part in enumerate(dask.compute(list(df2.index.partitions))[0]):
