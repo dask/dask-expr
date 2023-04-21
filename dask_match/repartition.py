@@ -11,7 +11,6 @@ from dask_match.expr import Expr
 
 
 class Repartition(Expr):
-
     _parameters = ["frame", "n", "new_divisions"]
 
     @property
@@ -76,7 +75,8 @@ class ReducePartitionCount(Repartition):
                 zip(new_partitions_boundaries, new_partitions_boundaries[1:])
             )
         }
-    
+
+
 class IncreasePartitionCount(Repartition):
     _parameters = ["frame", "n"]
 

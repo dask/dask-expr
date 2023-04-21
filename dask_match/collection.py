@@ -224,14 +224,10 @@ class FrameBase(DaskMethodsMixin):
 
         if npartitions is None:
             # TODO: Support `divisions=`
-            raise ValueError(
-                "Please provide an ``npartitions=`` keyword argument."
-            )
+            raise ValueError("Please provide an ``npartitions=`` keyword argument.")
 
         new_divisions = None
-        return new_collection(
-            Repartition(self.expr, npartitions, new_divisions)
-        )
+        return new_collection(Repartition(self.expr, npartitions, new_divisions))
 
 
 # Add operator attributes
