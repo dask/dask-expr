@@ -1,12 +1,18 @@
 import operator
 import numpy as np
 import math
+import tlz as toolz
+import uuid
 
 from dask.dataframe.core import _concat, make_meta
 from dask.dataframe.shuffle import (
+    barrier,
+    collect,
+    maybe_buffered_partd,
     partitioning_index,
     shuffle_group,
     shuffle_group_2,
+    shuffle_group_3,
     shuffle_group_get,
 )
 from dask.utils import digit, insert
@@ -322,6 +328,46 @@ class TaskShuffle(SimpleShuffle):
 
             dsk.update(dsk2)
         return dsk
+
+
+class DiskShuffle(ShuffleBackend):
+    """Disk-based shuffle implementation"""
+
+    lazy_hash_support = False
+
+    def _layer(self):
+        column = self.partitioning_index
+        df = self.frame
+
+        npartitions = self.npartitions_out
+        if npartitions is None:
+            npartitions = df.npartitions
+
+        token = self._name.split("-")[-1]
+        always_new_token = uuid.uuid1().hex
+
+        p = ("zpartd-" + always_new_token,)
+        dsk1 = {p: (maybe_buffered_partd(),)}
+
+        # Partition data on disk
+        name = "shuffle-partition-" + always_new_token
+        dsk2 = {
+            (name, i): (shuffle_group_3, key, column, npartitions, p)
+            for i, key in enumerate(df.__dask_keys__())
+        }
+
+        # Barrier
+        barrier_token = "barrier-" + always_new_token
+        dsk3 = {barrier_token: (barrier, list(dsk2))}
+
+        # Collect groups
+        name = "shuffle-collect-" + token
+        dsk4 = {
+            (name, i): (collect, p, i, df._meta, barrier_token)
+            for i in range(npartitions)
+        }
+
+        return toolz.merge(dsk1, dsk2, dsk3, dsk4)
 
 
 #
