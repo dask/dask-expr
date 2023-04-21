@@ -112,38 +112,42 @@ class Expr(Operation, metaclass=_ExprMeta):
     def __repr__(self):
         return str(self)
 
-    def _tree_repr_lines(self, indent=0):
-        header = funcname(type(self)) + ":"
+    def _tree_repr_operand(self, i, lines, header, collapse_fusion=True):
+        op = self.operands[i]
+        if isinstance(op, Expr):
+            lines.extend(op._tree_repr_lines(2, collapse_fusion=collapse_fusion))
+        else:
+            try:
+                param = self._parameters[i]
+                default = self._defaults[param]
+            except (IndexError, KeyError):
+                param = self._parameters[i] if i < len(self._parameters) else ""
+                default = "--no-default--"
+
+            if isinstance(op, pd.core.base.PandasObject):
+                op = "<pandas>"
+
+            elif repr(op) != repr(default):
+                if param:
+                    header += f" {param}={repr(op)}"
+                else:
+                    header += repr(op)
+        return lines, header
+
+    def _tree_repr_lines(self, indent=0, collapse_fusion=True):
         lines = []
-        for i, op in enumerate(self.operands):
-            if isinstance(op, Expr):
-                lines.extend(op._tree_repr_lines(2))
-            else:
-                try:
-                    param = self._parameters[i]
-                    default = self._defaults[param]
-                except (IndexError, KeyError):
-                    param = ""
-                    default = "--no-default--"
-
-                if isinstance(op, pd.core.base.PandasObject):
-                    op = "<pandas>"
-
-                elif repr(op) != repr(default):
-                    if param:
-                        header += f" {param}={repr(op)}"
-                    else:
-                        header += repr(op)
+        header = funcname(type(self)) + ":"
+        for i in range(len(self.operands)):
+            lines, header = self._tree_repr_operand(i, lines, header)
         lines = [header] + lines
         lines = [" " * indent + line for line in lines]
-
         return lines
 
-    def tree_repr(self):
-        return os.linesep.join(self._tree_repr_lines())
+    def tree_repr(self, collapse_fusion=True):
+        return os.linesep.join(self._tree_repr_lines(collapse_fusion=collapse_fusion))
 
-    def pprint(self):
-        for line in self._tree_repr_lines():
+    def pprint(self, collapse_fusion=True):
+        for line in self._tree_repr_lines(collapse_fusion=collapse_fusion):
             print(line)
 
     def __hash__(self):
@@ -1106,6 +1110,32 @@ class Fused(Blockwise):
     @functools.cached_property
     def _meta(self):
         return self.exprs[0]._meta
+
+    def _tree_repr_lines(self, indent=0, collapse_fusion=True):
+        # Start with fused expressions
+        lines = []
+        root = self.exprs[0]
+        if collapse_fusion:
+            root_id = f"Fused with {len(self.exprs) - 1} expressions"
+        else:
+            root_id = root._name[-5:]
+        for i, line in enumerate(
+            root._tree_repr_lines(0, collapse_fusion=collapse_fusion)
+        ):
+            if i == 0:
+                header = line.replace(":", f"({root_id}):", 1)
+                if collapse_fusion:
+                    break
+            elif i < len(self.exprs):
+                fusion_info = f"(Fused with {root_id}):"
+                lines.append(line.replace(":", fusion_info, 1))
+
+        # Add lines for external dependencies
+        for i in range(1, len(self.operands)):
+            lines, header = self._tree_repr_operand(i, lines, header)
+        lines = [header] + lines
+        lines = [" " * indent + line for line in lines]
+        return lines
 
     def __str__(self):
         names = [expr._name.split("-")[0] for expr in self.exprs]
