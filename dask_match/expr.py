@@ -512,7 +512,8 @@ class MapPartitions(Blockwise):
         "frame",
         "func",
         "meta",
-        "options",
+        "enforce_metadata",
+        "transform_divisions",
         "kwargs",
     ]
 
@@ -523,14 +524,6 @@ class MapPartitions(Blockwise):
     @property
     def args(self):
         return [self.frame] + self.operands[len(self._parameters) :]
-
-    @property
-    def enforce_metadata(self):
-        return self.options.get("enforce_metadata", True)
-
-    @property
-    def transform_divisions(self):
-        return self.options.get("transform_divisions", True)
 
     @functools.cached_property
     def _meta(self):

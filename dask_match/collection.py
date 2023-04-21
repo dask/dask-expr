@@ -202,10 +202,8 @@ class FrameBase(DaskMethodsMixin):
             self.expr,
             func,
             meta,
-            {
-                "enforce_metadata": enforce_metadata,
-                "transform_divisions": transform_divisions,
-            },
+            enforce_metadata,
+            transform_divisions,
             kwargs,
             *[arg.expr if isinstance(arg, FrameBase) else arg for arg in args],
         )
