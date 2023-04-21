@@ -10,8 +10,9 @@ from tlz import unique
 from dask.dataframe import methods
 from dask.dataframe.core import split_evenly
 from dask.dataframe.utils import is_series_like
+from matchpy import CustomConstraint, Pattern, ReplacementRule, Wildcard
 
-from dask_match.expr import Expr
+from dask_match.expr import Expr, Filter, Projection
 
 
 class Repartition(Expr):
@@ -77,6 +78,25 @@ class Repartition(Expr):
             return RepartitionDivisions(self.frame, self.new_divisions, self.force)
         else:
             raise NotImplementedError()
+
+    @classmethod
+    def _replacement_rules(cls):
+        # Move filter or column projection before repartitioning
+        frame, other = map(Wildcard.dot, ["frame", "other"])
+
+        def reorder(frame, other, op=Filter):
+            return type(frame)(op(frame.operands[0], other), *frame.operands[1:])
+
+        supported = CustomConstraint(
+            lambda frame, other: (
+                # filter-pushdown gets messy if other is an Expr
+                isinstance(frame, cls)
+                and not isinstance(other, Expr)
+            )
+        )
+        for op in [Filter, Projection]:
+            pattern = Pattern(op(frame, other), supported)
+            yield ReplacementRule(pattern, functools.partial(reorder, op=op))
 
 
 class RepartitionImpl(Repartition):
