@@ -15,7 +15,7 @@ from dask.dataframe.shuffle import (
     shuffle_group_3,
     shuffle_group_get,
 )
-from dask.utils import digit, insert
+from dask.utils import digit, insert, get_default_shuffle_algorithm
 
 from dask_match.expr import Assign, Expr, Blockwise
 
@@ -55,13 +55,17 @@ class Shuffle(Expr):
     def simplify(self):
         # Use `backend` to decide how to compose a
         # shuffle operation from concerete expressions
-        backend = self.backend or "tasks"
+        # TODO: Support "p2p"
+        backend = self.backend or get_default_shuffle_algorithm()
+        backend = "tasks" if backend == "p2p" else backend
         if isinstance(backend, ShuffleBackend):
             return backend.from_abstract_shuffle(self)
+        elif backend == "disk":
+            return DiskShuffle.from_abstract_shuffle(self)
         elif backend == "simple":
             return SimpleShuffle.from_abstract_shuffle(self)
         elif backend == "tasks":
-            return TaskShuffle.from_abstract_shuffle(self)            
+            return TaskShuffle.from_abstract_shuffle(self)
         else:
             # Only support task-based shuffling for now
             raise ValueError(f"{backend} not supported")
@@ -81,7 +85,7 @@ class Shuffle(Expr):
 
 
 #
-# ShuffleBackend
+# ShuffleBackend Implementations
 #
 
 
@@ -103,11 +107,6 @@ class ShuffleBackend(Shuffle):
 
     def simplify(self):
         return None
-
-
-#
-# SimpleShuffle
-#
 
 
 class SimpleShuffle(ShuffleBackend):
@@ -329,7 +328,7 @@ class TaskShuffle(SimpleShuffle):
         return dsk
 
 
-class DiskShuffle(ShuffleBackend):
+class DiskShuffle(SimpleShuffle):
     """Disk-based shuffle implementation"""
 
     lazy_hash_support = False
@@ -342,7 +341,6 @@ class DiskShuffle(ShuffleBackend):
         if npartitions is None:
             npartitions = df.npartitions
 
-        token = self._name.split("-")[-1]
         always_new_token = uuid.uuid1().hex
 
         p = ("zpartd-" + always_new_token,)
@@ -360,9 +358,8 @@ class DiskShuffle(ShuffleBackend):
         dsk3 = {barrier_token: (barrier, list(dsk2))}
 
         # Collect groups
-        name = "shuffle-collect-" + token
         dsk4 = {
-            (name, i): (collect, p, i, df._meta, barrier_token)
+            (self._name, i): (collect, p, i, df._meta, barrier_token)
             for i in range(npartitions)
         }
 
