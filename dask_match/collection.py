@@ -14,6 +14,7 @@ from tlz import first
 
 from dask_match import expr
 from dask_match.expr import no_default
+from dask_match.repartition import Repartition
 
 #
 # Utilities to wrap Expr API
@@ -208,6 +209,29 @@ class FrameBase(DaskMethodsMixin):
             *[arg.expr if isinstance(arg, FrameBase) else arg for arg in args],
         )
         return new_collection(new_expr)
+
+    def repartition(self, npartitions=None):
+        """Repartition a collection
+
+        Parameters
+        ----------
+
+        npartitions : int, optional
+            Approximate number of partitions of output. The number of
+            partitions used may be slightly lower than npartitions depending
+            on data distribution, but will never be higher.
+        """
+
+        if npartitions is None:
+            # TODO: Support `divisions=`
+            raise ValueError(
+                "Please provide an ``npartitions=`` keyword argument."
+            )
+
+        new_divisions = None
+        return new_collection(
+            Repartition(self.expr, npartitions, new_divisions)
+        )
 
 
 # Add operator attributes

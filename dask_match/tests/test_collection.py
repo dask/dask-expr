@@ -334,3 +334,10 @@ def test_map_partitions_broadcast(df):
 
     df2 = df.map_partitions(combine_x_y, df["x"].sum(), 123, foo="bar")
     assert_eq(df2, df + df["x"].sum() + 123)
+
+
+@pytest.mark.parametrize("npartitions", [7, 12])
+def test_repartition_npartitions(df, npartitions):
+    df2 = df.repartition(npartitions=npartitions)
+    assert df2.npartitions == npartitions
+    assert_eq(df, df2)
