@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from functools import cached_property, lru_cache, partial
+from functools import cached_property, partial
 
-from dask.base import tokenize
 from dask.dataframe.io.parquet.core import (
     ParquetFunctionWrapper,
     get_engine,
@@ -13,7 +12,7 @@ from dask.dataframe.io.parquet.utils import _split_user_options
 from dask.utils import natural_sort_key
 from matchpy import CustomConstraint, Pattern, ReplacementRule, Wildcard
 
-from dask_match.expr import EQ, GE, GT, LE, LT, NE, Filter
+from dask_match.expr import EQ, GE, GT, LE, LT, NE, Filter, Projection
 from dask_match.io import BlockwiseIO
 
 NONE_LABEL = "__null_dask_index__"
@@ -79,6 +78,12 @@ class ReadParquet(BlockwiseIO):
 
             return pd.Index(_list_columns(columns_operand))
 
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            operands = list(self.operands)
+            operands[self._parameters.index("columns")] = parent.operand("columns")
+            return ReadParquet(*operands)
+
     @classmethod
     def _replacement_rules(cls):
         # All wildcards defined here.
@@ -89,17 +94,6 @@ class ReadParquet(BlockwiseIO):
             Wildcard.dot, ["path", "columns", "filters", "x", "y"]
         )
         other = {w.variable_name: w for w in map(Wildcard.dot, cls._parameters[3:])}
-
-        # Column projection
-        def project_columns(path, columns, filters, x, **kwargs):
-            return ReadParquet(
-                path, columns=_list_columns(x), filters=filters, **kwargs
-            )
-
-        pattern = Pattern(
-            ReadParquet(path, columns=columns, filters=filters, **other)[x]
-        )
-        yield ReplacementRule(pattern, project_columns)
 
         # Simple dict to make sure field comes first in filter
         flip_op = {LE: GE, LT: GT, GE: LE, GT: LT}
