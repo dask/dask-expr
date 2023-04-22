@@ -12,10 +12,10 @@ from dask.base import normalize_token, tokenize
 from dask.core import ishashable
 from dask.dataframe import methods
 from dask.dataframe.core import (
-    is_dataframe_like,
-    apply_and_enforce,
-    _get_meta_map_partitions,
     _get_divisions_map_partitions,
+    _get_meta_map_partitions,
+    apply_and_enforce,
+    is_dataframe_like,
 )
 from dask.utils import M, apply, funcname
 from matchpy import (
@@ -151,6 +151,18 @@ class Expr(Operation, metaclass=_ExprMeta):
 
     def __reduce__(self):
         return type(self), tuple(self.operands)
+
+    def _depth(self):
+        """Depth of the expression tree
+
+        Returns
+        -------
+        depth: int
+        """
+        if not self.dependencies():
+            return 1
+        else:
+            return max(expr._depth() for expr in self.dependencies()) + 1
 
     def __getattr__(self, key):
         try:

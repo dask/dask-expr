@@ -334,3 +334,9 @@ def test_map_partitions_broadcast(df):
 
     df2 = df.map_partitions(combine_x_y, df["x"].sum(), 123, foo="bar")
     assert_eq(df2, df + df["x"].sum() + 123)
+
+
+def test_depth(df):
+    assert df._depth() == 1
+    assert (df + 1)._depth() == 2
+    assert ((df.x + 1) + df.y)._depth() == 4
