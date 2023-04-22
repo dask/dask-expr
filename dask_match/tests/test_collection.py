@@ -188,6 +188,13 @@ def test_head_down(df):
     assert not isinstance(optimized.expr, expr.Head)
 
 
+def test_head_head(df):
+    a = df.head(compute=False).head(compute=False)
+    b = df.head(compute=False)
+
+    assert a.optimize()._name == b.optimize()._name
+
+
 def test_projection_stacking(df):
     result = df[["x", "y"]]["x"]
     optimized = optimize(result, fuse=False)
@@ -339,3 +346,10 @@ def test_map_partitions_broadcast(df):
 
     df2 = df.map_partitions(combine_x_y, df["x"].sum(), 123, foo="bar")
     assert_eq(df2, df + df["x"].sum() + 123)
+
+
+def test_partitions_nested(df):
+    a = expr.Partitions(expr.Partitions(df.expr, [2, 4, 6]), [0, 2])
+    b = expr.Partitions(df.expr, [2, 6])
+
+    assert a.optimize()._name == b.optimize()._name
