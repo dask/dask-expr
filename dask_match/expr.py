@@ -242,34 +242,49 @@ class Expr(Operation, metaclass=_ExprMeta):
             whether or not any change occured
         """
         expr = self
+
         while True:
+            # Simplify this node
             out = expr._simplify_down()
             if out is None:
                 out = expr
-            if out._name == expr._name:
-                break
-            else:
+            if out._name != expr._name:
                 expr = out
+                continue
 
-        changed = False
-        new_operands = []
-        for operand in expr.operands:
-            if isinstance(operand, Expr):
-                new = operand.simplify()
-                if new._name != operand._name:
-                    changed = True
+            # If there is one child, allow it to simplify the parent
+            if len(expr.dependencies()) == 1:
+                [child] = expr.dependencies()
+                out = child._simplify_up(expr)
+                if out is not None and out is not expr and out._name != expr._name:
+                    expr = out
+                    continue
+
+            # Simplify all of the children
+            new_operands = []
+            changed = False
+            for operand in expr.operands:
+                if isinstance(operand, Expr):
+                    new = operand.simplify()
+                    if new._name != operand._name:
+                        changed = True
+                else:
+                    new = operand
+                new_operands.append(new)
+
+            if changed:
+                expr = type(expr)(*new_operands)
+                continue
             else:
-                new = operand
-            new_operands.append(new)
-
-        if changed:
-            expr = type(expr)(*new_operands)
-            expr = expr.simplify()
+                break
 
         return expr
 
     def _simplify_down(self):
-        return self
+        return
+
+    def _simplify_up(self, parent):
+        return
 
     def optimize(self, **kwargs):
         return optimize(self, **kwargs)
@@ -670,18 +685,9 @@ class Filter(Blockwise):
     _parameters = ["frame", "predicate"]
     operation = operator.getitem
 
-    @classmethod
-    def _replacement_rules(self):
-        df = Wildcard.dot("df")
-        condition = Wildcard.dot("condition")
-        columns = Wildcard.dot("columns")
-
-        # Project columns down through dataframe
-        # df[df.x > 1].y -> df.y[df.x > 1]
-        yield ReplacementRule(
-            Pattern(Filter(df, condition)[columns]),
-            lambda df, condition, columns: df[columns][condition],
-        )
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            return self.frame[parent.columns][self.predicate]
 
 
 class Projection(Elemwise):
