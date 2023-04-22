@@ -18,15 +18,7 @@ from dask.dataframe.core import (
     is_dataframe_like,
 )
 from dask.utils import M, apply, funcname
-from matchpy import (
-    Arity,
-    CustomConstraint,
-    Operation,
-    Pattern,
-    ReplacementRule,
-    Wildcard,
-    replace_all,
-)
+from matchpy import Arity, Operation, ReplacementRule, replace_all
 from matchpy.expressions.expressions import _OperationMeta
 
 replacement_rules = []
@@ -248,6 +240,8 @@ class Expr(Operation, metaclass=_ExprMeta):
             out = expr._simplify_down()
             if out is None:
                 out = expr
+            if not isinstance(out, Expr):
+                return out
             if out._name != expr._name:
                 expr = out
                 continue
@@ -256,7 +250,11 @@ class Expr(Operation, metaclass=_ExprMeta):
             if len(expr.dependencies()) == 1:
                 [child] = expr.dependencies()
                 out = child._simplify_up(expr)
-                if out is not None and out is not expr and out._name != expr._name:
+                if out is None:
+                    out = expr
+                if not isinstance(out, Expr):
+                    return out
+                if out is not expr and out._name != expr._name:
                     expr = out
                     continue
 
@@ -687,7 +685,7 @@ class Filter(Blockwise):
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
-            return self.frame[parent.columns][self.predicate]
+            return self.frame[parent.operand("columns")][self.predicate]
 
 
 class Projection(Elemwise):
@@ -730,28 +728,6 @@ class Projection(Elemwise):
                 assert b in a
 
             return self.frame.frame[b]
-
-    @classmethod
-    def _replacement_rules(self):
-        df = Wildcard.dot("df")
-        a = Wildcard.dot("a")
-        b = Wildcard.dot("b")
-
-        # Project columns down through dataframe
-        # df[a][b] -> df[b]
-        def projection_merge(df, a, b):
-            if not isinstance(a, list):
-                assert a == b
-            elif isinstance(b, list):
-                assert all(bb in a for bb in b)
-            else:
-                assert b in a
-
-            return df[b]
-
-        yield ReplacementRule(
-            Pattern(Projection(Projection(df, a), b)), projection_merge
-        )
 
 
 class Index(Elemwise):
@@ -806,41 +782,32 @@ class Binop(Elemwise):
     def __str__(self):
         return f"{self.left} {self._operator_repr} {self.right}"
 
-    @classmethod
-    def _replacement_rules(cls):
-        left = Wildcard.dot("left")
-        right = Wildcard.dot("right")
-        columns = Wildcard.dot("columns")
-
-        # Column Projection
-        def transform(left, right, columns, cls=None):
-            if isinstance(left, Expr):
-                left = left[columns]  # TODO: filter just the correct columns
-
-            if isinstance(right, Expr):
-                right = right[columns]
-
-            return cls(left, right)
-
-        # (a + b)[c] -> a[c] + b[c]
-        yield ReplacementRule(
-            Pattern(cls(left, right)[columns]), functools.partial(transform, cls=cls)
-        )
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            if isinstance(self.left, Expr):
+                left = self.left[
+                    parent.operand("columns")
+                ]  # TODO: filter just the correct columns
+            else:
+                left = self.left
+            if isinstance(self.right, Expr):
+                right = self.right[parent.operand("columns")]
+            else:
+                right = self.right
+            return type(self)(left, right)
 
 
 class Add(Binop):
     operation = operator.add
     _operator_repr = "+"
 
-    @classmethod
-    def _replacement_rules(cls):
-        x = Wildcard.dot("x")
-        yield ReplacementRule(
-            Pattern(Add(x, x)),
-            lambda x: Mul(2, x),
-        )
-
-        yield from super()._replacement_rules()
+    def _simplify_down(self):
+        if (
+            isinstance(self.left, Expr)
+            and isinstance(self.right, Expr)
+            and self.left._name == self.right._name
+        ):
+            return 2 * self.left
 
 
 class Sub(Binop):
@@ -852,21 +819,13 @@ class Mul(Binop):
     operation = operator.mul
     _operator_repr = "*"
 
-    @classmethod
-    def _replacement_rules(cls):
-        a, b, c = map(Wildcard.dot, "abc")
-        yield ReplacementRule(
-            Pattern(
-                Mul(a, Mul(b, c)),
-                CustomConstraint(
-                    lambda a, b, c: isinstance(a, numbers.Number)
-                    and isinstance(b, numbers.Number)
-                ),
-            ),
-            lambda a, b, c: Mul(a * b, c),
-        )
-
-        yield from super()._replacement_rules()
+    def _simplify_down(self):
+        if (
+            isinstance(self.right, Mul)
+            and isinstance(self.left, numbers.Number)
+            and isinstance(self.right.left, numbers.Number)
+        ):
+            return (self.left * self.right.left) * self.right.right
 
 
 class Div(Binop):

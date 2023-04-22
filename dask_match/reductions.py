@@ -8,9 +8,8 @@ from dask.dataframe.core import (
     meta_nonempty,
 )
 from dask.utils import M, apply
-from matchpy import Pattern, ReplacementRule, Wildcard
 
-from dask_match.expr import Elemwise, Expr
+from dask_match.expr import Elemwise, Expr, Projection
 
 
 class ApplyConcatApply(Expr):
@@ -185,13 +184,9 @@ class Sum(Reduction):
     def _meta(self):
         return self.frame._meta.sum(**self.chunk_kwargs)
 
-    @classmethod
-    def _replacement_rules(cls):
-        a, b, c, d, e, f = map(Wildcard.dot, "abcdef")
-        yield ReplacementRule(
-            Pattern(Sum(a, b, c, d)[e]),
-            lambda a, b, c, d, e: Sum(a[e], b, c, d),
-        )
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            return self.frame[parent.operand("columns")].sum(*self.operands[1:])
 
 
 class Max(Reduction):
@@ -204,16 +199,9 @@ class Max(Reduction):
             skipna=self.skipna,
         )
 
-    @classmethod
-    def _replacement_rules(cls):
-        df = Wildcard.dot("df")
-        skipna = Wildcard.dot("skipna")
-        columns = Wildcard.dot("columns")
-
-        yield ReplacementRule(
-            Pattern(Max(df, skipna=skipna)[columns]),
-            lambda df, skipna, columns: df[columns].max(skipna=skipna),
-        )
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            return self.frame[parent.operand("columns")].max(skipna=self.skipna)
 
 
 class Len(Reduction):
