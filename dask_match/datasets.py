@@ -2,8 +2,6 @@ import functools
 
 import numpy as np
 import pandas as pd
-from matchpy import CustomConstraint, Pattern, ReplacementRule, Wildcard
-
 from dask.utils import random_state_data
 
 from dask_match.collection import new_collection
@@ -67,42 +65,24 @@ class Timeseries(BlockwiseIO):
             self.kwargs,
         )
 
-    @classmethod
-    def _replacement_rules(self):
-        start, end, dtypes, freq, partition_freq, seed, kwargs = map(
-            Wildcard.dot,
-            ["start", "end", "dtypes", "freq", "partition_freq", "seed", "kwargs"],
-        )
-        columns = Wildcard.dot("columns")
-
-        def optimize_timeseries_projection(
-            start, end, dtypes, freq, partition_freq, seed, kwargs, columns
-        ):
-            if isinstance(columns, (list, pd.Index)):
-                dtypes = {col: dtypes[col] for col in columns}
-                return Timeseries(
-                    start, end, dtypes, freq, partition_freq, seed, kwargs
-                )
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection) and len(self.dtypes) > 1:
+            if isinstance(parent.columns, (list, pd.Index)):
+                dtypes = {col: self.operand("dtypes")[col] for col in parent.columns}
             else:
-                dtypes = {columns: dtypes[columns]}
-                return Timeseries(
-                    start, end, dtypes, freq, partition_freq, seed, kwargs
-                )[columns]
-
-        def constraint(dtypes, columns):
-            """Avoid infinite loop with df["x"] -> df["x"]"""
-            return isinstance(columns, (list, pd.Index)) or len(dtypes) > 1
-
-        yield ReplacementRule(
-            Pattern(
-                Projection(
-                    Timeseries(start, end, dtypes, freq, partition_freq, seed, kwargs),
-                    columns,
-                ),
-                CustomConstraint(constraint),
-            ),
-            optimize_timeseries_projection,
-        )
+                dtypes = {parent.columns: self.operand("dtypes")[parent.columns]}
+            out = Timeseries(
+                self.start,
+                self.end,
+                dtypes,
+                freq=self.freq,
+                partition_freq=self.partition_freq,
+                seed=self.seed,
+                kwargs=self.kwargs,
+            )
+            if not isinstance(parent.operand("columns"), (list, pd.Index)):  # series
+                out = out[parent.operand("columns")]
+            return out
 
 
 names = [
