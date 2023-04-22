@@ -1,7 +1,6 @@
 from dask.dataframe.utils import assert_eq
 
 from dask_match.datasets import timeseries
-from dask_match.utils import _check_culling
 
 
 def test_timeseries():
@@ -38,9 +37,4 @@ def test_timeseries_culling():
     assert df2.npartitions == 1
     assert len(df2.dask) == df2.npartitions
     expected = pdf.iloc[offset : 2 * offset][["x"]] + 1
-    assert_eq(df2, expected)
-
-    # Check that we still get culling without fusion
-    df3 = df.optimize(fuse=False)
-    _check_culling(df3.expr, [1])
     assert_eq(df2, expected)

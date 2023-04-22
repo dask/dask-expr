@@ -1,12 +1,11 @@
 import os
 
+import dask.dataframe as dd
 import pandas as pd
 import pytest
-import dask.dataframe as dd
 from dask.dataframe.utils import assert_eq
 
-from dask_match import from_pandas, optimize, read_parquet, read_csv
-from dask_match.utils import _check_culling
+from dask_match import from_pandas, optimize, read_csv, read_parquet
 
 
 def _make_file(dir, format="parquet", df=None):
@@ -132,6 +131,13 @@ def test_io_culling(tmpdir, fmt):
     assert len(df2.dask) == df2.npartitions
     expected = pdf.iloc[5:][["a", "b"]] + 1
     assert_eq(df2, expected, check_index=False)
+
+    def _check_culling(expr, partitions):
+        """CHeck that _partitions is set to the expected value"""
+        for dep in expr.dependencies():
+            _check_culling(dep, partitions)
+        if "_partitions" in expr._parameters:
+            assert expr._partitions == partitions
 
     # Check that we still get culling without fusion
     df3 = optimize(df, fuse=False)
