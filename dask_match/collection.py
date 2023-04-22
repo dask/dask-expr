@@ -79,13 +79,16 @@ class FrameBase(DaskMethodsMixin):
 
     def __dask_graph__(self):
         out = self.expr
-        out, _ = expr.simplify(out)
+        out = out.simplify()
         return out.__dask_graph__()
 
     def __dask_keys__(self):
         out = self.expr
-        out, _ = expr.simplify(out)
+        out = out.simplify()
         return out.__dask_keys__()
+
+    def simplify(self):
+        return new_collection(self.expr.simplify())
 
     @property
     def dask(self):

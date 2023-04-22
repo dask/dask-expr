@@ -12,10 +12,10 @@ from dask.base import normalize_token, tokenize
 from dask.core import ishashable
 from dask.dataframe import methods
 from dask.dataframe.core import (
-    is_dataframe_like,
-    apply_and_enforce,
-    _get_meta_map_partitions,
     _get_divisions_map_partitions,
+    _get_meta_map_partitions,
+    apply_and_enforce,
+    is_dataframe_like,
 )
 from dask.utils import M, apply, funcname
 from matchpy import (
@@ -230,6 +230,45 @@ class Expr(Operation, metaclass=_ExprMeta):
         return {(self._name, i): self._task(i) for i in range(self.npartitions)}
 
     def simplify(self):
+        """Simplify expression
+
+        This leverages the ``._simplify_down`` method defined on each class
+
+        Returns
+        -------
+        expr:
+            output expression
+        changed:
+            whether or not any change occured
+        """
+        expr = self
+        while True:
+            out = expr._simplify_down()
+            if out is None:
+                out = expr
+            if out._name == expr._name:
+                break
+            else:
+                expr = out
+
+        changed = False
+        new_operands = []
+        for operand in expr.operands:
+            if isinstance(operand, Expr):
+                new = operand.simplify()
+                if new._name != operand._name:
+                    changed = True
+            else:
+                new = operand
+            new_operands.append(new)
+
+        if changed:
+            expr = type(expr)(*new_operands)
+            expr = expr.simplify()
+
+        return expr
+
+    def _simplify_down(self):
         return self
 
     def optimize(self, **kwargs):
@@ -671,7 +710,7 @@ class Projection(Elemwise):
             base = "(" + base + ")"
         return f"{base}[{repr(self.columns)}]"
 
-    def simplify(self):
+    def _simplify_down(self):
         if isinstance(self.frame, Projection):
             # df[a][b]
             a = self.frame.operand("columns")
@@ -745,7 +784,7 @@ class Head(Expr):
         assert index == 0
         return (M.head, (self.frame._name, 0), self.n)
 
-    def simplify(self):
+    def _simplify_down(self):
         if isinstance(self.frame, Elemwise):
             operands = [
                 Head(op, self.n) if isinstance(op, Expr) else op
@@ -878,7 +917,7 @@ class Partitions(Expr):
     def _task(self, index: int):
         return (self.frame._name, self.partitions[index])
 
-    def simplify(self):
+    def _simplify_down(self):
         if isinstance(self.frame, Blockwise) and not isinstance(
             self.frame, BlockwiseIO
         ):
@@ -899,7 +938,7 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
 
     This leverages three optimization passes:
 
-    1.  Class based simplification using the ``simplify`` function and methods
+    1.  Class based simplification using the ``_simplify`` function and methods
     2.  Replacement rules with matchpy
     3.  Blockwise fusion
 
@@ -916,7 +955,7 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     matchpy
     optimize_blockwise_fusion
     """
-    expr, _ = simplify(expr)
+    expr = expr.simplify()
     expr = optimize_matchpy(expr)
 
     if fuse:
@@ -938,53 +977,6 @@ def optimize_matchpy(expr: Expr) -> Expr:
         _defer_to_matchpy = False
 
     return expr
-
-
-def simplify(expr: Expr) -> tuple[Expr, bool]:
-    """Simplify expression
-
-    This leverages the ``.simplify`` method defined on each class
-
-    Parameters
-    ----------
-    expr:
-        input expression
-
-    Returns
-    -------
-    expr:
-        output expression
-    changed:
-        whether or not any change occured
-    """
-    if not isinstance(expr, Expr):
-        return expr, False
-
-    changed_final = False
-
-    while True:
-        out = expr.simplify()
-        if out is None:
-            out = expr
-        if out._name == expr._name:
-            break
-        else:
-            changed_final = True
-            expr = out
-
-    changed_any = False
-    new_operands = []
-    for operand in expr.operands:
-        new, changed_one = simplify(operand)
-        new_operands.append(new)
-        changed_any |= changed_one
-
-    if changed_any:
-        changed_final = True
-        expr = type(expr)(*new_operands)
-        expr, _ = simplify(expr)
-
-    return expr, changed_final
 
 
 ## Utilites for Expr fusion

@@ -220,7 +220,7 @@ class Len(Reduction):
     reduction_chunk = staticmethod(len)
     reduction_aggregate = sum
 
-    def simplify(self):
+    def _simplify_down(self):
         if isinstance(self.frame, Elemwise):
             child = max(self.frame.dependencies(), key=lambda expr: expr.npartitions)
             return Len(child)
@@ -230,7 +230,7 @@ class Size(Reduction):
     reduction_chunk = staticmethod(lambda df: df.size)
     reduction_aggregate = sum
 
-    def simplify(self):
+    def _simplify_down(self):
         if is_dataframe_like(self.frame) and len(self.frame.columns) > 1:
             return len(self.frame.columns) * Len(self.frame)
         else:
@@ -247,7 +247,7 @@ class Mean(Reduction):
             self.frame._meta.sum(skipna=self.skipna, numeric_only=self.numeric_only) / 2
         )
 
-    def simplify(self):
+    def _simplify_down(self):
         return (
             self.frame.sum(skipna=self.skipna, numeric_only=self.numeric_only)
             / self.frame.count()
