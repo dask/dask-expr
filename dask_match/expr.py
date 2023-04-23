@@ -53,7 +53,10 @@ class _ExprMeta(_OperationMeta):
         # Grab keywords and manage default values
         operands = list(args)
         for parameter in cls._parameters[len(operands) :]:
-            operands.append(kwargs.pop(parameter, cls._defaults[parameter]))
+            try:
+                operands.append(kwargs.pop(parameter))
+            except KeyError:
+                operands.append(cls._defaults[parameter])
         assert not kwargs
 
         # Defer up to matchpy
@@ -236,6 +239,7 @@ class Expr(Operation, metaclass=_ExprMeta):
         expr = self
 
         while True:
+            _continue = False
             # Simplify this node
             out = expr._simplify_down()
             if out is None:
@@ -246,9 +250,8 @@ class Expr(Operation, metaclass=_ExprMeta):
                 expr = out
                 continue
 
-            # If there is one child, allow it to simplify the parent
-            if len(expr.dependencies()) == 1:
-                [child] = expr.dependencies()
+            # Allow children to simplify their parents
+            for child in expr.dependencies():
                 out = child._simplify_up(expr)
                 if out is None:
                     out = expr
@@ -256,7 +259,11 @@ class Expr(Operation, metaclass=_ExprMeta):
                     return out
                 if out is not expr and out._name != expr._name:
                     expr = out
-                    continue
+                    _continue = True
+                    break
+
+            if _continue:
+                continue
 
             # Simplify all of the children
             new_operands = []

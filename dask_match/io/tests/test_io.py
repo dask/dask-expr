@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 from dask.dataframe.utils import assert_eq
 
-from dask_match import from_pandas, optimize, read_parquet, read_csv
+from dask_match import from_pandas, optimize, read_csv, read_parquet
 
 
 def _make_file(dir, format="parquet", df=None):
@@ -94,7 +94,7 @@ def test_predicate_pushdown(tmpdir):
     df = read_parquet(fn)
     assert_eq(df, original)
     x = df[df.a == 5][df.c > 20]["b"]
-    y = optimize(x)
+    y = optimize(x, fuse=False)
     assert isinstance(y.expr, ReadParquet)
     assert ("a", "==", 5) in y.expr.operand("filters") or (
         "a",
