@@ -614,10 +614,6 @@ class Assign(Elemwise):
     _parameters = ["frame", "key", "value"]
     operation = staticmethod(methods.assign)
 
-    @property
-    def _meta(self):
-        return self.frame._meta.assign(**{self.key: self.value._meta})
-
 
 class Filter(Blockwise):
     _parameters = ["frame", "predicate"]
