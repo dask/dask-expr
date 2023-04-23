@@ -12,10 +12,10 @@ from dask.base import normalize_token, tokenize
 from dask.core import ishashable
 from dask.dataframe import methods
 from dask.dataframe.core import (
-    is_dataframe_like,
-    apply_and_enforce,
-    _get_meta_map_partitions,
     _get_divisions_map_partitions,
+    _get_meta_map_partitions,
+    apply_and_enforce,
+    is_dataframe_like,
 )
 from dask.utils import M, apply, funcname
 from matchpy import (
@@ -753,9 +753,11 @@ class Head(Expr):
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
-        elif not isinstance(self, BlockwiseHead):
+        if not isinstance(self, BlockwiseHead):
             # Lower to Blockwise
             return BlockwiseHead(Partitions(self.frame, [0]), self.n)
+        if isinstance(self.frame, Head):
+            return Head(self.frame.frame, min(self.n, self.frame.n))
 
 
 class BlockwiseHead(Head, Blockwise):
@@ -905,9 +907,15 @@ class Partitions(Expr):
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
-        elif isinstance(self.frame, PartitionsFiltered) and not self.frame._filtered:
+        elif isinstance(self.frame, PartitionsFiltered):
+            if self.frame._partitions:
+                partitions = [self.frame._partitions[p] for p in self.partitions]
+            else:
+                partitions = self.partitions
+            # We assume that expressions defining a special "_partitions"
+            # parameter can internally capture the same logic as `Partitions`
             operands = [
-                self.partitions if self.frame._parameters[i] == "_partitions" else op
+                partitions if self.frame._parameters[i] == "_partitions" else op
                 for i, op in enumerate(self.frame.operands)
             ]
             return type(self.frame)(*operands)
