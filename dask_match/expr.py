@@ -176,22 +176,6 @@ class Expr(Operation, metaclass=_ExprMeta):
         # Dependencies are `Expr` operands only
         return [operand for operand in self.operands if isinstance(operand, Expr)]
 
-    @property
-    def _culled(self) -> bool:
-        """Whether or not output partitions have been culled"""
-        return (
-            "_partitions" in self._parameters
-            and self.operand("_partitions") is not None
-        )
-
-    @property
-    def _partitions(self) -> list | tuple | range:
-        """Selected partition indices"""
-        if self._culled:
-            return self.operand("_partitions")
-        else:
-            return range(self.npartitions)
-
     def _task(self, index: int):
         """The task for the i'th partition
 
@@ -243,7 +227,7 @@ class Expr(Operation, metaclass=_ExprMeta):
         Expr.__dask_graph__
         """
 
-        return {(self._name, i): self._task(k) for i, k in enumerate(self._partitions)}
+        return {(self._name, i): self._task(i) for i in range(self.npartitions)}
 
     def simplify(self):
         return self
@@ -351,17 +335,7 @@ class Expr(Operation, metaclass=_ExprMeta):
 
     @functools.cached_property
     def divisions(self):
-        # Common case: Use self._divisions()
-        full_divisions = tuple(self._divisions())
-        if not self._culled:
-            return full_divisions
-
-        # Specific case: Specific partitions were selected
-        new_divisions = []
-        for part in self._partitions:
-            new_divisions.append(full_divisions[part])
-        new_divisions.append(full_divisions[part + 1])
-        return tuple(new_divisions)
+        return tuple(self._divisions())
 
     def _divisions(self):
         raise NotImplementedError()
@@ -373,10 +347,7 @@ class Expr(Operation, metaclass=_ExprMeta):
 
     @property
     def npartitions(self):
-        if self._culled:
-            # Special case: Specific partitions were selected
-            return len(self._partitions)
-        elif "npartitions" in self._parameters:
+        if "npartitions" in self._parameters:
             idx = self._parameters.index("npartitions")
             return self.operands[idx]
         else:
@@ -934,14 +905,75 @@ class Partitions(Expr):
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
-        elif "_partitions" in self.frame._parameters and not self.frame._culled:
-            # We assume that expressions defining a special "_partitions"
-            # parameter can internally capture the same logic as `Partitions`
+        elif isinstance(self.frame, PartitionsFiltered) and not self.frame._filtered:
             operands = [
                 self.partitions if self.frame._parameters[i] == "_partitions" else op
                 for i, op in enumerate(self.frame.operands)
             ]
             return type(self.frame)(*operands)
+
+
+class PartitionsFiltered(Expr):
+    """Mixin class for partition filtering
+
+    A `PartitionsFiltered` subclass must define a
+    `_partitions` parameter. When `_partitions` is
+    defined, the following expresssions must produce
+    the same output for `cls: PartitionsFiltered`:
+      - `cls(expr: Expr, ..., _partitions)`
+      - `Partitions(cls(expr: Expr, ...), _partitions)`
+
+    In order to leverage the default `Expr._layer`
+    method, subclasses should define `_filtered_task`
+    instead of `_task`.
+    """
+
+    @property
+    def _filtered(self) -> bool:
+        """Whether or not output partitions have been filtered"""
+        return (
+            "_partitions" in self._parameters
+            and self.operand("_partitions") is not None
+        )
+
+    @property
+    def _partitions(self) -> list | tuple | range:
+        """Selected partition indices"""
+        if self._filtered:
+            return self.operand("_partitions")
+        else:
+            return range(self.npartitions)
+
+    @functools.cached_property
+    def divisions(self):
+        # Common case: Use self._divisions()
+        full_divisions = tuple(self._divisions())
+        if not self._filtered:
+            return full_divisions
+
+        # Specific case: Specific partitions were selected
+        new_divisions = []
+        for part in self._partitions:
+            new_divisions.append(full_divisions[part])
+        new_divisions.append(full_divisions[part + 1])
+        return tuple(new_divisions)
+
+    @property
+    def npartitions(self):
+        if self._filtered:
+            # Special case: Specific partitions were selected
+            return len(self._partitions)
+        elif "npartitions" in self._parameters:
+            idx = self._parameters.index("npartitions")
+            return self.operands[idx]
+        else:
+            return len(self.divisions) - 1
+
+    def _task(self, index: int):
+        return self._filtered_task(self._partitions[index])
+
+    def _filtered_task(self, index: int):
+        raise NotImplementedError()
 
 
 @normalize_token.register(Expr)
@@ -1179,13 +1211,12 @@ class Fused(Blockwise):
     def _task(self, index):
         graph = {self._name: (self.exprs[0]._name, index)}
         for _expr in self.exprs:
-            task_index = _expr._partitions[index]
             if isinstance(_expr, Fused):
-                (_, subgraph, name) = _expr._task(task_index)
+                (_, subgraph, name) = _expr._task(index)
                 graph.update(subgraph)
                 graph[(name, index)] = name
             else:
-                graph[(_expr._name, index)] = _expr._task(task_index)
+                graph[(_expr._name, index)] = _expr._task(index)
 
         for i, dep in enumerate(self.dependencies()):
             graph[self._blockwise_arg(dep, index)] = "_" + str(i)

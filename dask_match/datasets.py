@@ -8,12 +8,12 @@ from dask.utils import random_state_data
 
 from dask_match.collection import new_collection
 from dask_match.expr import Projection
-from dask_match.io import BlockwiseIO
+from dask_match.io import BlockwiseIO, PartitionsFiltered
 
 __all__ = ["timeseries"]
 
 
-class Timeseries(BlockwiseIO):
+class Timeseries(PartitionsFiltered, BlockwiseIO):
     _parameters = [
         "start",
         "end",
@@ -58,7 +58,7 @@ class Timeseries(BlockwiseIO):
         else:
             return random_state_data(size, self.seed)
 
-    def _task(self, index):
+    def _filtered_task(self, index):
         num_columns = len(self.columns)
         offset = index * num_columns
         full_divisions = self._divisions()

@@ -14,7 +14,7 @@ from dask.utils import natural_sort_key
 from matchpy import CustomConstraint, Pattern, ReplacementRule, Wildcard
 
 from dask_match.expr import EQ, GE, GT, LE, LT, NE, Filter
-from dask_match.io import BlockwiseIO
+from dask_match.io import BlockwiseIO, PartitionsFiltered
 
 NONE_LABEL = "__null_dask_index__"
 
@@ -28,7 +28,7 @@ def _list_columns(columns):
     return columns
 
 
-class ReadParquet(BlockwiseIO):
+class ReadParquet(PartitionsFiltered, BlockwiseIO):
     """Read a parquet dataset"""
 
     _parameters = [
@@ -290,5 +290,5 @@ class ReadParquet(BlockwiseIO):
     def _divisions(self):
         return self._plan["divisions"]
 
-    def _task(self, index: int):
+    def _filtered_task(self, index: int):
         return (self._plan["func"], self._plan["parts"][index])
