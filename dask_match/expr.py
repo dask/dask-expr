@@ -639,19 +639,12 @@ class Projection(Elemwise):
     _parameters = ["frame", "columns"]
     operation = operator.getitem
 
-    def _divisions(self):
-        return self.frame.divisions
-
     @property
     def columns(self):
         if isinstance(self.operand("columns"), list):
             return pd.Index(self.operand("columns"))
         else:
             return self.operand("columns")
-
-    @property
-    def _meta(self):
-        return self.frame._meta[self.columns]
 
     def __str__(self):
         base = str(self.frame)
