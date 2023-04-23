@@ -12,10 +12,10 @@ from dask.base import normalize_token, tokenize
 from dask.core import ishashable
 from dask.dataframe import methods
 from dask.dataframe.core import (
-    is_dataframe_like,
-    apply_and_enforce,
-    _get_meta_map_partitions,
     _get_divisions_map_partitions,
+    _get_meta_map_partitions,
+    apply_and_enforce,
+    is_dataframe_like,
 )
 from dask.utils import M, apply, funcname
 from matchpy import (
@@ -612,19 +612,11 @@ class Assign(Elemwise):
     """Column Assignment"""
 
     _parameters = ["frame", "key", "value"]
-    operation = methods.assign
+    operation = staticmethod(methods.assign)
 
     @property
     def _meta(self):
         return self.frame._meta.assign(**{self.key: self.value._meta})
-
-    def _task(self, index: int):
-        return (
-            methods.assign,
-            (self.frame._name, index),
-            self.key,
-            self._blockwise_arg(self.value, index),
-        )
 
 
 class Filter(Blockwise):
@@ -714,9 +706,6 @@ class Index(Elemwise):
 
     _parameters = ["frame"]
     operation = getattr
-
-    def _divisions(self):
-        return self.frame.divisions
 
     @property
     def _meta(self):
