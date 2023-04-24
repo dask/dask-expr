@@ -12,10 +12,10 @@ from dask.base import normalize_token, tokenize
 from dask.core import ishashable
 from dask.dataframe import methods
 from dask.dataframe.core import (
-    is_dataframe_like,
-    apply_and_enforce,
-    _get_meta_map_partitions,
     _get_divisions_map_partitions,
+    _get_meta_map_partitions,
+    apply_and_enforce,
+    is_dataframe_like,
 )
 from dask.utils import M, apply, funcname
 from matchpy import (
@@ -112,42 +112,38 @@ class Expr(Operation, metaclass=_ExprMeta):
     def __repr__(self):
         return str(self)
 
-    def _tree_repr_operand(self, i, lines, header, collapse_fusion=True):
-        op = self.operands[i]
-        if isinstance(op, Expr):
-            lines.extend(op._tree_repr_lines(2, collapse_fusion=collapse_fusion))
-        else:
-            try:
-                param = self._parameters[i]
-                default = self._defaults[param]
-            except (IndexError, KeyError):
-                param = self._parameters[i] if i < len(self._parameters) else ""
-                default = "--no-default--"
-
-            if isinstance(op, pd.core.base.PandasObject):
-                op = "<pandas>"
-
-            elif repr(op) != repr(default):
-                if param:
-                    header += f" {param}={repr(op)}"
-                else:
-                    header += repr(op)
-        return lines, header
-
-    def _tree_repr_lines(self, indent=0, collapse_fusion=True):
-        lines = []
+    def _tree_repr_lines(self, indent=0):
         header = funcname(type(self)) + ":"
-        for i in range(len(self.operands)):
-            lines, header = self._tree_repr_operand(i, lines, header)
+        lines = []
+        for i, op in enumerate(self.operands):
+            if isinstance(op, Expr):
+                lines.extend(op._tree_repr_lines(2))
+            else:
+                try:
+                    param = self._parameters[i]
+                    default = self._defaults[param]
+                except (IndexError, KeyError):
+                    param = self._parameters[i] if i < len(self._parameters) else ""
+                    default = "--no-default--"
+
+                if isinstance(op, pd.core.base.PandasObject):
+                    op = "<pandas>"
+
+                elif repr(op) != repr(default):
+                    if param:
+                        header += f" {param}={repr(op)}"
+                    else:
+                        header += repr(op)
         lines = [header] + lines
         lines = [" " * indent + line for line in lines]
+
         return lines
 
-    def tree_repr(self, collapse_fusion=True):
-        return os.linesep.join(self._tree_repr_lines(collapse_fusion=collapse_fusion))
+    def tree_repr(self):
+        return os.linesep.join(self._tree_repr_lines())
 
-    def pprint(self, collapse_fusion=True):
-        for line in self._tree_repr_lines(collapse_fusion=collapse_fusion):
+    def pprint(self):
+        for line in self._tree_repr_lines():
             print(line)
 
     def __hash__(self):
@@ -234,7 +230,7 @@ class Expr(Operation, metaclass=_ExprMeta):
         return {(self._name, i): self._task(i) for i in range(self.npartitions)}
 
     def simplify(self):
-        return self
+        return None
 
     def optimize(self, **kwargs):
         return optimize(self, **kwargs)
@@ -735,6 +731,8 @@ class Index(Elemwise):
 
 
 class Head(Expr):
+    """Take the first `n` rows of the first partition"""
+
     _parameters = ["frame", "n"]
     _defaults = {"n": 5}
 
@@ -746,8 +744,7 @@ class Head(Expr):
         return self.frame.divisions[:2]
 
     def _task(self, index: int):
-        assert index == 0
-        return (M.head, (self.frame._name, 0), self.n)
+        raise NotImplementedError()
 
     def simplify(self):
         if isinstance(self.frame, Elemwise):
@@ -756,6 +753,25 @@ class Head(Expr):
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
+        if not isinstance(self, BlockwiseHead):
+            # Lower to Blockwise
+            return BlockwiseHead(Partitions(self.frame, [0]), self.n)
+        if isinstance(self.frame, Head):
+            return Head(self.frame.frame, min(self.n, self.frame.n))
+
+
+class BlockwiseHead(Head, Blockwise):
+    """Take the first `n` rows of every partition
+
+    Typically used after `Partition(..., [0])` to take
+    the first `n` rows of an entire collection.
+    """
+
+    def _divisions(self):
+        return self.frame.divisions
+
+    def _task(self, index: int):
+        return (M.head, (self.frame._name, index), self.n)
 
 
 class Binop(Elemwise):
@@ -891,6 +907,73 @@ class Partitions(Expr):
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
+        elif isinstance(self.frame, PartitionsFiltered):
+            if self.frame._partitions:
+                partitions = [self.frame._partitions[p] for p in self.partitions]
+            else:
+                partitions = self.partitions
+            # We assume that expressions defining a special "_partitions"
+            # parameter can internally capture the same logic as `Partitions`
+            operands = [
+                partitions if self.frame._parameters[i] == "_partitions" else op
+                for i, op in enumerate(self.frame.operands)
+            ]
+            return type(self.frame)(*operands)
+
+
+class PartitionsFiltered(Expr):
+    """Mixin class for partition filtering
+
+    A `PartitionsFiltered` subclass must define a
+    `_partitions` parameter. When `_partitions` is
+    defined, the following expresssions must produce
+    the same output for `cls: PartitionsFiltered`:
+      - `cls(expr: Expr, ..., _partitions)`
+      - `Partitions(cls(expr: Expr, ...), _partitions)`
+
+    In order to leverage the default `Expr._layer`
+    method, subclasses should define `_filtered_task`
+    instead of `_task`.
+    """
+
+    @property
+    def _filtered(self) -> bool:
+        """Whether or not output partitions have been filtered"""
+        return self.operand("_partitions") is not None
+
+    @property
+    def _partitions(self) -> list | tuple | range:
+        """Selected partition indices"""
+        if self._filtered:
+            return self.operand("_partitions")
+        else:
+            return range(self.npartitions)
+
+    @functools.cached_property
+    def divisions(self):
+        # Common case: Use self._divisions()
+        full_divisions = super().divisions
+        if not self._filtered:
+            return full_divisions
+
+        # Specific case: Specific partitions were selected
+        new_divisions = []
+        for part in self._partitions:
+            new_divisions.append(full_divisions[part])
+        new_divisions.append(full_divisions[part + 1])
+        return tuple(new_divisions)
+
+    @property
+    def npartitions(self):
+        if self._filtered:
+            return len(self._partitions)
+        return super().npartitions
+
+    def _task(self, index: int):
+        return self._filtered_task(self._partitions[index])
+
+    def _filtered_task(self, index: int):
+        raise NotImplementedError()
 
 
 @normalize_token.register(Expr)
@@ -1111,30 +1194,22 @@ class Fused(Blockwise):
     def _meta(self):
         return self.exprs[0]._meta
 
-    def _tree_repr_lines(self, indent=0, collapse_fusion=True):
-        # Start with fused expressions
+    def _tree_repr_lines(self, indent=0):
         lines = []
-        root = self.exprs[0]
-        if collapse_fusion:
-            root_id = f"Fused with {len(self.exprs) - 1} expressions"
-        else:
-            root_id = root._name[-5:]
-        for i, line in enumerate(
-            root._tree_repr_lines(0, collapse_fusion=collapse_fusion)
-        ):
-            if i == 0:
-                header = line.replace(":", f"({root_id}):", 1)
-                if collapse_fusion:
-                    break
-            elif i < len(self.exprs):
-                fusion_info = f"(Fused with {root_id}):"
-                lines.append(line.replace(":", fusion_info, 1))
+        header = f"Fused({self._name[-5:]}):"
+        for i, line in enumerate(self.exprs[0]._tree_repr_lines(2)):
+            if i < len(self.exprs):
+                lines.append(line.replace(" ", "|", 1))
+            else:
+                lines.append(line)
 
-        # Add lines for external dependencies
-        for i in range(1, len(self.operands)):
-            lines, header = self._tree_repr_operand(i, lines, header)
+        for op in enumerate(self.operands[1:]):
+            if isinstance(op, Expr):
+                lines.extend(op._tree_repr_lines(2))
+
         lines = [header] + lines
         lines = [" " * indent + line for line in lines]
+
         return lines
 
     def __str__(self):
