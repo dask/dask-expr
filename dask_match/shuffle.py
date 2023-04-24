@@ -456,8 +456,8 @@ class PartitioningIndex(Blockwise):
 
     _parameters = ["frame", "index", "npartitions_out"]
 
-    @staticmethod
-    def operation(df, index, npartitions: int):
+    @classmethod
+    def operation(cls, df, index, npartitions: int):
         """Construct a hash-based partitioning index"""
         if isinstance(index, (str, list, tuple)):
             # Assume column selection from df
