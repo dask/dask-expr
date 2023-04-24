@@ -19,6 +19,7 @@ class Repartition(Expr):
     """Abstract repartitioning expression"""
 
     _parameters = ["frame", "n", "new_divisions", "force"]
+    _defaults = {"n": None, "new_divisions": None, "force": False}
 
     @property
     def _meta(self):
@@ -30,9 +31,12 @@ class Repartition(Expr):
         return self.new_divisions
 
     def simplify(self):
+        if type(self) != Repartition:
+            # This simplify logic should not be inherited
+            return None
         if self.n is not None:
             if self.n < self.frame.npartitions:
-                return ReducePartitionCount(self.frame, self.n)
+                return RepartitionToFewer(self.frame, self.n)
             else:
                 original_divisions = divisions = pd.Series(
                     self.frame.divisions
@@ -73,7 +77,7 @@ class Repartition(Expr):
                     divisions = list(unique(divisions[:-1])) + [divisions[-1]]
                     return RepartitionDivisions(df, divisions, self.force)
                 else:
-                    return IncreasePartitionCount(self.frame, self.n)
+                    return RepartitionToMore(self.frame, self.n)
         elif self.new_divisions:
             return RepartitionDivisions(self.frame, self.new_divisions, self.force)
         else:
@@ -99,14 +103,7 @@ class Repartition(Expr):
             yield ReplacementRule(pattern, functools.partial(reorder, op=op))
 
 
-class RepartitionImpl(Repartition):
-    """Rapartition-implementation base class"""
-
-    def simplify(self):
-        return None
-
-
-class ReducePartitionCount(RepartitionImpl):
+class RepartitionToFewer(Repartition):
     """Reduce the partition count"""
 
     _parameters = ["frame", "n"]
@@ -147,7 +144,7 @@ class ReducePartitionCount(RepartitionImpl):
         }
 
 
-class IncreasePartitionCount(RepartitionImpl):
+class RepartitionToMore(Repartition):
     """Increase the partition count"""
 
     _parameters = ["frame", "n"]
@@ -184,7 +181,7 @@ class IncreasePartitionCount(RepartitionImpl):
         return dsk
 
 
-class RepartitionDivisions(RepartitionImpl):
+class RepartitionDivisions(Repartition):
     """Repartition to specific divisions"""
 
     _parameters = ["frame", "new_divisions", "force"]
