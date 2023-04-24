@@ -10,7 +10,6 @@ from tlz import unique
 from dask.dataframe import methods
 from dask.dataframe.core import split_evenly
 from dask.dataframe.utils import is_series_like
-from matchpy import CustomConstraint, Pattern, ReplacementRule, Wildcard
 
 from dask_match.expr import Expr, Filter, Projection
 
@@ -30,7 +29,7 @@ class Repartition(Expr):
             return self.simplify()._divisions()
         return self.new_divisions
 
-    def simplify(self):
+    def _simplify_down(self):
         if type(self) != Repartition:
             # This simplify logic should not be inherited
             return None
@@ -83,24 +82,13 @@ class Repartition(Expr):
         else:
             raise NotImplementedError()
 
-    @classmethod
-    def _replacement_rules(cls):
+    def _simplify_up(self, parent):
         # Move filter or column projection before repartitioning
-        frame, other = map(Wildcard.dot, ["frame", "other"])
-
-        def reorder(frame, other, op=Filter):
-            return type(frame)(op(frame.operands[0], other), *frame.operands[1:])
-
-        supported = CustomConstraint(
-            lambda frame, other: (
-                # filter-pushdown gets messy if other is an Expr
-                isinstance(frame, cls)
-                and not isinstance(other, Expr)
-            )
-        )
-        for op in [Filter, Projection]:
-            pattern = Pattern(op(frame, other), supported)
-            yield ReplacementRule(pattern, functools.partial(reorder, op=op))
+        if isinstance(parent, (Filter, Projection)) and not isinstance(
+            parent.operands[1], Expr
+        ):
+            op = type(parent)(self.frame, *parent.operands[1:])
+            return type(self)(op, *self.operands[1:])
 
 
 class RepartitionToFewer(Repartition):
