@@ -371,15 +371,6 @@ class DiskShuffle(SimpleShuffle):
 #
 
 
-def make_partitioning_index(df, index, npartitions: int):
-    """Construct a hash-based partitioning index"""
-    if isinstance(index, (str, list, tuple)):
-        # Assume column selection from df
-        index = [index] if isinstance(index, str) else list(index)
-        return partitioning_index(df[index], npartitions)
-    return partitioning_index(index, npartitions)
-
-
 def _select_columns_or_index(expr, columns_or_index):
     """
     Make a column selection that may include the index
@@ -464,23 +455,12 @@ class PartitioningIndex(Blockwise):
     """
 
     _parameters = ["frame", "index", "npartitions_out"]
-    operation = make_partitioning_index
 
-    @property
-    def _meta(self):
-        index = self.operand("index")
-        if isinstance(index, Expr):
-            index = index._meta
-        return make_partitioning_index(self.frame._meta, index, self.npartitions_out)
-
-    def _task(self, index: int):
-        partition_index = index
-        index = self.operand("index")
-        if isinstance(index, Expr):
-            index = (index._name, partition_index)
-        return (
-            make_partitioning_index,
-            (self.frame._name, partition_index),
-            index,
-            self.npartitions_out,
-        )
+    @staticmethod
+    def operation(df, index, npartitions: int):
+        """Construct a hash-based partitioning index"""
+        if isinstance(index, (str, list, tuple)):
+            # Assume column selection from df
+            index = [index] if isinstance(index, str) else list(index)
+            return partitioning_index(df[index], npartitions)
+        return partitioning_index(index, npartitions)
