@@ -939,10 +939,7 @@ class PartitionsFiltered(Expr):
     @property
     def _filtered(self) -> bool:
         """Whether or not output partitions have been filtered"""
-        return (
-            "_partitions" in self._parameters
-            and self.operand("_partitions") is not None
-        )
+        return self.operand("_partitions") is not None
 
     @property
     def _partitions(self) -> list | tuple | range:
@@ -955,7 +952,7 @@ class PartitionsFiltered(Expr):
     @functools.cached_property
     def divisions(self):
         # Common case: Use self._divisions()
-        full_divisions = tuple(self._divisions())
+        full_divisions = super().divisions
         if not self._filtered:
             return full_divisions
 
@@ -969,13 +966,8 @@ class PartitionsFiltered(Expr):
     @property
     def npartitions(self):
         if self._filtered:
-            # Special case: Specific partitions were selected
             return len(self._partitions)
-        elif "npartitions" in self._parameters:
-            idx = self._parameters.index("npartitions")
-            return self.operands[idx]
-        else:
-            return len(self.divisions) - 1
+        return super().npartitions
 
     def _task(self, index: int):
         return self._filtered_task(self._partitions[index])
