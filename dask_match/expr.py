@@ -18,15 +18,7 @@ from dask.dataframe.core import (
     is_dataframe_like,
 )
 from dask.utils import M, apply, funcname
-from matchpy import (
-    Arity,
-    CustomConstraint,
-    Operation,
-    Pattern,
-    ReplacementRule,
-    Wildcard,
-    replace_all,
-)
+from matchpy import Arity, Operation, ReplacementRule, replace_all
 from matchpy.expressions.expressions import _OperationMeta
 
 replacement_rules = []
@@ -61,7 +53,10 @@ class _ExprMeta(_OperationMeta):
         # Grab keywords and manage default values
         operands = list(args)
         for parameter in cls._parameters[len(operands) :]:
-            operands.append(kwargs.pop(parameter, cls._defaults[parameter]))
+            try:
+                operands.append(kwargs.pop(parameter))
+            except KeyError:
+                operands.append(cls._defaults[parameter])
         assert not kwargs
 
         # Defer up to matchpy
@@ -123,7 +118,7 @@ class Expr(Operation, metaclass=_ExprMeta):
                     param = self._parameters[i]
                     default = self._defaults[param]
                 except (IndexError, KeyError):
-                    param = ""
+                    param = self._parameters[i] if i < len(self._parameters) else ""
                     default = "--no-default--"
 
                 if isinstance(op, pd.core.base.PandasObject):
@@ -242,7 +237,71 @@ class Expr(Operation, metaclass=_ExprMeta):
         return {(self._name, i): self._task(i) for i in range(self.npartitions)}
 
     def simplify(self):
-        return self
+        """Simplify expression
+
+        This leverages the ``._simplify_down`` method defined on each class
+
+        Returns
+        -------
+        expr:
+            output expression
+        changed:
+            whether or not any change occured
+        """
+        expr = self
+
+        while True:
+            # Simplify this node
+            out = expr._simplify_down()
+            if out is None:
+                out = expr
+            if not isinstance(out, Expr):
+                return out
+            if out._name != expr._name:
+                expr = out
+                continue
+
+            # Allow children to simplify their parents
+            _continue = False
+            for child in expr.dependencies():
+                out = child._simplify_up(expr)
+                if out is None:
+                    out = expr
+                if not isinstance(out, Expr):
+                    return out
+                if out is not expr and out._name != expr._name:
+                    expr = out
+                    _continue = True
+                    break
+
+            if _continue:
+                continue
+
+            # Simplify all of the children
+            new_operands = []
+            changed = False
+            for operand in expr.operands:
+                if isinstance(operand, Expr):
+                    new = operand.simplify()
+                    if new._name != operand._name:
+                        changed = True
+                else:
+                    new = operand
+                new_operands.append(new)
+
+            if changed:
+                expr = type(expr)(*new_operands)
+                continue
+            else:
+                break
+
+        return expr
+
+    def _simplify_down(self):
+        return
+
+    def _simplify_up(self, parent):
+        return
 
     def optimize(self, **kwargs):
         return optimize(self, **kwargs)
@@ -624,37 +683,16 @@ class Assign(Elemwise):
     """Column Assignment"""
 
     _parameters = ["frame", "key", "value"]
-    operation = methods.assign
-
-    @property
-    def _meta(self):
-        return self.frame._meta.assign(**{self.key: self.value._meta})
-
-    def _task(self, index: int):
-        return (
-            methods.assign,
-            (self.frame._name, index),
-            self.key,
-            self._blockwise_arg(self.value, index),
-        )
+    operation = staticmethod(methods.assign)
 
 
 class Filter(Blockwise):
     _parameters = ["frame", "predicate"]
     operation = operator.getitem
 
-    @classmethod
-    def _replacement_rules(self):
-        df = Wildcard.dot("df")
-        condition = Wildcard.dot("condition")
-        columns = Wildcard.dot("columns")
-
-        # Project columns down through dataframe
-        # df[df.x > 1].y -> df.y[df.x > 1]
-        yield ReplacementRule(
-            Pattern(Filter(df, condition)[columns]),
-            lambda df, condition, columns: df[columns][condition],
-        )
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            return self.frame[parent.operand("columns")][self.predicate]
 
 
 class Projection(Elemwise):
@@ -663,9 +701,6 @@ class Projection(Elemwise):
     _parameters = ["frame", "columns"]
     operation = operator.getitem
 
-    def _divisions(self):
-        return self.frame.divisions
-
     @property
     def columns(self):
         if isinstance(self.operand("columns"), list):
@@ -673,17 +708,13 @@ class Projection(Elemwise):
         else:
             return self.operand("columns")
 
-    @property
-    def _meta(self):
-        return self.frame._meta[self.columns]
-
     def __str__(self):
         base = str(self.frame)
         if " " in base:
             base = "(" + base + ")"
         return f"{base}[{repr(self.columns)}]"
 
-    def simplify(self):
+    def _simplify_down(self):
         if isinstance(self.frame, Projection):
             # df[a][b]
             a = self.frame.operand("columns")
@@ -698,37 +729,12 @@ class Projection(Elemwise):
 
             return self.frame.frame[b]
 
-    @classmethod
-    def _replacement_rules(self):
-        df = Wildcard.dot("df")
-        a = Wildcard.dot("a")
-        b = Wildcard.dot("b")
-
-        # Project columns down through dataframe
-        # df[a][b] -> df[b]
-        def projection_merge(df, a, b):
-            if not isinstance(a, list):
-                assert a == b
-            elif isinstance(b, list):
-                assert all(bb in a for bb in b)
-            else:
-                assert b in a
-
-            return df[b]
-
-        yield ReplacementRule(
-            Pattern(Projection(Projection(df, a), b)), projection_merge
-        )
-
 
 class Index(Elemwise):
     """Column Selection"""
 
     _parameters = ["frame"]
     operation = getattr
-
-    def _divisions(self):
-        return self.frame.divisions
 
     @property
     def _meta(self):
@@ -743,6 +749,8 @@ class Index(Elemwise):
 
 
 class Head(Expr):
+    """Take the first `n` rows of the first partition"""
+
     _parameters = ["frame", "n"]
     _defaults = {"n": 5}
 
@@ -754,16 +762,34 @@ class Head(Expr):
         return self.frame.divisions[:2]
 
     def _task(self, index: int):
-        assert index == 0
-        return (M.head, (self.frame._name, 0), self.n)
+        raise NotImplementedError()
 
-    def simplify(self):
+    def _simplify_down(self):
         if isinstance(self.frame, Elemwise):
             operands = [
                 Head(op, self.n) if isinstance(op, Expr) else op
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
+        if not isinstance(self, BlockwiseHead):
+            # Lower to Blockwise
+            return BlockwiseHead(Partitions(self.frame, [0]), self.n)
+        if isinstance(self.frame, Head):
+            return Head(self.frame.frame, min(self.n, self.frame.n))
+
+
+class BlockwiseHead(Head, Blockwise):
+    """Take the first `n` rows of every partition
+
+    Typically used after `Partition(..., [0])` to take
+    the first `n` rows of an entire collection.
+    """
+
+    def _divisions(self):
+        return self.frame.divisions
+
+    def _task(self, index: int):
+        return (M.head, (self.frame._name, index), self.n)
 
 
 class Binop(Elemwise):
@@ -773,41 +799,32 @@ class Binop(Elemwise):
     def __str__(self):
         return f"{self.left} {self._operator_repr} {self.right}"
 
-    @classmethod
-    def _replacement_rules(cls):
-        left = Wildcard.dot("left")
-        right = Wildcard.dot("right")
-        columns = Wildcard.dot("columns")
-
-        # Column Projection
-        def transform(left, right, columns, cls=None):
-            if isinstance(left, Expr):
-                left = left[columns]  # TODO: filter just the correct columns
-
-            if isinstance(right, Expr):
-                right = right[columns]
-
-            return cls(left, right)
-
-        # (a + b)[c] -> a[c] + b[c]
-        yield ReplacementRule(
-            Pattern(cls(left, right)[columns]), functools.partial(transform, cls=cls)
-        )
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            if isinstance(self.left, Expr):
+                left = self.left[
+                    parent.operand("columns")
+                ]  # TODO: filter just the correct columns
+            else:
+                left = self.left
+            if isinstance(self.right, Expr):
+                right = self.right[parent.operand("columns")]
+            else:
+                right = self.right
+            return type(self)(left, right)
 
 
 class Add(Binop):
     operation = operator.add
     _operator_repr = "+"
 
-    @classmethod
-    def _replacement_rules(cls):
-        x = Wildcard.dot("x")
-        yield ReplacementRule(
-            Pattern(Add(x, x)),
-            lambda x: Mul(2, x),
-        )
-
-        yield from super()._replacement_rules()
+    def _simplify_down(self):
+        if (
+            isinstance(self.left, Expr)
+            and isinstance(self.right, Expr)
+            and self.left._name == self.right._name
+        ):
+            return 2 * self.left
 
 
 class Sub(Binop):
@@ -819,21 +836,13 @@ class Mul(Binop):
     operation = operator.mul
     _operator_repr = "*"
 
-    @classmethod
-    def _replacement_rules(cls):
-        a, b, c = map(Wildcard.dot, "abc")
-        yield ReplacementRule(
-            Pattern(
-                Mul(a, Mul(b, c)),
-                CustomConstraint(
-                    lambda a, b, c: isinstance(a, numbers.Number)
-                    and isinstance(b, numbers.Number)
-                ),
-            ),
-            lambda a, b, c: Mul(a * b, c),
-        )
-
-        yield from super()._replacement_rules()
+    def _simplify_down(self):
+        if (
+            isinstance(self.right, Mul)
+            and isinstance(self.left, numbers.Number)
+            and isinstance(self.right.left, numbers.Number)
+        ):
+            return (self.left * self.right.left) * self.right.right
 
 
 class Div(Binop):
@@ -890,15 +899,84 @@ class Partitions(Expr):
     def _task(self, index: int):
         return (self.frame._name, self.partitions[index])
 
-    def simplify(self):
+    def _simplify_down(self):
         if isinstance(self.frame, Blockwise) and not isinstance(
             self.frame, BlockwiseIO
         ):
             operands = [
-                Partitions(op, self.partitions) if isinstance(op, Expr) else op
+                Partitions(op, self.partitions)
+                if (isinstance(op, Expr) and not self.frame._broadcast_dep(op))
+                else op
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
+        elif isinstance(self.frame, PartitionsFiltered):
+            if self.frame._partitions:
+                partitions = [self.frame._partitions[p] for p in self.partitions]
+            else:
+                partitions = self.partitions
+            # We assume that expressions defining a special "_partitions"
+            # parameter can internally capture the same logic as `Partitions`
+            operands = [
+                partitions if self.frame._parameters[i] == "_partitions" else op
+                for i, op in enumerate(self.frame.operands)
+            ]
+            return type(self.frame)(*operands)
+
+
+class PartitionsFiltered(Expr):
+    """Mixin class for partition filtering
+
+    A `PartitionsFiltered` subclass must define a
+    `_partitions` parameter. When `_partitions` is
+    defined, the following expresssions must produce
+    the same output for `cls: PartitionsFiltered`:
+      - `cls(expr: Expr, ..., _partitions)`
+      - `Partitions(cls(expr: Expr, ...), _partitions)`
+
+    In order to leverage the default `Expr._layer`
+    method, subclasses should define `_filtered_task`
+    instead of `_task`.
+    """
+
+    @property
+    def _filtered(self) -> bool:
+        """Whether or not output partitions have been filtered"""
+        return self.operand("_partitions") is not None
+
+    @property
+    def _partitions(self) -> list | tuple | range:
+        """Selected partition indices"""
+        if self._filtered:
+            return self.operand("_partitions")
+        else:
+            return range(self.npartitions)
+
+    @functools.cached_property
+    def divisions(self):
+        # Common case: Use self._divisions()
+        full_divisions = super().divisions
+        if not self._filtered:
+            return full_divisions
+
+        # Specific case: Specific partitions were selected
+        new_divisions = []
+        for part in self._partitions:
+            new_divisions.append(full_divisions[part])
+        new_divisions.append(full_divisions[part + 1])
+        return tuple(new_divisions)
+
+    @property
+    def npartitions(self):
+        if self._filtered:
+            return len(self._partitions)
+        return super().npartitions
+
+    def _task(self, index: int):
+        return self._filtered_task(self._partitions[index])
+
+    def _filtered_task(self, index: int):
+        raise NotImplementedError()
 
 
 @normalize_token.register(Expr)
@@ -911,7 +989,7 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
 
     This leverages three optimization passes:
 
-    1.  Class based simplification using the ``simplify`` function and methods
+    1.  Class based simplification using the ``_simplify`` function and methods
     2.  Replacement rules with matchpy
     3.  Blockwise fusion
 
@@ -928,7 +1006,7 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     matchpy
     optimize_blockwise_fusion
     """
-    expr, _ = simplify(expr)
+    expr = expr.simplify()
     expr = optimize_matchpy(expr)
 
     if fuse:
@@ -950,53 +1028,6 @@ def optimize_matchpy(expr: Expr) -> Expr:
         _defer_to_matchpy = False
 
     return expr
-
-
-def simplify(expr: Expr) -> tuple[Expr, bool]:
-    """Simplify expression
-
-    This leverages the ``.simplify`` method defined on each class
-
-    Parameters
-    ----------
-    expr:
-        input expression
-
-    Returns
-    -------
-    expr:
-        output expression
-    changed:
-        whether or not any change occured
-    """
-    if not isinstance(expr, Expr):
-        return expr, False
-
-    changed_final = False
-
-    while True:
-        out = expr.simplify()
-        if out is None:
-            out = expr
-        if out._name == expr._name:
-            break
-        else:
-            changed_final = True
-            expr = out
-
-    changed_any = False
-    new_operands = []
-    for operand in expr.operands:
-        new, changed_one = simplify(operand)
-        new_operands.append(new)
-        changed_any |= changed_one
-
-    if changed_any:
-        changed_final = True
-        expr = type(expr)(*new_operands)
-        expr, _ = simplify(expr)
-
-    return expr, changed_final
 
 
 ## Utilites for Expr fusion
@@ -1118,6 +1149,24 @@ class Fused(Blockwise):
     @functools.cached_property
     def _meta(self):
         return self.exprs[0]._meta
+
+    def _tree_repr_lines(self, indent=0):
+        lines = []
+        header = f"Fused({self._name[-5:]}):"
+        for i, line in enumerate(self.exprs[0]._tree_repr_lines(2)):
+            if i < len(self.exprs):
+                lines.append(line.replace(" ", "|", 1))
+            else:
+                lines.append(line)
+
+        for op in enumerate(self.operands[1:]):
+            if isinstance(op, Expr):
+                lines.extend(op._tree_repr_lines(2))
+
+        lines = [header] + lines
+        lines = [" " * indent + line for line in lines]
+
+        return lines
 
     def __str__(self):
         names = [expr._name.split("-")[0] for expr in self.exprs]
