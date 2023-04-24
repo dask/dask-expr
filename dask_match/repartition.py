@@ -86,10 +86,6 @@ class Repartition(Expr):
         # Reorder with column projection
         if isinstance(parent, Projection):
             return type(self)(self.frame[parent.columns], *self.operands[1:])
-        # Reorder with filter
-        if isinstance(parent, Filter) and not isinstance(parent.predicate, Expr):
-            op = type(parent)(self.frame, parent.predicate)
-            return type(self)(op, *self.operands[1:])
 
 
 class RepartitionToFewer(Repartition):
