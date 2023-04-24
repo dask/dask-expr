@@ -83,11 +83,12 @@ class Repartition(Expr):
             raise NotImplementedError()
 
     def _simplify_up(self, parent):
-        # Move filter or column projection before repartitioning
-        if isinstance(parent, (Filter, Projection)) and not isinstance(
-            parent.operands[1], Expr
-        ):
-            op = type(parent)(self.frame, *parent.operands[1:])
+        # Reorder with column projection
+        if isinstance(parent, Projection):
+            return type(self)(self.frame[parent.columns], *self.operands[1:])
+        # Reorder with filter
+        if isinstance(parent, Filter) and not isinstance(parent.predicate, Expr):
+            op = type(parent)(self.frame, parent.predicate)
             return type(self)(op, *self.operands[1:])
 
 
