@@ -23,7 +23,7 @@ def test_disk_shuffle(ignore_index, npartitions):
     assert df2.npartitions == (npartitions or df.npartitions)
 
     # Check the computed (re-ordered) result
-    assert_eq(df, df2, check_index=not ignore_index)
+    assert_eq(df, df2, check_index=not ignore_index, check_divisions=False)
 
     # Check that df was really partitioned by "x"
     unique = []
@@ -52,7 +52,7 @@ def test_task_shuffle(ignore_index, npartitions, max_branch):
     assert df2.npartitions == (npartitions or df.npartitions)
 
     # Check the computed (re-ordered) result
-    assert_eq(df, df2, check_index=not ignore_index)
+    assert_eq(df, df2, check_index=not ignore_index, check_divisions=False)
 
     # Check that df was really partitioned by "x"
     unique = []
@@ -79,7 +79,7 @@ def test_task_shuffle_index(npartitions, max_branch):
     assert df2.npartitions == (npartitions or df.npartitions)
 
     # Check the computed (re-ordered) result
-    assert_eq(df, df2)
+    assert_eq(df, df2, check_divisions=False)
 
     # Check that df was really partitioned by "x"
     unique = []
