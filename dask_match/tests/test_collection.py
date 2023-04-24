@@ -3,6 +3,8 @@ import pickle
 
 import pandas as pd
 import pytest
+
+import dask
 from dask.dataframe.utils import assert_eq
 from dask.utils import M
 
@@ -188,6 +190,13 @@ def test_head_down(df):
     assert not isinstance(optimized.expr, expr.Head)
 
 
+def test_head_head(df):
+    a = df.head(compute=False).head(compute=False)
+    b = df.head(compute=False)
+
+    assert a.optimize()._name == b.optimize()._name
+
+
 def test_projection_stacking(df):
     result = df[["x", "y"]]["x"]
     optimized = optimize(result, fuse=False)
@@ -253,7 +262,12 @@ def test_partitions(pdf, df):
 
     out = (df + 1).partitions[0].optimize(fuse=False)
     assert isinstance(out.expr, expr.Add)
-    assert isinstance(out.expr.left, expr.Partitions)
+    assert out.expr.left._partitions == [0]
+
+    # Check culling
+    out = optimize(df.partitions[1])
+    assert len(out.dask) == 1
+    assert_eq(out, pdf.iloc[10:20])
 
 
 def test_column_getattr(df):
@@ -295,11 +309,13 @@ def test_size_optimized(df):
     assert out._name == expected._name
 
 
-def test_tree_repr(df):
+@pytest.mark.parametrize("fuse", [True, False])
+def test_tree_repr(df, fuse):
     from dask_match.datasets import timeseries
 
     df = timeseries()
     expr = ((df.x + 1).sum(skipna=False) + df.y.mean()).expr
+    expr = expr.optimize() if fuse else expr
     s = expr.tree_repr()
 
     assert "Sum" in s
@@ -309,6 +325,9 @@ def test_tree_repr(df):
     assert "None" not in s
     assert "skipna=False" in s
     assert str(df.seed) in s.lower()
+    if fuse:
+        assert "Fused" in s
+        assert s.count("|") == 9
 
 
 def test_simple_graphs(df):
@@ -334,3 +353,10 @@ def test_map_partitions_broadcast(df):
 
     df2 = df.map_partitions(combine_x_y, df["x"].sum(), 123, foo="bar")
     assert_eq(df2, df + df["x"].sum() + 123)
+
+
+def test_partitions_nested(df):
+    a = expr.Partitions(expr.Partitions(df.expr, [2, 4, 6]), [0, 2])
+    b = expr.Partitions(df.expr, [2, 6])
+
+    assert a.optimize()._name == b.optimize()._name

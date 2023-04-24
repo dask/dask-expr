@@ -6,12 +6,12 @@ from dask.utils import random_state_data
 
 from dask_match.collection import new_collection
 from dask_match.expr import Projection
-from dask_match.io import BlockwiseIO
+from dask_match.io import BlockwiseIO, PartitionsFiltered
 
 __all__ = ["timeseries"]
 
 
-class Timeseries(BlockwiseIO):
+class Timeseries(PartitionsFiltered, BlockwiseIO):
     _parameters = [
         "start",
         "end",
@@ -20,6 +20,7 @@ class Timeseries(BlockwiseIO):
         "partition_freq",
         "seed",
         "kwargs",
+        "_partitions",
     ]
     _defaults = {
         "start": "2000-01-01",
@@ -29,6 +30,7 @@ class Timeseries(BlockwiseIO):
         "partition_freq": "1d",
         "seed": None,
         "kwargs": {},
+        "_partitions": None,
     }
 
     @property
@@ -39,6 +41,7 @@ class Timeseries(BlockwiseIO):
             "2000", "2000", dtypes, list(dtypes.keys()), "1H", states, self.kwargs
         )
 
+    @functools.lru_cache
     def _divisions(self):
         return list(
             pd.date_range(start=self.start, end=self.end, freq=self.partition_freq)
@@ -46,22 +49,27 @@ class Timeseries(BlockwiseIO):
 
     @functools.cached_property
     def random_state(self):
-        if self.seed is None:
-            return np.random.randint(2e9, size=self.npartitions * len(self.dtypes))
-        else:
-            return random_state_data(self.npartitions * len(self.dtypes), self.seed)
+        npartitions = len(self._divisions()) - 1
+        return {
+            k: (
+                np.random.randint(2e9, size=npartitions)
+                if self.seed is None
+                else random_state_data(npartitions, self.seed)
+            )
+            for k in self.operand("dtypes")
+        }
 
-    def _task(self, index):
-        num_columns = len(self.columns)
-        offset = index * num_columns
+    def _filtered_task(self, index):
+        full_divisions = self._divisions()
+        column_states = [self.random_state[k][index] for k in self.operand("dtypes")]
         return (
             make_timeseries_part,
-            self.divisions[index],
-            self.divisions[index + 1],
+            full_divisions[index],
+            full_divisions[index + 1],
             self.operand("dtypes"),
             self.columns,
             self.freq,
-            self.random_state[offset : offset + num_columns],
+            column_states,
             self.kwargs,
         )
 
@@ -74,11 +82,12 @@ class Timeseries(BlockwiseIO):
             out = Timeseries(
                 self.start,
                 self.end,
-                dtypes,
+                dtypes=dtypes,
                 freq=self.freq,
                 partition_freq=self.partition_freq,
                 seed=self.seed,
                 kwargs=self.kwargs,
+                _partitions=self.operand("_partitions"),
             )
             if not isinstance(parent.operand("columns"), (list, pd.Index)):  # series
                 out = out[parent.operand("columns")]

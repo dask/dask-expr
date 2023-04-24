@@ -1,5 +1,6 @@
 import os
 
+import dask.dataframe as dd
 import pandas as pd
 import pytest
 from dask.dataframe.utils import assert_eq
@@ -109,6 +110,39 @@ def test_predicate_pushdown(tmpdir):
     assert list(y_result.columns) == ["b"]
     assert len(y_result["b"]) == 6
     assert all(y_result["b"] == 4)
+
+
+@pytest.mark.parametrize("fmt", ["parquet", "csv", "pandas"])
+def test_io_culling(tmpdir, fmt):
+    pdf = pd.DataFrame({c: range(10) for c in "abcde"})
+    if fmt == "parquet":
+        dd.from_pandas(pdf, 2).to_parquet(tmpdir)
+        df = read_parquet(tmpdir)
+    elif fmt == "parquet":
+        dd.from_pandas(pdf, 2).to_csv(tmpdir)
+        df = read_csv(tmpdir + "/*")
+    else:
+        df = from_pandas(pdf, 2)
+    df = (df[["a", "b"]] + 1).partitions[1]
+    df2 = optimize(df)
+
+    # All tasks should be fused for the single output partition
+    assert df2.npartitions == 1
+    assert len(df2.dask) == df2.npartitions
+    expected = pdf.iloc[5:][["a", "b"]] + 1
+    assert_eq(df2, expected, check_index=False)
+
+    def _check_culling(expr, partitions):
+        """CHeck that _partitions is set to the expected value"""
+        for dep in expr.dependencies():
+            _check_culling(dep, partitions)
+        if "_partitions" in expr._parameters:
+            assert expr._partitions == partitions
+
+    # Check that we still get culling without fusion
+    df3 = optimize(df, fuse=False)
+    _check_culling(df3.expr, [1])
+    assert_eq(df3, expected, check_index=False)
 
 
 @pytest.mark.parametrize("sort", [True, False])
