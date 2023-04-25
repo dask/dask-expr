@@ -546,6 +546,9 @@ class MapPartitions(Blockwise):
         "kwargs",
     ]
 
+    def __str__(self):
+        return f"MapPartitions({funcname(self.func)})"
+
     def _broadcast_dep(self, dep: Expr):
         # Always broadcast single-partition dependencies in MapPartitions
         return dep.npartitions == 1
