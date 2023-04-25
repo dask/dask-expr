@@ -18,8 +18,8 @@ from dask.dataframe.shuffle import (
 )
 from dask.utils import digit, get_default_shuffle_algorithm, insert
 
-from dask_match.expr import Assign, Blockwise, Expr, PartitionsFiltered
-from dask_match.repartition import Repartition
+from dask_expr.expr import Assign, Blockwise, Expr, PartitionsFiltered
+from dask_expr.repartition import Repartition
 
 
 class Shuffle(Expr):
