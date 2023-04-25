@@ -262,7 +262,6 @@ class TaskShuffle(SimpleShuffle):
         name = self.frame._name
         meta_input = make_meta(self.frame._meta)
         for stage in range(stages):
-
             # Define names
             name_input = name
             if stage == (stages - 1) and npartitions == npartitions_input:
