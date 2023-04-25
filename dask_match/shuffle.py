@@ -1,9 +1,9 @@
-import operator
-import numpy as np
 import math
-import tlz as toolz
+import operator
 import uuid
 
+import numpy as np
+import tlz as toolz
 from dask.dataframe.core import _concat, make_meta
 from dask.dataframe.shuffle import (
     barrier,
@@ -15,9 +15,9 @@ from dask.dataframe.shuffle import (
     shuffle_group_3,
     shuffle_group_get,
 )
-from dask.utils import digit, insert, get_default_shuffle_algorithm
+from dask.utils import digit, get_default_shuffle_algorithm, insert
 
-from dask_match.expr import Assign, Expr, Blockwise
+from dask_match.expr import Assign, Blockwise, Expr, PartitionsFiltered
 from dask_match.repartition import Repartition
 
 
@@ -99,7 +99,10 @@ class ShuffleBackend(Shuffle):
         "npartitions_out",
         "ignore_index",
         "options",
+        "_partitions",
     ]
+
+    _defaults = {"_partitions": None}
 
     @classmethod
     def from_abstract_shuffle(cls, expr: Shuffle) -> Expr:
@@ -110,7 +113,7 @@ class ShuffleBackend(Shuffle):
         return None
 
 
-class SimpleShuffle(ShuffleBackend):
+class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
     """Simple task-based shuffle implementation"""
 
     lazy_hash_support = True
@@ -172,14 +175,15 @@ class SimpleShuffle(ShuffleBackend):
         """Construct graph for a simple shuffle operation."""
         shuffle_group_name = "group-" + self._name
         split_name = "split-" + self._name
+        npartitions = self.npartitions_out
 
         dsk = {}
-        for part_out in range(self.npartitions):
+        for global_part, part_out in enumerate(self._partitions):
             _concat_list = [
                 (split_name, part_out, part_in)
                 for part_in in range(self.frame.npartitions)
             ]
-            dsk[(self._name, part_out)] = (
+            dsk[(self._name, global_part)] = (
                 _concat,
                 _concat_list,
                 self.ignore_index,
@@ -196,10 +200,10 @@ class SimpleShuffle(ShuffleBackend):
                         (self.frame._name, _part_in),
                         self.partitioning_index,
                         0,
-                        self.npartitions,
-                        self.npartitions,
+                        npartitions,
+                        npartitions,
                         self.ignore_index,
-                        self.npartitions,
+                        npartitions,
                     )
 
         return dsk
@@ -230,29 +234,27 @@ class TaskShuffle(SimpleShuffle):
             tuple(digit(i, j, nsplits) for j in range(stages))
             for i in range(nsplits**stages)
         ]
-        parts_out = range(len(inputs))  # Could apply culling here
+        inp_part_map = {inp: i for i, inp in enumerate(inputs)}
+        parts_out = range(len(inputs))
 
         # Build graph
         dsk = {}
+        name = self.frame._name
         meta_input = make_meta(self.frame._meta)
         for stage in range(stages):
-            # Define input-stage name
-            if stage == 0:
-                name_input = self.frame._name
-            else:
-                name_input = name
 
-            # Define current stage name
+            # Define names
+            name_input = name
             if stage == (stages - 1) and npartitions == npartitions_input:
                 name = self._name
+                parts_out = self._partitions
             else:
                 name = f"stage-{stage}-{self._name}"
 
             shuffle_group_name = "group-" + name
             split_name = "split-" + name
 
-            inp_part_map = {inp: i for i, inp in enumerate(inputs)}
-            for part in parts_out:
+            for global_part, part in enumerate(parts_out):
                 out = inputs[part]
 
                 _concat_list = []  # get_item tasks to concat for this output partition
@@ -263,7 +265,7 @@ class TaskShuffle(SimpleShuffle):
                     _concat_list.append((split_name, _idx, _inp))
 
                 # concatenate those pieces together, with their friends
-                dsk[(name, part)] = (
+                dsk[(name, global_part)] = (
                     _concat,
                     _concat_list,
                     self.ignore_index,
@@ -316,8 +318,8 @@ class TaskShuffle(SimpleShuffle):
                 for i in range(npartitions_input)
             }
 
-            for p in range(npartitions):
-                dsk2[(self._name, p)] = (
+            for i, p in enumerate(self._partitions):
+                dsk2[(self._name, i)] = (
                     shuffle_group_get,
                     (repartition_group_name, p % npartitions_input),
                     p,
@@ -358,8 +360,8 @@ class DiskShuffle(SimpleShuffle):
 
         # Collect groups
         dsk4 = {
-            (self._name, i): (collect, p, i, df._meta, barrier_token)
-            for i in range(npartitions)
+            (self._name, j): (collect, p, k, df._meta, barrier_token)
+            for j, k in enumerate(self._partitions)
         }
 
         return toolz.merge(dsk1, dsk2, dsk3, dsk4)

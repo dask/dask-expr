@@ -1,7 +1,5 @@
 import pandas as pd
 import pytest
-
-import dask
 from dask.dataframe.utils import assert_eq
 
 from dask_match import from_pandas
@@ -25,13 +23,24 @@ def test_disk_shuffle(ignore_index, npartitions):
     # Check the computed (re-ordered) result
     assert_eq(df, df2, check_index=not ignore_index, check_divisions=False)
 
-    # Check that df was really partitioned by "x"
-    unique = []
-    for part in dask.compute(list(df2["x"].partitions))[0]:
-        unique.extend(part.unique().tolist())
+    # Check that df was really partitioned by "x".
     # If any values of "x" can be found in multiple
-    # partitions, then `len(unique)` will be >20
-    assert sorted(unique) == list(range(20))
+    # partitions, this will fail
+    df3 = df2["x"].map_partitions(lambda x: x.drop_duplicates())
+    assert sorted(df3.compute().tolist()) == list(range(20))
+
+    # Check `partitions` after shuffle
+    a = df2.partitions[1]
+    b = df.shuffle(
+        "y",
+        backend="disk",
+        npartitions=npartitions,
+        ignore_index=ignore_index,
+    ).partitions[1]
+    assert set(a["x"].compute()).issubset(b["y"].compute())
+
+    # Check for culling
+    assert len(a.optimize().dask) < len(df2.optimize().dask)
 
 
 @pytest.mark.parametrize("ignore_index", [True, False])
@@ -54,13 +63,24 @@ def test_task_shuffle(ignore_index, npartitions, max_branch):
     # Check the computed (re-ordered) result
     assert_eq(df, df2, check_index=not ignore_index, check_divisions=False)
 
-    # Check that df was really partitioned by "x"
-    unique = []
-    for part in dask.compute(list(df2["x"].partitions))[0]:
-        unique.extend(part.unique().tolist())
+    # Check that df was really partitioned by "x".
     # If any values of "x" can be found in multiple
-    # partitions, then `len(unique)` will be >20
-    assert sorted(unique) == list(range(20))
+    # partitions, this will fail
+    df3 = df2["x"].map_partitions(lambda x: x.drop_duplicates())
+    assert sorted(df3.compute().tolist()) == list(range(20))
+
+    # Check `partitions` after shuffle
+    a = df2.partitions[1]
+    b = df.shuffle(
+        "y",
+        backend="tasks",
+        npartitions=npartitions,
+        ignore_index=ignore_index,
+    ).partitions[1]
+    assert set(a["x"].compute()).issubset(b["y"].compute())
+
+    # Check for culling
+    assert len(a.optimize().dask) < len(df2.optimize().dask)
 
 
 @pytest.mark.parametrize("npartitions", [3, 12])
@@ -81,10 +101,8 @@ def test_task_shuffle_index(npartitions, max_branch):
     # Check the computed (re-ordered) result
     assert_eq(df, df2, check_divisions=False)
 
-    # Check that df was really partitioned by "x"
-    unique = []
-    for part in dask.compute(list(df2.index.partitions))[0]:
-        unique.extend(part.unique().tolist())
+    # Check that df was really partitioned by "x".
     # If any values of "x" can be found in multiple
-    # partitions, then `len(unique)` will be >20
-    assert sorted(unique) == list(range(20))
+    # partitions, this will fail
+    df3 = df2.index.map_partitions(lambda x: x.drop_duplicates())
+    assert sorted(df3.compute().tolist()) == list(range(20))
