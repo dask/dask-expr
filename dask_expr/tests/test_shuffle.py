@@ -44,8 +44,8 @@ def test_disk_shuffle(ignore_index, npartitions):
 
 
 @pytest.mark.parametrize("ignore_index", [True, False])
-@pytest.mark.parametrize("npartitions", [3, 12])
-@pytest.mark.parametrize("max_branch", [32, 8])
+@pytest.mark.parametrize("npartitions", [8, 12])
+@pytest.mark.parametrize("max_branch", [32, 6])
 def test_task_shuffle(ignore_index, npartitions, max_branch):
     pdf = pd.DataFrame({"x": list(range(20)) * 5, "y": range(100)})
     df = from_pandas(pdf, npartitions=10)
