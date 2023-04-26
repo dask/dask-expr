@@ -1085,17 +1085,13 @@ class Fused(Blockwise):
 
     def _tree_repr_lines(self, indent=0):
         lines = []
-        ext_indent = 0  # How far to indent "unfused" lines
+        ext_indent = 2  # How far to indent "unfused" lines
         header = f"Fused({self._name[-5:]}):"
         for i, line in enumerate(self.exprs[0]._tree_repr_lines(2)):
             if i < len(self.exprs):
                 lines.append(line.replace(" ", "|", 1))
             else:
-                while True:
-                    c = line[ext_indent]
-                    if c != " ":
-                        break
-                    ext_indent += 1
+                ext_indent = len(line) - len(line.lstrip(" "))
                 break
 
         for op in self.operands[1:]:
