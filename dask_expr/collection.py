@@ -118,16 +118,18 @@ class FrameBase(DaskMethodsMixin):
                 # Raise original error
                 raise err
 
-    def visualize(self, nodes="expr", **kwargs):
-        """Visualize the expression or task graph"""
-        if nodes == "expr":
-            return self.expr.visualize(**kwargs)
-        elif nodes == "task":
-            from dask.base import visualize
+    def visualize(self, tasks: bool = False, **kwargs):
+        """Visualize the expression or task graph
 
-            return visualize(self, **kwargs)
-        else:
-            raise ValueError(f"nodes must be 'expr' or 'task'. Got: {nodes}")
+        Parameters
+        ----------
+        tasks:
+            Whether to visualize the task graph. By default
+            the expression graph will be visualized instead.
+        """
+        if tasks:
+            return super().visualize(**kwargs)
+        return self.expr.visualize(**kwargs)
 
     @property
     def index(self):

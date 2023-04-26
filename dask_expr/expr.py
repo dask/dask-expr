@@ -536,7 +536,7 @@ class Expr:
 
         return g
 
-    def visualize(self, filename="dask-hlg.svg", format=None, **kwargs):
+    def visualize(self, filename="dask-expr.svg", format=None, **kwargs):
         """
         Visualize the expression graph.
         Requires ``graphviz`` to be installed.
