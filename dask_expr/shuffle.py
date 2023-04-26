@@ -239,7 +239,7 @@ class TaskShuffle(SimpleShuffle):
         else:
             nsplits = npartitions_input
 
-        # Figure out how many
+        # Construct global data-movement plan
         inputs = [
             tuple(digit(i, j, nsplits) for j in range(stages))
             for i in range(nsplits**stages)
