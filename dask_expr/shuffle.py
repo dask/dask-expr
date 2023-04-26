@@ -225,7 +225,8 @@ class TaskShuffle(SimpleShuffle):
         max_branch = self.options.get("max_branch", 32)
         npartitions_input = self.frame.npartitions
         if len(self._partitions) <= max_branch or npartitions_input <= max_branch:
-            # We are creating a small number of output partitions.
+            # We are creating a small number of output partitions,
+            # or starting with a small number of input partitions.
             # No need for staged shuffling. Staged shuffling will
             # sometimes require extra work/communication in this case.
             return super()._layer()
