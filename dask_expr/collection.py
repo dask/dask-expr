@@ -207,6 +207,7 @@ class FrameBase(DaskMethodsMixin):
         meta=no_default,
         enforce_metadata=True,
         transform_divisions=True,
+        clear_divisions=False,
         align_dataframes=False,
         **kwargs,
     ):
@@ -232,6 +233,9 @@ class FrameBase(DaskMethodsMixin):
         transform_divisions : bool, default True
             Whether to apply the function onto the divisions and apply those
             transformed divisions to the output.
+        clear_divisions : bool, default False
+            Whether divisions should be cleared. If True, `transform_divisions`
+            will be ignored.
         meta : Any, optional
             DataFrame object representing the schema of the expected result.
         """
@@ -250,6 +254,7 @@ class FrameBase(DaskMethodsMixin):
             meta,
             enforce_metadata,
             transform_divisions,
+            clear_divisions,
             kwargs,
             *[arg.expr if isinstance(arg, FrameBase) else arg for arg in args],
         )
