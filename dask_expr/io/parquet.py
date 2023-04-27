@@ -11,7 +11,7 @@ from dask.dataframe.io.parquet.core import (
 from dask.dataframe.io.parquet.utils import _split_user_options
 from dask.utils import natural_sort_key
 
-from dask_expr.expr import EQ, GE, GT, LE, LT, NE, Filter, Projection
+from dask_expr.expr import EQ, GE, GT, LE, LT, NE, Expr, Filter, Projection
 from dask_expr.io import BlockwiseIO, PartitionsFiltered
 
 NONE_LABEL = "__null_dask_index__"
@@ -94,15 +94,19 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             if (
                 isinstance(parent.predicate.left, ReadParquet)
                 and parent.predicate.left.path == self.path
+                and not isinstance(parent.predicate.right, Expr)
             ):
                 op = parent.predicate._operator_repr
                 column = parent.predicate.left.columns[0]
                 value = parent.predicate.right
-                kwargs["filters"] = kwargs["filters"] + ((column, op, value),)
+                kwargs["filters"] = (kwargs["filters"] or tuple()) + (
+                    (column, op, value),
+                )
                 return ReadParquet(**kwargs)
             if (
                 isinstance(parent.predicate.right, ReadParquet)
                 and parent.predicate.right.path == self.path
+                and not isinstance(parent.predicate.left, Expr)
             ):
                 # Simple dict to make sure field comes first in filter
                 flip = {LE: GE, LT: GT, GE: LE, GT: LT}
@@ -110,7 +114,9 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
                 op = flip.get(op, op)._operator_repr
                 column = parent.predicate.right.columns[0]
                 value = parent.predicate.left
-                kwargs["filters"] = kwargs["filters"] + ((column, op, value),)
+                kwargs["filters"] = (kwargs["filters"] or tuple()) + (
+                    (column, op, value),
+                )
                 return ReadParquet(**kwargs)
 
     @cached_property
