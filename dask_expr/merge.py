@@ -25,7 +25,6 @@ class Merge(Expr):
         "indicator",
         "backend",
         "shuffle_backend",
-        "_partitions",
     ]
     _defaults = {
         "how": "inner",
@@ -38,7 +37,6 @@ class Merge(Expr):
         "indicator": False,
         "backend": None,
         "shuffle_backend": None,
-        "_partitions": None,
     }
 
     def __str__(self):
@@ -171,6 +169,7 @@ class MergeBackend(Merge):
             else:
                 left = Repartition(left, new_divisions=right.divisions, force=True)
             shuffle_left_on = shuffle_right_on = None
+
         # TODO: Need 'rearrange_by_divisions' equivalent
         # to avoid shuffle when we are merging on known
         # divisions on one side only.
