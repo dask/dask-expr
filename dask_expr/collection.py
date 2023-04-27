@@ -340,6 +340,7 @@ class DataFrame(FrameBase):
         right_index=False,
         suffixes=("_x", "_y"),
         indicator=False,
+        backend=None,
         shuffle_backend=None,
     ):
         if isinstance(other, DataFrame):
@@ -359,6 +360,7 @@ class DataFrame(FrameBase):
                 right_index=right_index,
                 suffixes=suffixes,
                 indicator=indicator,
+                backend=backend,
                 shuffle_backend=shuffle_backend,
             )
         )

@@ -64,7 +64,7 @@ class Shuffle(Expr):
         # TODO: Support "p2p"
         backend = self.backend or get_default_shuffle_algorithm()
         backend = "tasks" if backend == "p2p" else backend
-        if isinstance(backend, ShuffleBackend):
+        if hasattr(backend, "from_abstract_shuffle"):
             return backend.from_abstract_shuffle(self)
         elif backend == "disk":
             return DiskShuffle.from_abstract_shuffle(self)

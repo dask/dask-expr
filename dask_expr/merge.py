@@ -1,6 +1,9 @@
 import functools
 
-from dask_expr.expr import Expr, MapPartitions
+from dask.dataframe.dispatch import make_meta, meta_nonempty
+from dask.utils import apply
+
+from dask_expr.expr import Blockwise, Expr
 from dask_expr.io import FromPandas
 from dask_expr.shuffle import Shuffle
 
@@ -19,7 +22,9 @@ class Merge(Expr):
         "right_index",
         "suffixes",
         "indicator",
+        "backend",
         "shuffle_backend",
+        "_partitions",
     ]
     _defaults = {
         "how": "inner",
@@ -30,7 +35,9 @@ class Merge(Expr):
         "right_index": False,
         "suffixes": ("_x", "_y"),
         "indicator": False,
+        "backend": None,
         "shuffle_backend": None,
+        "_partitions": None,
     }
 
     def __str__(self):
@@ -54,61 +61,110 @@ class Merge(Expr):
 
     @functools.cached_property
     def _meta(self):
-        if isinstance(self.right, Expr):
-            right = self.right._meta
-        else:
-            right = self.right.iloc[:0]
-        return self.left._meta.merge(right, **self._kwargs)
+        left = self._as_meta(self.left)
+        right = self._as_meta(self.right)
+        return left.merge(right, **self._kwargs)
 
     def _divisions(self):
-        npartitions_right = (
-            self.right.npartitions if isinstance(self.right, Expr) else 1
-        )
-        npartitions = max(self.left.npartitions, npartitions_right)
+        npartitions_left = self._as_expr(self.left).npartitions
+        npartitions_right = self._as_expr(self.right).npartitions
+        npartitions = max(npartitions_left, npartitions_right)
         return (None,) * (npartitions + 1)
+
+    @staticmethod
+    def _as_meta(dep, nonempty=True):
+        if isinstance(dep, Expr):
+            dep = dep._meta
+        return meta_nonempty(dep) if nonempty else make_meta(dep)
+
+    @staticmethod
+    def _as_expr(dep):
+        if isinstance(dep, Expr):
+            return dep
+        return FromPandas(dep, 1)
+
+    def _simplify_down(self):
+        # Lower from an abstract expression using
+        # logic in MergeBackend.from_abstract_merge
+        backend = self.backend or MergeBackend
+        if hasattr(backend, "from_abstract_merge"):
+            return backend.from_abstract_merge(self)
+        else:
+            raise ValueError(f"{backend} not supported")
+
+
+class MergeBackend(Merge):
+    """Base merge-backend class"""
+
+    def _simplify_down(self):
+        return None
+
+    @classmethod
+    def from_abstract_merge(cls, expr: Merge) -> Expr:
+        """Return a new Exprs to perform a merge"""
+
+        # TODO:
+        #  1. Handle merge on index
+        #  2. Add multi-partition broadcast merge
+        #  3. Add/leverage partition statistics
+
+        left = expr._as_expr(expr.left)
+        right = expr._as_expr(expr.right)
+        npartitions = max(left.npartitions, right.npartitions)
+        how = expr.how
+
+        # Check for "trivial" broadcast (single partition)
+        simple_broadcast = (
+            npartitions == 1
+            or left.npartitions == 1
+            and how in ("right", "inner")
+            or right.npartitions == 1
+            and how in ("left", "inner")
+        )
+
+        if not simple_broadcast:
+            if expr.left_index or expr.right_index:
+                # TODO: Merge on index
+                raise NotImplementedError()
+
+            left_on = expr.left_on or expr.on
+            right_on = expr.right_on or expr.on
+
+            # Shuffle left & right
+            left = Shuffle(
+                left,
+                left_on,
+                npartitions_out=npartitions,
+                backend=expr.shuffle_backend,
+            )
+            right = Shuffle(
+                right,
+                right_on,
+                npartitions_out=npartitions,
+                backend=expr.shuffle_backend,
+            )
+
+        # Blockwise merge
+        return BlockwiseMerge(left, right, **expr._kwargs)
+
+
+class BlockwiseMerge(MergeBackend, Blockwise):
+    """Base merge-backend class"""
+
+    def _broadcast_dep(self, dep: Expr):
+        return dep.npartitions == 1
 
     @staticmethod
     def _merge_partition(df, other, **kwargs):
         return df.merge(other, **kwargs)
 
-    def _simplify_down(self):
-        # TODO:
-        #  1. Handle merge on indices with known divisions
-        #  2. Handle broadcast merge
-        #  3. Add/leverage partition statistics
-
-        left = self.left
-        left_on = self.left_on or self.on
-        npartitions_left = self.left.npartitions
-
-        right = (
-            self.right if isinstance(self.right, Expr) else FromPandas(self.right, 1)
-        )
-        right_on = self.right_on or self.on
-        npartitions_right = (
-            self.right.npartitions if isinstance(self.right, Expr) else 1
-        )
-
-        npartitions_out = max(npartitions_left, npartitions_right)
-
-        # Shuffle left & right
-        left = Shuffle(
-            left, left_on, npartitions_out=npartitions_out, backend=self.shuffle_backend
-        )
-        right = Shuffle(
-            right,
-            right_on,
-            npartitions_out=npartitions_out,
-            backend=self.shuffle_backend,
-        )
-
-        # Partition-wise merge
-        return MapPartitions(
-            left,
+    def _task(self, index: int):
+        return (
+            apply,
             self._merge_partition,
-            self._meta,
-            False,
-            True,
+            [
+                self._blockwise_arg(self.left, index),
+                self._blockwise_arg(self.right, index),
+            ],
             self._kwargs,
-            right,
         )
