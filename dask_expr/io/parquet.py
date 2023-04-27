@@ -205,7 +205,8 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
     def _meta(self):
         meta = self._dataset_info["meta"]
         if self._series:
-            return meta[self.operand("columns")[0]]
+            column = _list_columns(self.operand("columns"))[0]
+            return meta[column]
         return meta
 
     @cached_property
