@@ -105,7 +105,7 @@ class MergeBackend(Merge):
         """Return a new Exprs to perform a merge"""
 
         # TODO:
-        #  1. Handle mixed known-divisions
+        #  1. Handle mixed indexed merge
         #  2. Add multi-partition broadcast merge
         #  3. Add/leverage partition statistics
 
