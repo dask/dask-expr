@@ -5,7 +5,8 @@ from dask.utils import apply
 
 from dask_expr.expr import Blockwise, Expr
 from dask_expr.io import FromPandas
-from dask_expr.shuffle import Shuffle
+from dask_expr.repartition import Repartition
+from dask_expr.shuffle import Shuffle, _contains_index_name
 
 
 class Merge(Expr):
@@ -104,42 +105,98 @@ class MergeBackend(Merge):
         """Return a new Exprs to perform a merge"""
 
         # TODO:
-        #  1. Handle merge on index
+        #  1. Handle mixed known-divisions
         #  2. Add multi-partition broadcast merge
         #  3. Add/leverage partition statistics
 
         left = expr._as_expr(expr.left)
         right = expr._as_expr(expr.right)
-        npartitions = max(left.npartitions, right.npartitions)
         how = expr.how
+        on = expr.on
+        left_on = expr.left_on
+        right_on = expr.right_on
+        left_index = expr.left_index
+        right_index = expr.right_index
+
+        for o in [on, left_on, right_on]:
+            if isinstance(o, Expr):
+                raise NotImplementedError()
+        if (
+            not on
+            and not left_on
+            and not right_on
+            and not left_index
+            and not right_index
+        ):
+            on = [c for c in left.columns if c in right.columns]
+            if not on:
+                left_index = right_index = True
+
+        if on and not left_on and not right_on:
+            left_on = right_on = on
+            on = None
+
+        supported_how = ("left", "right", "outer", "inner")
+        if how not in supported_how:
+            raise ValueError(
+                f"dask.dataframe.merge does not support how='{how}'."
+                f"Options are: {supported_how}."
+            )
 
         # Check for "trivial" broadcast (single partition)
-        simple_broadcast = (
+        npartitions = max(left.npartitions, right.npartitions)
+        if (
             npartitions == 1
             or left.npartitions == 1
             and how in ("right", "inner")
             or right.npartitions == 1
             and how in ("left", "inner")
-        )
+        ):
+            return BlockwiseMerge(left, right, **expr._kwargs)
 
-        if not simple_broadcast:
-            if expr.left_index or expr.right_index:
-                # TODO: Merge on index
+        # Check if we are merging on indices with known divisions
+        merge_indexed_left = (
+            left_index or _contains_index_name(left, left_on)
+        ) and left.known_divisions
+        merge_indexed_right = (
+            right_index or _contains_index_name(right, right_on)
+        ) and right.known_divisions
+
+        shuffle_left_on = left_on
+        shuffle_right_on = right_on
+        if merge_indexed_left and merge_indexed_right:
+            # fully-indexed merge
+            if left.npartitions >= right.npartitions:
+                right = Repartition(right, new_divisions=left.divisions, force=True)
+            else:
+                left = Repartition(left, new_divisions=right.divisions, force=True)
+            shuffle_left_on = shuffle_right_on = None
+        # TODO: Need 'rearrange_by_divisions' equivalent
+        # to avoid shuffle when we are merging on known
+        # divisions on one side only.
+        elif left_index:
+            shuffle_left_on = left.index._meta.name
+            if shuffle_left_on is None:
+                raise NotImplementedError()
+        elif right_index:
+            shuffle_right_on = right.index._meta.name
+            if shuffle_right_on is None:
                 raise NotImplementedError()
 
-            left_on = expr.left_on or expr.on
-            right_on = expr.right_on or expr.on
-
-            # Shuffle left & right
+        if shuffle_left_on:
+            # Shuffle left
             left = Shuffle(
                 left,
-                left_on,
+                shuffle_left_on,
                 npartitions_out=npartitions,
                 backend=expr.shuffle_backend,
             )
+
+        if shuffle_right_on:
+            # Shuffle right
             right = Shuffle(
                 right,
-                right_on,
+                shuffle_right_on,
                 npartitions_out=npartitions,
                 backend=expr.shuffle_backend,
             )

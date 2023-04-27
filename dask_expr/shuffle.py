@@ -452,7 +452,7 @@ def _is_index_level_reference(df, key):
     To be considered an index level reference, `key` must match the index name
     and must NOT match the name of any column.
     """
-    index_name = df.index.name
+    index_name = df.index._meta.name if isinstance(df, Expr) else df.index.name
     return (
         index_name is not None
         and not isinstance(key, Expr)
