@@ -101,6 +101,12 @@ class Merge(Expr):
             right_index or _contains_index_name(right, right_on)
         ) and right.known_divisions
 
+        # NOTE: Merging on an index is fragile. Pandas behavior
+        # depends on the actual data, and so we cannot use `meta`
+        # to accurately predict the output columns. Once general
+        # partition statistics are available, it may make sense
+        # to drop support for left_on and right_on.
+
         shuffle_left_on = left_on
         shuffle_right_on = right_on
         if merge_indexed_left and merge_indexed_right:
@@ -111,9 +117,11 @@ class Merge(Expr):
                 left = Repartition(left, new_divisions=right.divisions, force=True)
             shuffle_left_on = shuffle_right_on = None
 
-        # TODO: Need 'rearrange_by_divisions' equivalent
-        # to avoid shuffle when we are merging on known
-        # divisions on one side only.
+        # TODO:
+        #   - Need 'rearrange_by_divisions' equivalent
+        #     to avoid shuffle when we are merging on known
+        #     divisions on one side only.
+        #   - Need mechanism to shuffle by an un-named index.
         else:
             if left_index:
                 shuffle_left_on = left.index._meta.name
