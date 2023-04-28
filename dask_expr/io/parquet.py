@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import operator
 from functools import cached_property
 
 from dask.dataframe.io.parquet.core import (
@@ -46,6 +47,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         "filesystem",
         "kwargs",
         "_partitions",
+        "_series",
     ]
     _defaults = {
         "columns": None,
@@ -63,6 +65,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         "filesystem": "fsspec",
         "kwargs": None,
         "_partitions": None,
+        "_series": False,
     }
 
     @property
@@ -85,6 +88,8 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             operands[self._parameters.index("columns")] = _list_columns(
                 parent.operand("columns")
             )
+            if isinstance(parent.operand("columns"), (str, int)):
+                operands[self._parameters.index("_series")] = True
             return ReadParquet(*operands)
 
         if isinstance(parent, Filter) and isinstance(
@@ -198,7 +203,11 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
 
     @property
     def _meta(self):
-        return self._dataset_info["meta"]
+        meta = self._dataset_info["meta"]
+        if self._series:
+            column = _list_columns(self.operand("columns"))[0]
+            return meta[column]
+        return meta
 
     @cached_property
     def _plan(self):
@@ -252,4 +261,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         return self._plan["divisions"]
 
     def _filtered_task(self, index: int):
-        return (self._plan["func"], self._plan["parts"][index])
+        tsk = (self._plan["func"], self._plan["parts"][index])
+        if self._series:
+            return (operator.getitem, tsk, self.columns[0])
+        return tsk

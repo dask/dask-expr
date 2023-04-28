@@ -16,7 +16,7 @@ from dask.dataframe.core import (
     apply_and_enforce,
     is_dataframe_like,
 )
-from dask.utils import M, apply, funcname
+from dask.utils import M, apply, funcname, import_required
 
 replacement_rules = []
 
@@ -64,12 +64,13 @@ class Expr:
     def __repr__(self):
         return str(self)
 
-    def _tree_repr_lines(self, indent=0):
+    def _tree_repr_lines(self, indent=0, recursive=True):
         header = funcname(type(self)) + ":"
         lines = []
         for i, op in enumerate(self.operands):
             if isinstance(op, Expr):
-                lines.extend(op._tree_repr_lines(2))
+                if recursive:
+                    lines.extend(op._tree_repr_lines(2))
             else:
                 try:
                     param = self._parameters[i]
@@ -457,6 +458,108 @@ class Expr:
             return type(self)(*new)
         return self
 
+    def _node_label_args(self):
+        """Operands to include in the node label by `visualize`"""
+        return self.dependencies()
+
+    def _to_graphviz(
+        self,
+        rankdir="BT",
+        graph_attr=None,
+        node_attr=None,
+        edge_attr=None,
+        **kwargs,
+    ):
+        from dask.dot import label, name
+
+        graphviz = import_required(
+            "graphviz",
+            "Drawing dask graphs with the graphviz visualization engine requires the `graphviz` "
+            "python library and the `graphviz` system library.\n\n"
+            "Please either conda or pip install as follows:\n\n"
+            "  conda install python-graphviz     # either conda install\n"
+            "  python -m pip install graphviz    # or pip install and follow installation instructions",
+        )
+
+        graph_attr = graph_attr or {}
+        node_attr = node_attr or {}
+        edge_attr = edge_attr or {}
+
+        graph_attr["rankdir"] = rankdir
+        node_attr["shape"] = "box"
+        node_attr["fontname"] = "helvetica"
+
+        graph_attr.update(kwargs)
+        g = graphviz.Digraph(
+            graph_attr=graph_attr,
+            node_attr=node_attr,
+            edge_attr=edge_attr,
+        )
+
+        stack = [self]
+        seen = set()
+        dependencies = {}
+        while stack:
+            expr = stack.pop()
+
+            if expr._name in seen:
+                continue
+            seen.add(expr._name)
+
+            dependencies[expr] = set(expr.dependencies())
+            for dep in expr.dependencies():
+                stack.append(dep)
+
+        cache = {}
+        for expr in dependencies:
+            expr_name = name(expr)
+            attrs = {}
+
+            # Make node label
+            deps = [
+                funcname(type(dep)) if isinstance(dep, Expr) else str(dep)
+                for dep in expr._node_label_args()
+            ]
+            _label = funcname(type(expr))
+            if deps:
+                _label = f"{_label}({', '.join(deps)})" if deps else _label
+            node_label = label(_label, cache=cache)
+
+            attrs.setdefault("label", str(node_label))
+            attrs.setdefault("fontsize", "20")
+            g.node(expr_name, **attrs)
+
+        for expr, deps in dependencies.items():
+            expr_name = name(expr)
+            for dep in deps:
+                dep_name = name(dep)
+                g.edge(dep_name, expr_name)
+
+        return g
+
+    def visualize(self, filename="dask-expr.svg", format=None, **kwargs):
+        """
+        Visualize the expression graph.
+        Requires ``graphviz`` to be installed.
+
+        Parameters
+        ----------
+        filename : str or None, optional
+            The name of the file to write to disk. If the provided `filename`
+            doesn't include an extension, '.png' will be used by default.
+            If `filename` is None, no file will be written, and the graph is
+            rendered in the Jupyter notebook only.
+        format : {'png', 'pdf', 'dot', 'svg', 'jpeg', 'jpg'}, optional
+            Format in which to write output file. Default is 'svg'.
+        **kwargs
+           Additional keyword arguments to forward to ``to_graphviz``.
+        """
+        from dask.dot import graphviz_to_file
+
+        g = self._to_graphviz(**kwargs)
+        graphviz_to_file(g, filename, format)
+        return g
+
 
 class Blockwise(Expr):
     """Super-class for block-wise operations
@@ -646,6 +749,9 @@ class Assign(Elemwise):
     _parameters = ["frame", "key", "value"]
     operation = staticmethod(methods.assign)
 
+    def _node_label_args(self):
+        return [self.frame, self.key, self.value]
+
 
 class Filter(Blockwise):
     _parameters = ["frame", "predicate"]
@@ -668,6 +774,9 @@ class Projection(Elemwise):
             return pd.Index(self.operand("columns"))
         else:
             return self.operand("columns")
+
+    def _node_label_args(self):
+        return [self.frame, self.operand("columns")]
 
     def __str__(self):
         base = str(self.frame)
@@ -772,6 +881,9 @@ class Binop(Elemwise):
             else:
                 right = self.right
             return type(self)(left, right)
+
+    def _node_label_args(self):
+        return [self.left, self.right]
 
 
 class Add(Binop):
@@ -882,6 +994,9 @@ class Partitions(Expr):
                 for i, op in enumerate(self.frame.operands)
             ]
             return type(self.frame)(*operands)
+
+    def _node_label_args(self):
+        return [self.frame, self.partitions]
 
 
 class PartitionsFiltered(Expr):
@@ -1097,20 +1212,34 @@ class Fused(Blockwise):
     def _meta(self):
         return self.exprs[0]._meta
 
-    def _tree_repr_lines(self, indent=0):
-        lines = []
-        ext_indent = 2  # How far to indent "unfused" lines
+    def _tree_repr_lines(self, indent=0, recursive=True):
         header = f"Fused({self._name[-5:]}):"
-        for i, line in enumerate(self.exprs[0]._tree_repr_lines(2)):
-            if i < len(self.exprs):
-                lines.append(line.replace(" ", "|", 1))
-            else:
-                ext_indent = len(line) - len(line.lstrip(" "))
-                break
+        if not recursive:
+            return [header]
 
-        for op in self.operands[1:]:
-            if isinstance(op, Expr):
-                lines.extend(op._tree_repr_lines(ext_indent))
+        seen = set()
+        lines = []
+        stack = [(self.exprs[0], 2)]
+        fused_group = [_expr._name for _expr in self.exprs]
+        dependencies = {dep._name: dep for dep in self.dependencies()}
+        while stack:
+            expr, _indent = stack.pop()
+
+            if expr._name in seen:
+                continue
+            seen.add(expr._name)
+
+            line = expr._tree_repr_lines(_indent, recursive=False)[0]
+            lines.append(line.replace(" ", "|", 1))
+            for dep in expr.dependencies():
+                if dep._name in fused_group:
+                    stack.append((dep, _indent + 2))
+                elif dep._name in dependencies:
+                    dependencies.pop(dep._name)
+                    lines.extend(dep._tree_repr_lines(_indent + 2))
+
+        for dep in dependencies.values():
+            lines.extend(dep._tree_repr_lines(2))
 
         lines = [header] + lines
         lines = [" " * indent + line for line in lines]
