@@ -105,7 +105,7 @@ class Merge(Expr):
         # depends on the actual data, and so we cannot use `meta`
         # to accurately predict the output columns. Once general
         # partition statistics are available, it may make sense
-        # to drop support for left_on and right_on.
+        # to drop support for left_index and right_index.
 
         shuffle_left_on = left_on
         shuffle_right_on = right_on
