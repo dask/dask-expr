@@ -344,7 +344,7 @@ class DataFrame(FrameBase):
 
     def merge(
         self,
-        other,
+        right,
         how="inner",
         on=None,
         left_on=None,
@@ -353,27 +353,88 @@ class DataFrame(FrameBase):
         right_index=False,
         suffixes=("_x", "_y"),
         indicator=False,
-        backend=None,
         shuffle_backend=None,
     ):
-        if isinstance(other, DataFrame):
-            other = other.expr
-            assert is_dataframe_like(other._meta)
-        else:
-            assert is_dataframe_like(other)
+        """Merge the DataFrame with another DataFrame
+
+        Parameters
+        ----------
+        right: FrameBase
+        how : {'left', 'right', 'outer', 'inner'}, default: 'inner'
+            How to handle the operation of the two objects:
+            - left: use calling frame's index (or column if on is specified)
+            - right: use other frame's index
+            - outer: form union of calling frame's index (or column if on is
+              specified) with other frame's index, and sort it
+              lexicographically
+            - inner: form intersection of calling frame's index (or column if
+              on is specified) with other frame's index, preserving the order
+              of the calling's one
+        on : label or list
+            Column or index level names to join on. These must be found in both
+            DataFrames. If on is None and not merging on indexes then this
+            defaults to the intersection of the columns in both DataFrames.
+        left_on : label or list, or array-like
+            Column to join on in the left DataFrame. Other than in pandas
+            arrays and lists are only support if their length is 1.
+        right_on : label or list, or array-like
+            Column to join on in the right DataFrame. Other than in pandas
+            arrays and lists are only support if their length is 1.
+        left_index : boolean, default False
+            Use the index from the left DataFrame as the join key.
+        right_index : boolean, default False
+            Use the index from the right DataFrame as the join key.
+        suffixes : 2-length sequence (tuple, list, ...)
+            Suffix to apply to overlapping column names in the left and
+            right side, respectively
+        indicator : boolean or string, default False
+            Passed through to the backend DataFrame library.
+        shuffle_backend: optional
+            Shuffle backend to use if shuffling is necessary.
+        """
+
+        left = self.expr
+        right = (
+            right.expr if isinstance(right, FrameBase) else from_pandas(right, 1).expr
+        )
+        assert is_dataframe_like(right._meta)
+
+        for o in [on, left_on, right_on]:
+            if isinstance(o, FrameBase):
+                raise NotImplementedError()
+        if (
+            not on
+            and not left_on
+            and not right_on
+            and not left_index
+            and not right_index
+        ):
+            on = [c for c in left.columns if c in right.columns]
+            if not on:
+                left_index = right_index = True
+
+        if on and not left_on and not right_on:
+            left_on = right_on = on
+            on = None
+
+        supported_how = ("left", "right", "outer", "inner")
+        if how not in supported_how:
+            raise ValueError(
+                f"dask.dataframe.merge does not support how='{how}'."
+                f"Options are: {supported_how}."
+            )
+
         return new_collection(
             Merge(
-                self.expr,
-                other,
+                left,
+                right,
                 how=how,
-                on=on,
                 left_on=left_on,
                 right_on=right_on,
                 left_index=left_index,
                 right_index=right_index,
                 suffixes=suffixes,
                 indicator=indicator,
-                backend=backend,
                 shuffle_backend=shuffle_backend,
             )
         )
