@@ -114,14 +114,15 @@ class Merge(Expr):
         # TODO: Need 'rearrange_by_divisions' equivalent
         # to avoid shuffle when we are merging on known
         # divisions on one side only.
-        elif left_index:
-            shuffle_left_on = left.index._meta.name
-            if shuffle_left_on is None:
-                raise NotImplementedError()
-        elif right_index:
-            shuffle_right_on = right.index._meta.name
-            if shuffle_right_on is None:
-                raise NotImplementedError()
+        else:
+            if left_index:
+                shuffle_left_on = left.index._meta.name
+                if shuffle_left_on is None:
+                    raise NotImplementedError()
+            if right_index:
+                shuffle_right_on = right.index._meta.name
+                if shuffle_right_on is None:
+                    raise NotImplementedError()
 
         if shuffle_left_on:
             # Shuffle left
