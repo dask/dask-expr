@@ -35,7 +35,6 @@ def test_merge_indexed(opt, how, pass_name, shuffle_backend):
     pdf2 = pd.DataFrame({"x": range(0, 20, 2), "z": range(10)}).set_index("x")
     df2 = from_pandas(pdf2, 2)
 
-    # Partition-wise merge with map_partitions
     left_index = True
     right_index = False if pass_name else True
     right_on = "x" if pass_name else None
@@ -69,7 +68,6 @@ def test_broadcast_merge(opt, how):
     pdf2 = pd.DataFrame({"x": range(0, 20, 2), "z": range(10)})
     df2 = from_pandas(pdf2, 1)
 
-    # Partition-wise merge with map_partitions
     df3 = df1.merge(df2, on="x", how=how)
 
     # Check that we avoid the shuffle when allowed
@@ -80,3 +78,16 @@ def test_broadcast_merge(opt, how):
     expect = pdf1.merge(pdf2, on="x", how=how)
     df3 = df3.optimize() if opt else df3
     assert_eq(df3, expect, check_index=False)
+
+
+def test_merge_column_projection():
+    # Make simple left & right dfs
+    pdf1 = pd.DataFrame({"x": range(20), "y": range(20)})
+    df1 = from_pandas(pdf1, 4)
+    pdf2 = pd.DataFrame({"x": range(0, 20, 2), "z": range(10)})
+    df2 = from_pandas(pdf2, 2)
+
+    # Partition-wise merge with map_partitions
+    df3 = df1.merge(df2, on="x")["z"].simplify()
+
+    assert "y" not in df3.expr.operands[0].columns
