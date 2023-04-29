@@ -64,7 +64,7 @@ class Merge(Expr):
         npartitions = max(npartitions_left, npartitions_right)
         return (None,) * (npartitions + 1)
 
-    def _lower(self):
+    def _simplify_down(self):
         # Lower from an abstract expression using
         # logic in MergeBackend.from_abstract_merge
 
@@ -153,14 +153,12 @@ class Merge(Expr):
         # Blockwise merge
         return BlockwiseMerge(left, right, **self.kwargs)
 
-    def _simplify_down(self):
-        if type(self) == Merge:
-            # Only lower abstract objects
-            return self._lower()
-
 
 class BlockwiseMerge(Merge, Blockwise):
     """Blockwise merge class"""
+
+    def _simplify_down(self):
+        return None
 
     def _broadcast_dep(self, dep: Expr):
         return dep.npartitions == 1
