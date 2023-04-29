@@ -126,11 +126,11 @@ class Merge(Expr):
             if left_index:
                 shuffle_left_on = left.index._meta.name
                 if shuffle_left_on is None:
-                    raise NotImplementedError()
+                    raise NotImplementedError("Cannot shuffle unnamed index")
             if right_index:
                 shuffle_right_on = right.index._meta.name
                 if shuffle_right_on is None:
-                    raise NotImplementedError()
+                    raise NotImplementedError("Cannot shuffle unnamed index")
 
         if shuffle_left_on:
             # Shuffle left

@@ -5,10 +5,9 @@ from dask.dataframe.utils import assert_eq
 from dask_expr import from_pandas
 
 
-@pytest.mark.parametrize("opt", [True, False])
 @pytest.mark.parametrize("how", ["left", "right", "inner", "outer"])
 @pytest.mark.parametrize("shuffle_backend", ["tasks", "disk"])
-def test_merge(opt, how, shuffle_backend):
+def test_merge(how, shuffle_backend):
     # Make simple left & right dfs
     pdf1 = pd.DataFrame({"x": range(20), "y": range(20)})
     df1 = from_pandas(pdf1, 4)
@@ -20,27 +19,32 @@ def test_merge(opt, how, shuffle_backend):
 
     # Check result with/without fusion
     expect = pdf1.merge(pdf2, on="x", how=how)
-    df3 = df3.optimize() if opt else df3
     assert_eq(df3, expect, check_index=False)
+    assert_eq(df3.optimize(), expect, check_index=False)
 
 
-@pytest.mark.parametrize("opt", [True, False])
 @pytest.mark.parametrize("how", ["left", "right", "inner", "outer"])
 @pytest.mark.parametrize("pass_name", [True, False])
+@pytest.mark.parametrize("sort", [True, False])
 @pytest.mark.parametrize("shuffle_backend", ["tasks", "disk"])
-def test_merge_indexed(opt, how, pass_name, shuffle_backend):
+def test_merge_indexed(how, pass_name, sort, shuffle_backend):
     # Make simple left & right dfs
-    pdf1 = pd.DataFrame({"x": range(20), "y": range(20)})
+    pdf1 = pd.DataFrame({"x": range(20), "y": range(20)}).set_index("x")
     df1 = from_pandas(pdf1, 4)
     pdf2 = pd.DataFrame({"x": range(0, 20, 2), "z": range(10)}).set_index("x")
-    df2 = from_pandas(pdf2, 2)
+    df2 = from_pandas(pdf2, 2, sort=sort)
 
-    left_index = True
-    right_index = False if pass_name else True
-    right_on = "x" if pass_name else None
+    if pass_name:
+        left_on = right_on = "x"
+        left_index = right_index = False
+    else:
+        left_on = right_on = None
+        left_index = right_index = True
+
     df3 = df1.merge(
         df2,
         left_index=left_index,
+        left_on=left_on,
         right_index=right_index,
         right_on=right_on,
         how=how,
@@ -51,17 +55,17 @@ def test_merge_indexed(opt, how, pass_name, shuffle_backend):
     expect = pdf1.merge(
         pdf2,
         left_index=left_index,
+        left_on=left_on,
         right_index=right_index,
         right_on=right_on,
         how=how,
     )
-    df3 = df3.optimize() if opt else df3
     assert_eq(df3, expect)
+    assert_eq(df3.optimize(), expect)
 
 
-@pytest.mark.parametrize("opt", [True, False])
 @pytest.mark.parametrize("how", ["left", "right", "inner", "outer"])
-def test_broadcast_merge(opt, how):
+def test_broadcast_merge(how):
     # Make simple left & right dfs
     pdf1 = pd.DataFrame({"x": range(20), "y": range(20)})
     df1 = from_pandas(pdf1, 4)
@@ -76,8 +80,8 @@ def test_broadcast_merge(opt, how):
 
     # Check result with/without fusion
     expect = pdf1.merge(pdf2, on="x", how=how)
-    df3 = df3.optimize() if opt else df3
     assert_eq(df3, expect, check_index=False)
+    assert_eq(df3.optimize(), expect, check_index=False)
 
 
 def test_merge_column_projection():
