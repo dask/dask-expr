@@ -65,9 +65,7 @@ class Merge(Expr):
         return (None,) * (npartitions + 1)
 
     def _simplify_down(self):
-        # Lower from an abstract expression using
-        # logic in MergeBackend.from_abstract_merge
-
+        # Lower from an abstract expression
         left = self.left
         right = self.right
         how = self.how
@@ -78,7 +76,7 @@ class Merge(Expr):
         shuffle_backend = self.shuffle_backend
 
         # TODO:
-        #  1. Handle mixed indexed merge
+        #  1. Handle unnamed index with unknown divisions
         #  2. Add multi-partition broadcast merge
         #  3. Add/leverage partition statistics
 
