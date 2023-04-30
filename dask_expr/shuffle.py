@@ -253,7 +253,7 @@ class TaskShuffle(SimpleShuffle):
     """Staged task-based shuffle implementation"""
 
     def _layer(self):
-        max_branch = self.options.get("max_branch", 32)
+        max_branch = (self.options or {}).get("max_branch", 32)
         npartitions_input = self.frame.npartitions
         if len(self._partitions) <= max_branch or npartitions_input <= max_branch:
             # We are creating a small number of output partitions,

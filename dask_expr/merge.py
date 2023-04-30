@@ -147,7 +147,6 @@ class Merge(Expr):
                 shuffle_left_on,
                 npartitions_out=npartitions,
                 backend=shuffle_backend,
-                options={},
             )
 
         if shuffle_right_on:
@@ -157,7 +156,6 @@ class Merge(Expr):
                 shuffle_right_on,
                 npartitions_out=npartitions,
                 backend=shuffle_backend,
-                options={},
             )
 
         # Blockwise merge
