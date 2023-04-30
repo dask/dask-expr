@@ -9,7 +9,17 @@ from dask_expr.shuffle import Shuffle, _contains_index_name
 
 
 class Merge(Expr):
-    """Abstract merge operation"""
+    """Merge / join two dataframes
+
+    This is an abstract class.  It will be transformed into a concrete
+    implementation before graph construction.
+
+    See Also
+    --------
+    BlockwiseMerge
+    Repartition
+    Shuffle
+    """
 
     _parameters = [
         "left",
@@ -137,6 +147,7 @@ class Merge(Expr):
                 shuffle_left_on,
                 npartitions_out=npartitions,
                 backend=shuffle_backend,
+                options={},
             )
 
         if shuffle_right_on:
@@ -146,6 +157,7 @@ class Merge(Expr):
                 shuffle_right_on,
                 npartitions_out=npartitions,
                 backend=shuffle_backend,
+                options={},
             )
 
         # Blockwise merge
@@ -195,7 +207,18 @@ class Merge(Expr):
 
 
 class BlockwiseMerge(Merge, Blockwise):
-    """Blockwise merge class"""
+    """Merge two dataframes with aligned partitions
+
+    This operation will directly merge partition i of the
+    left dataframe with partition i of the right dataframe.
+    The two dataframes must be shuffled or partitioned
+    by the merge key(s) before this operation is performed.
+    Single-partition dataframes will always be broadcasted.
+
+    See Also
+    --------
+    Merge
+    """
 
     def _simplify_down(self):
         return None

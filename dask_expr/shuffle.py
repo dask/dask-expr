@@ -155,7 +155,7 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
         partitioning_index = expr.partitioning_index
         npartitions_out = expr.npartitions_out
         ignore_index = expr.ignore_index
-        options = expr.options or {}
+        options = expr.options
 
         # Normalize partitioning_index
         if isinstance(partitioning_index, str):
