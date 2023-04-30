@@ -169,33 +169,33 @@ class Merge(Expr):
             if isinstance(projection, (str, int)):
                 projection = [projection]
 
+            left, right = self.left, self.right
+            left_on, right_on = self.left_on, self.right_on
+            left_suffix, right_suffix = self.suffixes[0], self.suffixes[1]
+            project_left, project_right = [], []
+
             # Find columns to project on the left
-            left = self.left
-            left_on = self.left_on
-            left_suffix = self.suffixes[0]
-            project_left = [
-                col
-                for col in left.columns
-                if (
-                    col in left_on
-                    or col in projection
-                    or f"{col}{left_suffix}" in projection
-                )
-            ]
+            for col in left.columns:
+                if col in left_on or col in projection:
+                    project_left.append(col)
+                elif f"{col}{left_suffix}" in projection:
+                    project_left.append(col)
+                    if col in right.columns:
+                        # Right column must be present
+                        # for the suffix to be applied
+                        project_right.append(col)
 
             # Find columns to project on the right
-            right = self.right
-            right_on = self.right_on
-            right_suffix = self.suffixes[1]
-            project_right = [
-                col
-                for col in right.columns
-                if (
-                    col in right_on
-                    or col in projection
-                    or f"{col}{right_suffix}" in projection
-                )
-            ]
+            for col in right.columns:
+                if col in right_on or col in projection:
+                    project_right.append(col)
+                elif f"{col}{right_suffix}" in projection:
+                    project_right.append(col)
+                    if col in left.columns and col not in project_left:
+                        # Left column must be present
+                        # for the suffix to be applied
+                        project_left.append(col)
+
             if set(project_left) < set(left.columns) or set(project_right) < set(
                 right.columns
             ):

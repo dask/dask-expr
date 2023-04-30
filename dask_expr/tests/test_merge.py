@@ -86,12 +86,12 @@ def test_broadcast_merge(how):
 
 def test_merge_column_projection():
     # Make simple left & right dfs
-    pdf1 = pd.DataFrame({"x": range(20), "y": range(20)})
+    pdf1 = pd.DataFrame({"x": range(20), "y": range(20), "z": range(20)})
     df1 = from_pandas(pdf1, 4)
     pdf2 = pd.DataFrame({"x": range(0, 20, 2), "z": range(10)})
     df2 = from_pandas(pdf2, 2)
 
     # Partition-wise merge with map_partitions
-    df3 = df1.merge(df2, on="x")["z"].simplify()
+    df3 = df1.merge(df2, on="x")["z_x"].simplify()
 
     assert "y" not in df3.expr.operands[0].columns
