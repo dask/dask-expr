@@ -17,7 +17,7 @@ from dask.dataframe.shuffle import (
 )
 from dask.utils import digit, get_default_shuffle_algorithm, insert
 
-from dask_expr.expr import Blockwise, Expr, PartitionsFiltered
+from dask_expr.expr import Blockwise, Expr, PartitionsFiltered, Projection
 from dask_expr.repartition import Repartition
 
 
@@ -78,6 +78,29 @@ class Shuffle(Expr):
         else:
             # Only support task-based shuffling for now
             raise ValueError(f"{backend} not supported")
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            # Move the column projection to come
+            # before the abstract Shuffle
+            projection = parent.operand("columns")
+            if isinstance(projection, (str, int)):
+                projection = [projection]
+
+            partitioning_index = self.partitioning_index
+            if isinstance(partitioning_index, (str, int)):
+                partitioning_index = [partitioning_index]
+
+            target = self.frame
+            new_projection = [
+                col
+                for col in target.columns
+                if (col in partitioning_index or col in projection)
+            ]
+            if set(new_projection) < set(target.columns):
+                return type(self)(target[new_projection], *self.operands[1:])[
+                    parent.operand("columns")
+                ]
 
     def _layer(self):
         raise NotImplementedError(

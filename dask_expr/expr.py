@@ -785,9 +785,6 @@ class Projection(Elemwise):
         return f"{base}[{repr(self.columns)}]"
 
     def _simplify_down(self):
-        from dask_expr.merge import Merge
-        from dask_expr.shuffle import Shuffle
-
         if isinstance(self.frame, Projection):
             # df[a][b]
             a = self.frame.operand("columns")
@@ -801,69 +798,6 @@ class Projection(Elemwise):
                 assert b in a
 
             return self.frame.frame[b]
-
-        if isinstance(self.frame, Shuffle):
-            # Move the column projection to come
-            # before the abstract Shuffle
-            projection = self.operand("columns")
-            if isinstance(projection, (str, int)):
-                projection = [projection]
-
-            partitioning_index = self.frame.partitioning_index
-            if isinstance(partitioning_index, (str, int)):
-                partitioning_index = [partitioning_index]
-
-            target = self.frame.frame
-            new_projection = [
-                col
-                for col in target.columns
-                if (col in partitioning_index or col in projection)
-            ]
-            if set(new_projection) < set(target.columns):
-                return type(self.frame)(
-                    target[new_projection], *self.frame.operands[1:]
-                )[self.operand("columns")]
-
-        if isinstance(self.frame, Merge):
-            # Reorder the column projection to
-            # occur before the Merge
-            projection = self.operand("columns")
-            if isinstance(projection, (str, int)):
-                projection = [projection]
-
-            # Find columns to project on the left
-            left = self.frame.left
-            left_on = self.frame.left_on
-            left_suffix = self.frame.suffixes[0]
-            project_left = [
-                col
-                for col in left.columns
-                if (
-                    col in left_on
-                    or col in projection
-                    or f"{col}{left_suffix}" in projection
-                )
-            ]
-
-            # Find columns to project on the right
-            right = self.frame.right
-            right_on = self.frame.right_on
-            right_suffix = self.frame.suffixes[1]
-            project_right = [
-                col
-                for col in right.columns
-                if (
-                    col in right_on
-                    or col in projection
-                    or f"{col}{right_suffix}" in projection
-                )
-            ]
-            if set(project_left) < set(left.columns) or set(project_right) < set(
-                right.columns
-            ):
-                return type(self.frame)(
-                    left[project_left], right[project_right], *self.frame.operands[2:]
-                )[self.operand("columns")]
 
 
 class Index(Elemwise):

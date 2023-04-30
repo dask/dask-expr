@@ -3,7 +3,7 @@ import functools
 from dask.dataframe.dispatch import make_meta, meta_nonempty
 from dask.utils import M, apply
 
-from dask_expr.expr import Blockwise, Expr
+from dask_expr.expr import Blockwise, Expr, Projection
 from dask_expr.repartition import Repartition
 from dask_expr.shuffle import Shuffle, _contains_index_name
 
@@ -150,6 +150,48 @@ class Merge(Expr):
 
         # Blockwise merge
         return BlockwiseMerge(left, right, **self.kwargs)
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            # Reorder the column projection to
+            # occur before the Merge
+            projection = parent.operand("columns")
+            if isinstance(projection, (str, int)):
+                projection = [projection]
+
+            # Find columns to project on the left
+            left = self.left
+            left_on = self.left_on
+            left_suffix = self.suffixes[0]
+            project_left = [
+                col
+                for col in left.columns
+                if (
+                    col in left_on
+                    or col in projection
+                    or f"{col}{left_suffix}" in projection
+                )
+            ]
+
+            # Find columns to project on the right
+            right = self.right
+            right_on = self.right_on
+            right_suffix = self.suffixes[1]
+            project_right = [
+                col
+                for col in right.columns
+                if (
+                    col in right_on
+                    or col in projection
+                    or f"{col}{right_suffix}" in projection
+                )
+            ]
+            if set(project_left) < set(left.columns) or set(project_right) < set(
+                right.columns
+            ):
+                return type(self)(
+                    left[project_left], right[project_right], *self.operands[2:]
+                )[parent.operand("columns")]
 
 
 class BlockwiseMerge(Merge, Blockwise):
