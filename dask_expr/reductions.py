@@ -39,6 +39,11 @@ class ApplyConcatApply(Expr):
     combine_kwargs = {}
     aggregate_kwargs = {}
 
+    @property
+    def args(self):
+        # Return unnamed operands
+        return self.operands[len(self._parameters) :]
+
     def __dask_postcompute__(self):
         return toolz.first, ()
 
@@ -61,15 +66,16 @@ class ApplyConcatApply(Expr):
             combine = aggregate
             combine_kwargs = aggregate_kwargs
 
-        d = {}
-        keys = self.frame.__dask_keys__()
-
         # apply chunk to every input partition
-        for i, key in enumerate(keys):
+        d = {}
+        for i in range(self.frame.npartitions):
+            args = [(self.frame._name, i)] + [
+                (arg._name, i) if isinstance(arg, Expr) else arg for arg in self.args
+            ]
             if chunk_kwargs:
-                d[self._name, 0, i] = (apply, chunk, [key], chunk_kwargs)
+                d[self._name, 0, i] = (apply, chunk, args, chunk_kwargs)
             else:
-                d[self._name, 0, i] = (chunk, key)
+                d[self._name, 0, i] = (chunk, *args)
 
         keys = list(d)
         j = 1
@@ -97,9 +103,15 @@ class ApplyConcatApply(Expr):
     @property
     def _meta(self):
         meta = meta_nonempty(self.frame._meta)
-        meta = self.chunk(meta, **self.chunk_kwargs)
-        meta = self.combine([meta], **self.combine_kwargs)
-        meta = self.aggregate([meta], **self.aggregate_kwargs)
+        args = [
+            meta_nonempty(arg._meta) if isinstance(arg, Expr) else arg
+            for arg in self.args
+        ]
+        meta = self.chunk(meta, *args, **self.chunk_kwargs)
+        aggregate = self.aggregate or (lambda x: x)
+        combine = self.combine or aggregate
+        meta = combine([meta], **self.combine_kwargs)
+        meta = aggregate([meta], **self.aggregate_kwargs)
         return make_meta(meta)
 
     def _divisions(self):
@@ -121,12 +133,6 @@ class Reduction(ApplyConcatApply):
     methods.
     """
 
-    _defaults = {
-        "skipna": True,
-        "numeric_only": None,
-        "min_count": 0,
-        "dropna": True,
-    }
     reduction_chunk = None
     reduction_combine = None
     reduction_aggregate = None
@@ -170,6 +176,7 @@ class Reduction(ApplyConcatApply):
 
 class Sum(Reduction):
     _parameters = ["frame", "skipna", "numeric_only", "min_count"]
+    _defaults = {"skipna": True, "numeric_only": None, "min_count": 0}
     reduction_chunk = M.sum
 
     @property
@@ -190,13 +197,15 @@ class Sum(Reduction):
 
 
 class Max(Reduction):
-    _parameters = ["frame", "skipna"]
+    _parameters = ["frame", "skipna", "numeric_only"]
+    _defaults = {"skipna": True, "numeric_only": None}
     reduction_chunk = M.max
 
     @property
     def chunk_kwargs(self):
         return dict(
             skipna=self.skipna,
+            numeric_only=self.numeric_only,
         )
 
     def _simplify_up(self, parent):
@@ -244,6 +253,7 @@ class Mean(Reduction):
 
 class Count(Reduction):
     _parameters = ["frame", "numeric_only"]
+    _defaults = {"numeric_only": None}
     split_every = 16
     reduction_chunk = M.count
 
