@@ -1,4 +1,5 @@
-import pandas as pd
+import functools
+
 import toolz
 from dask.dataframe.core import (
     _concat,
@@ -9,78 +10,92 @@ from dask.dataframe.core import (
 )
 from dask.utils import M, apply
 
-from dask_expr.expr import Elemwise, Expr, Projection
+from dask_expr.expr import Blockwise, Elemwise, Expr, Projection
 
 
-class ApplyConcatApply(Expr):
-    """Perform reduction-like operation on dataframes
-
-    This pattern is commonly used for reductions, groupby-aggregations, and
-    more.  It requires three methods to be implemented:
-
-    -   `chunk`: applied to each input partition
-    -   `combine`: applied to lists of intermediate partitions as they are
-        combined in batches
-    -   `aggregate`: applied at the end to finalize the computation
-
-    These methods should be easy to serialize, and can take in keyword
-    arguments defined in `chunks/combine/aggregate_kwargs`.
-
-    In many cases people don't define all three functions.  In these cases
-    combine takes from aggregate and aggregate takes from chunk.
-    """
-
+class Map(Blockwise):
     _parameters = ["frame"]
     chunk = None
-    combine = None
-    aggregate = None
-    split_every = 0
     chunk_kwargs = {}
-    combine_kwargs = {}
+
+    @functools.cached_property
+    def _meta(self):
+        meta = meta_nonempty(self.frame._meta)
+        chunk_kwargs = self.chunk_kwargs or {}
+        return make_meta(self.chunk(meta, **chunk_kwargs))
+
+    def _task(self, index: int):
+        args = [self._blockwise_arg(self.frame, index)]
+        chunk_kwargs = self.chunk_kwargs or {}
+        return (apply, self.chunk, args, chunk_kwargs)
+
+    def _divisions(self):
+        return (None,) * (self.frame.npartitions + 1)
+
+
+class Reduce(Expr):
+    _parameters = ["frame"]
+    aggregate = None
+    combine = None
     aggregate_kwargs = {}
+    combine_kwargs = {}
+    split_every = 0
+    split_out = 1
 
     @property
-    def args(self):
-        # Return unnamed operands
-        return self.operands[len(self._parameters) :]
+    def _meta(self):
+        aggregate = self.aggregate
+        combine = self.combine or aggregate
+        combine_kwargs = self.combine_kwargs or {}
+        aggregate_kwargs = self.aggregate_kwargs or {}
+        meta = meta_nonempty(self.frame._meta)
+        meta = combine([meta], **combine_kwargs)
+        meta = aggregate([meta], **aggregate_kwargs)
+        return make_meta(meta)
+
+    def _divisions(self):
+        return (None,) * (self.split_out + 1)
 
     def __dask_postcompute__(self):
         return toolz.first, ()
 
     def _layer(self):
-        # Normalize functions in case not all are defined
-        chunk = self.chunk
-        chunk_kwargs = self.chunk_kwargs
+        raise NotImplementedError
 
-        if self.aggregate:
-            aggregate = self.aggregate
-            aggregate_kwargs = self.aggregate_kwargs
-        else:
-            aggregate = chunk
-            aggregate_kwargs = chunk_kwargs
 
-        if self.combine:
-            combine = self.combine
-            combine_kwargs = self.combine_kwargs
-        else:
-            combine = aggregate
-            combine_kwargs = aggregate_kwargs
+class MapReduce(Expr):
+    _parameters = ["frame"]
+    map: Map | None = None
+    reduce: Reduce | None = None
+    split_every: int = 0
 
-        # apply chunk to every input partition
-        d = {}
-        for i in range(self.frame.npartitions):
-            args = [(self.frame._name, i)] + [
-                (arg._name, i) if isinstance(arg, Expr) else arg for arg in self.args
-            ]
-            if chunk_kwargs:
-                d[self._name, 0, i] = (apply, chunk, args, chunk_kwargs)
-            else:
-                d[self._name, 0, i] = (chunk, *args)
+    @property
+    def _meta(self):
+        mapped = self.map(*self.operands)
+        reduce = self.reduce or self.map
+        reduced = reduce(mapped, self.operands[1:])
+        return reduced._meta
 
-        keys = list(d)
-        j = 1
+    def _divisions(self):
+        return (None, None)
+
+    def _simplify_down(self):
+        mapped = self.map(*self.operands)
+        reduce = self.reduce or self.map
+        return reduce(mapped, self.operands[1:])
+
+
+class TreeReduce(Reduce):
+    def _layer(self):
+        aggregate = self.aggregate
+        combine = self.combine or aggregate
+        combine_kwargs = self.combine_kwargs or {}
+        aggregate_kwargs = self.aggregate_kwargs or {}
 
         # apply combine to batches of intermediate results
+        j = 1
+        d = {}
+        keys = list(self.frame.__dask_keys__())
         while len(keys) > 1:
             new_keys = []
             for i, batch in enumerate(
@@ -100,48 +115,36 @@ class ApplyConcatApply(Expr):
 
         return d
 
-    @property
-    def _meta(self):
-        meta = meta_nonempty(self.frame._meta)
-        args = [
-            meta_nonempty(arg._meta) if isinstance(arg, Expr) else arg
-            for arg in self.args
-        ]
-        meta = self.chunk(meta, *args, **self.chunk_kwargs)
-        aggregate = self.aggregate or (lambda x: x)
-        combine = self.combine or aggregate
-        meta = combine([meta], **self.combine_kwargs)
-        meta = aggregate([meta], **self.aggregate_kwargs)
-        return make_meta(meta)
 
-    def _divisions(self):
-        return [None, None]
-
-
-class Reduction(ApplyConcatApply):
-    """A common pattern of apply concat apply
-
-    Common reductions like sum/min/max/count/... have some shared code around
-    `_concat` and so on.  This class inherits from `ApplyConcatApply` in order
-    to leverage this shared structure.
-
-    I wouldn't be surprised if there was a way to merge them both into a single
-    abstraction in the future.
-
-    This class implements `{chunk,combine,aggregate}` methods of
-    `ApplyConcatApply` by depending on `reduction_{chunk,combine,aggregate}`
-    methods.
-    """
-
+class ReductionMap(Map):
     reduction_chunk = None
-    reduction_combine = None
-    reduction_aggregate = None
 
     @classmethod
     def chunk(cls, df, **kwargs):
         out = cls.reduction_chunk(df, **kwargs)
         # Return a dataframe so that the concatenated version is also a dataframe
         return out.to_frame().T if is_series_like(out) else out
+
+    @property
+    def _meta(self):
+        meta = meta_nonempty(self.frame._meta)
+        chunk_kwargs = self.chunk_kwargs or {}
+        meta = self.chunk(meta, **chunk_kwargs)
+        return make_meta(meta)
+
+
+class ReductionTreeReduce(TreeReduce):
+    reduction_combine = None
+    reduction_aggregate = None
+
+    @property
+    def _meta(self):
+        meta = meta_nonempty(self.frame._meta)
+        combine_kwargs = self.combine_kwargs or {}
+        meta = self.combine([meta], **combine_kwargs)
+        aggregate_kwargs = self.aggregate_kwargs or {}
+        meta = self.aggregate([meta], **aggregate_kwargs)
+        return make_meta(meta)
 
     @classmethod
     def combine(cls, inputs: list, **kwargs):
@@ -157,12 +160,8 @@ class Reduction(ApplyConcatApply):
         df = _concat(inputs)
         return func(df, **kwargs)
 
-    def __dask_postcompute__(self):
-        return toolz.first, ()
 
-    def _divisions(self):
-        return [None, None]
-
+class Reduction(MapReduce):
     def __str__(self):
         params = {param: self.operand(param) for param in self._parameters[1:]}
         s = ", ".join(
@@ -174,7 +173,7 @@ class Reduction(ApplyConcatApply):
         return f"{base}.{self.__class__.__name__.lower()}({s})"
 
 
-class Sum(Reduction):
+class SumMap(ReductionMap):
     _parameters = ["frame", "skipna", "numeric_only", "min_count"]
     _defaults = {"skipna": True, "numeric_only": None, "min_count": 0}
     reduction_chunk = M.sum
@@ -187,9 +186,18 @@ class Sum(Reduction):
             min_count=self.min_count,
         )
 
-    @property
-    def _meta(self):
-        return self.frame._meta.sum(**self.chunk_kwargs)
+
+class SumReduce(ReductionTreeReduce):
+    _parameters = SumMap._parameters
+    _defaults = SumMap._defaults
+    reduction_aggregate = M.sum
+
+
+class Sum(Reduction):
+    _parameters = SumMap._parameters
+    _defaults = SumMap._defaults
+    map = SumMap
+    reduce = SumReduce
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
@@ -266,37 +274,41 @@ class Min(Max):
     reduction_chunk = M.min
 
 
-class Mode(ApplyConcatApply):
-    """
+class Mode:
+    pass
 
-    Mode was a bit more complicated than class reductions, so we retreat back
-    to ApplyConcatApply
-    """
 
-    _parameters = ["frame", "dropna"]
-    _defaults = {"dropna": True}
-    chunk = M.value_counts
-    split_every = 16
+# class Mode(ApplyConcatApply):
+#     """
 
-    @classmethod
-    def combine(cls, results: list[pd.Series]):
-        df = _concat(results)
-        out = df.groupby(df.index).sum()
-        out.name = results[0].name
-        return out
+#     Mode was a bit more complicated than class reductions, so we retreat back
+#     to ApplyConcatApply
+#     """
 
-    @classmethod
-    def aggregate(cls, results: list[pd.Series], dropna=None):
-        [df] = results
-        max = df.max(skipna=dropna)
-        out = df[df == max].index.to_series().sort_values().reset_index(drop=True)
-        out.name = results[0].name
-        return out
+#     _parameters = ["frame", "dropna"]
+#     _defaults = {"dropna": True}
+#     chunk = M.value_counts
+#     split_every = 16
 
-    @property
-    def chunk_kwargs(self):
-        return {"dropna": self.dropna}
+#     @classmethod
+#     def combine(cls, results: list[pd.Series]):
+#         df = _concat(results)
+#         out = df.groupby(df.index).sum()
+#         out.name = results[0].name
+#         return out
 
-    @property
-    def aggregate_kwargs(self):
-        return {"dropna": self.dropna}
+#     @classmethod
+#     def aggregate(cls, results: list[pd.Series], dropna=None):
+#         [df] = results
+#         max = df.max(skipna=dropna)
+#         out = df[df == max].index.to_series().sort_values().reset_index(drop=True)
+#         out.name = results[0].name
+#         return out
+
+#     @property
+#     def chunk_kwargs(self):
+#         return {"dropna": self.dropna}
+
+#     @property
+#     def aggregate_kwargs(self):
+#         return {"dropna": self.dropna}

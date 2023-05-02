@@ -62,8 +62,8 @@ def df_bc(fn):
 )
 def test_optimize(tmpdir, input, expected):
     fn = _make_file(tmpdir, format="parquet")
-    result = optimize(input(fn), fuse=False)
-    assert str(result.expr) == str(expected(fn).expr)
+    result = input(fn)
+    assert str(result.simplify().expr) == str(expected(fn).simplify().expr)
 
 
 @pytest.mark.parametrize("fmt", ["parquet", "csv"])
