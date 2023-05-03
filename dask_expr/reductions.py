@@ -1,5 +1,6 @@
 import functools
 
+import pandas as pd
 import toolz
 from dask.dataframe.core import (
     _concat,
@@ -60,33 +61,6 @@ class Reduce(Expr):
         return toolz.first, ()
 
     def _layer(self):
-        raise NotImplementedError
-
-
-class MapReduce(Expr):
-    _parameters = ["frame"]
-    map: Map | None = None
-    reduce: Reduce | None = None
-    split_every: int = 0
-
-    @property
-    def _meta(self):
-        mapped = self.map(*self.operands)
-        reduce = self.reduce or self.map
-        reduced = reduce(mapped, self.operands[1:])
-        return reduced._meta
-
-    def _divisions(self):
-        return (None, None)
-
-    def _simplify_down(self):
-        mapped = self.map(*self.operands)
-        reduce = self.reduce or self.map
-        return reduce(mapped, self.operands[1:])
-
-
-class TreeReduce(Reduce):
-    def _layer(self):
         aggregate = self.aggregate
         combine = self.combine or aggregate
         combine_kwargs = self.combine_kwargs or {}
@@ -116,6 +90,26 @@ class TreeReduce(Reduce):
         return d
 
 
+class MapReduce(Expr):
+    _parameters = ["frame"]
+    split_every: int = 0
+    map: Expr | None = None
+    reduce: Expr | None = None
+
+    @property
+    def _meta(self):
+        mapped = self.map(*self.operands)
+        reduced = self.reduce(mapped, *self.operands[1:])
+        return reduced._meta
+
+    def _divisions(self):
+        return (None, None)
+
+    def _simplify_down(self):
+        mapped = self.map(*self.operands)
+        return self.reduce(mapped, *self.operands[1:])
+
+
 class ReductionMap(Map):
     reduction_chunk = None
 
@@ -133,7 +127,7 @@ class ReductionMap(Map):
         return make_meta(meta)
 
 
-class ReductionTreeReduce(TreeReduce):
+class ReductionReduce(Reduce):
     reduction_combine = None
     reduction_aggregate = None
 
@@ -173,10 +167,49 @@ class Reduction(MapReduce):
         return f"{base}.{self.__class__.__name__.lower()}({s})"
 
 
-class SumMap(ReductionMap):
+##
+## Templates
+##
+
+
+class MapReduceTemplate:
+    _map_base = Map
+    _reduce_base = Reduce
+
+    @classmethod
+    def make_cls(cls, base, name: str):
+        class _cls(cls, base):
+            pass
+
+        _cls.__name__ = name
+        return _cls
+
+    @classmethod
+    def make_map(cls, label: str = ""):
+        name = (label or cls.__name__.split("_")[-1]) + "Map"
+        return cls.make_cls(cls._map_base, name)
+
+    @classmethod
+    def make_reduce(cls, label: str = ""):
+        name = (label or cls.__name__.split("_")[-1]) + "Reduce"
+        return cls.make_cls(cls._reduce_base, name)
+
+
+class ReductionTemplate(MapReduceTemplate):
+    _map_base = ReductionMap
+    _reduce_base = ReductionReduce
+
+
+##
+## Sum
+##
+
+
+class _Sum(ReductionTemplate):
     _parameters = ["frame", "skipna", "numeric_only", "min_count"]
     _defaults = {"skipna": True, "numeric_only": None, "min_count": 0}
     reduction_chunk = M.sum
+    reduction_aggregate = M.sum
 
     @property
     def chunk_kwargs(self):
@@ -186,25 +219,22 @@ class SumMap(ReductionMap):
             min_count=self.min_count,
         )
 
-
-class SumReduce(ReductionTreeReduce):
-    _parameters = SumMap._parameters
-    _defaults = SumMap._defaults
-    reduction_aggregate = M.sum
-
-
-class Sum(Reduction):
-    _parameters = SumMap._parameters
-    _defaults = SumMap._defaults
-    map = SumMap
-    reduce = SumReduce
-
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
             return self.frame[parent.operand("columns")].sum(*self.operands[1:])
 
 
-class Max(Reduction):
+class Sum(_Sum, Reduction):
+    map = _Sum.make_map()
+    reduce = _Sum.make_reduce()
+
+
+##
+## Max
+##
+
+
+class _Max(ReductionTemplate):
     _parameters = ["frame", "skipna", "numeric_only"]
     _defaults = {"skipna": True, "numeric_only": None}
     reduction_chunk = M.max
@@ -221,9 +251,25 @@ class Max(Reduction):
             return self.frame[parent.operand("columns")].max(skipna=self.skipna)
 
 
-class Len(Reduction):
+class Max(_Max, Reduction):
+    map = _Max.make_map()
+    reduce = _Max.make_reduce()
+
+
+##
+## Len
+##
+
+
+class _Len(ReductionTemplate):
+    _parameters = ["frame"]
     reduction_chunk = staticmethod(len)
-    reduction_aggregate = sum
+    reduction_aggregate = M.sum
+
+
+class Len(_Len, Reduction):
+    map = _Len.make_map()
+    reduce = _Len.make_reduce()
 
     def _simplify_down(self):
         if isinstance(self.frame, Elemwise):
@@ -231,15 +277,31 @@ class Len(Reduction):
             return Len(child)
 
 
-class Size(Reduction):
+##
+## Size
+##
+
+
+class _Size(ReductionTemplate):
+    _parameters = ["frame"]
     reduction_chunk = staticmethod(lambda df: df.size)
     reduction_aggregate = sum
+
+
+class Size(_Size, Reduction):
+    map = _Size.make_map()
+    reduce = _Size.make_reduce()
 
     def _simplify_down(self):
         if is_dataframe_like(self.frame) and len(self.frame.columns) > 1:
             return len(self.frame.columns) * Len(self.frame)
         else:
             return Len(self.frame)
+
+
+##
+## Mean
+##
 
 
 class Mean(Reduction):
@@ -259,7 +321,12 @@ class Mean(Reduction):
         )
 
 
-class Count(Reduction):
+##
+## Count
+##
+
+
+class _Count(ReductionTemplate):
     _parameters = ["frame", "numeric_only"]
     _defaults = {"numeric_only": None}
     split_every = 16
@@ -270,45 +337,66 @@ class Count(Reduction):
         return df.sum().astype("int64")
 
 
-class Min(Max):
+class Count(_Count, Reduction):
+    map = _Count.make_map()
+    reduce = _Count.make_reduce()
+
+
+##
+## Min
+##
+
+
+class _Min(_Max):
     reduction_chunk = M.min
 
 
-class Mode:
-    pass
+class Min(_Min, Reduction):
+    map = _Min.make_map()
+    reduce = _Min.make_reduce()
 
 
-# class Mode(ApplyConcatApply):
-#     """
+##
+## Mode
+##
 
-#     Mode was a bit more complicated than class reductions, so we retreat back
-#     to ApplyConcatApply
-#     """
 
-#     _parameters = ["frame", "dropna"]
-#     _defaults = {"dropna": True}
-#     chunk = M.value_counts
-#     split_every = 16
+class _Mode(MapReduceTemplate):
+    """
 
-#     @classmethod
-#     def combine(cls, results: list[pd.Series]):
-#         df = _concat(results)
-#         out = df.groupby(df.index).sum()
-#         out.name = results[0].name
-#         return out
+    Mode was a bit more complicated than class reductions,
+    so we retreat back to MapReduce
+    """
 
-#     @classmethod
-#     def aggregate(cls, results: list[pd.Series], dropna=None):
-#         [df] = results
-#         max = df.max(skipna=dropna)
-#         out = df[df == max].index.to_series().sort_values().reset_index(drop=True)
-#         out.name = results[0].name
-#         return out
+    _parameters = ["frame", "dropna"]
+    _defaults = {"dropna": True}
+    chunk = M.value_counts
+    split_every = 16
 
-#     @property
-#     def chunk_kwargs(self):
-#         return {"dropna": self.dropna}
+    @classmethod
+    def combine(cls, results: list[pd.Series]):
+        df = _concat(results)
+        out = df.groupby(df.index).sum()
+        out.name = results[0].name
+        return out
 
-#     @property
-#     def aggregate_kwargs(self):
-#         return {"dropna": self.dropna}
+    @classmethod
+    def aggregate(cls, results: list[pd.Series], dropna=None):
+        [df] = results
+        max = df.max(skipna=dropna)
+        out = df[df == max].index.to_series().sort_values().reset_index(drop=True)
+        out.name = results[0].name
+        return out
+
+    @property
+    def chunk_kwargs(self):
+        return {"dropna": self.dropna}
+
+    @property
+    def aggregate_kwargs(self):
+        return {"dropna": self.dropna}
+
+
+class Mode(_Mode, MapReduce):
+    map = _Mode.make_map()
+    reduce = _Mode.make_reduce()

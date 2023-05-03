@@ -15,6 +15,7 @@ from dask.dataframe.core import (
     _get_meta_map_partitions,
     apply_and_enforce,
     is_dataframe_like,
+    is_series_like,
 )
 from dask.utils import M, apply, funcname, import_required
 
@@ -86,7 +87,7 @@ class Expr:
                     if param:
                         header += f" {param}={repr(op)}"
                     else:
-                        header += repr(op)
+                        header += f" {repr(op)}"
         lines = [header] + lines
         lines = [" " * indent + line for line in lines]
 
@@ -767,6 +768,12 @@ class Projection(Elemwise):
 
     _parameters = ["frame", "columns"]
     operation = operator.getitem
+
+    @functools.cached_property
+    def _meta(self):
+        if is_series_like(self.frame._meta):
+            return self.frame._meta
+        return self.frame._meta[self.operand("columns")]
 
     @property
     def columns(self):
