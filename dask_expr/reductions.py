@@ -19,6 +19,24 @@ from dask_expr.expr import Blockwise, Elemwise, Expr, Projection
 
 
 class MapReduce(Expr):
+    """Perform a map-reduction operation on a dataframe
+
+    This pattern is commonly used for reductions, groupby-aggregations, and
+    more. A `MapReduce` subclass must define the following attributes:
+
+    -   `map`: An expression class to use for the initial partition-wise
+        stage of the map-reduce. This should be a `Blockwise` expression
+        if possible.
+    -   `reduce`: An expression class to use for the reduction stage of
+        the map-reduce. This is typically a tree-reduction.
+
+    See Also
+    --------
+    Map
+    Reduce
+    DataFrameReduction
+    """
+
     _parameters = ["frame"]
     split_every: int = 0
     map = None
@@ -39,6 +57,20 @@ class MapReduce(Expr):
 
 
 class Map(Blockwise):
+    """Perform the partition-wise 'map' stage of a map-reduce
+
+    This is commonly used for reductions, groupby-aggregations, and
+    more.  It requires a `chunk` method to be implemented, which
+    should correspond to a function to be applied directly to each
+    input partition. This function should be easy to serialize, and
+    can take in keyword arguments defined in `chunk_kwargs`.
+
+    See Also
+    --------
+    Blockwise
+    MapReduce
+    """
+
     _parameters = ["frame"]
     chunk = None
     chunk_kwargs = {}
@@ -59,6 +91,26 @@ class Map(Blockwise):
 
 
 class Reduce(Expr):
+    """Perform the reduction stage of a map-reduce
+
+    This is commonly used for reductions, groupby-aggregations, and
+    more.  It requires two methods to be implemented:
+
+    -   `combine`: applied to lists of intermediate partitions as they are
+        combined in batches
+    -   `aggregate`: applied at the end to finalize the computation
+
+    These methods should be easy to serialize, and can take in keyword
+    arguments defined in `combine/aggregate_kwargs`.
+
+    In many cases people don't define both functions.  In these cases
+    `combine` takes from `aggregate`.
+
+    See Also
+    --------
+    MapReduce
+    """
+
     _parameters = ["frame"]
     aggregate = None
     combine = None
@@ -119,7 +171,25 @@ class Reduce(Expr):
 ##
 
 
-class Reduction(MapReduce):
+class DataFrameReduction(MapReduce):
+    """A common dataframe-specific map-reduction pattern
+
+    Common reductions like sum/min/max/count/... have some shared code
+    around `_concat` and so on.  This class inherits from `MapReduce`
+    in order to leverage this shared structure.
+
+    I wouldn't be surprised if there was a way to merge them both into
+    a single abstraction in the future.
+
+    This class decomposes into `DataFrameMap` and `DataFrameReduce`
+    expressions.
+
+    See Also
+    --------
+    DataFrameMap
+    DataFrameReduce
+    """
+
     def __str__(self):
         params = {param: self.operand(param) for param in self._parameters[1:]}
         s = ", ".join(
@@ -131,7 +201,18 @@ class Reduction(MapReduce):
         return f"{base}.{self.__class__.__name__.lower()}({s})"
 
 
-class ReductionMap(Map):
+class DataFrameMap(Map):
+    """`DataFrameReduction` version of `Map`
+
+    Requires the implementation of `reduction_chunk` instead
+    of `chunk`.
+
+    See Also
+    --------
+    Map
+    DataFrameReduction
+    """
+
     reduction_chunk = None
 
     @classmethod
@@ -148,7 +229,18 @@ class ReductionMap(Map):
         return make_meta(meta)
 
 
-class ReductionReduce(Reduce):
+class DataFrameReduce(Reduce):
+    """`DataFrameReduction` version of `Reduce`
+
+    Requires the implementation of `reduction_combine` and
+    `reduction_aggregate` instead of `combine` and `aggregate`.
+
+    See Also
+    --------
+    Reduce
+    DataFrameReduction
+    """
+
     reduction_combine = None
     reduction_aggregate = None
 
@@ -232,17 +324,17 @@ class MapReduceTemplate:
         return cls.make_cls(cls._reduce_base, name)
 
 
-class ReductionTemplate(MapReduceTemplate):
-    """Reduction sub-class template
+class DataFrameReductionTemplate(MapReduceTemplate):
+    """DataFrameReduction sub-class template
 
     See Also
     --------
-    Reduction
+    DataFrameReduction
     MapReduceTemplate
     """
 
-    _map_base = ReductionMap
-    _reduce_base = ReductionReduce
+    _map_base = DataFrameMap
+    _reduce_base = DataFrameReduce
 
 
 ##
@@ -250,7 +342,7 @@ class ReductionTemplate(MapReduceTemplate):
 ##
 
 
-class _Sum(ReductionTemplate):
+class _Sum(DataFrameReductionTemplate):
     _parameters = ["frame", "skipna", "numeric_only", "min_count"]
     _defaults = {"skipna": True, "numeric_only": None, "min_count": 0}
     reduction_chunk = M.sum
@@ -269,12 +361,12 @@ class _Sum(ReductionTemplate):
             return self.frame[parent.operand("columns")].sum(*self.operands[1:])
 
 
-class Sum(_Sum, Reduction):
+class Sum(_Sum, DataFrameReduction):
     map = _Sum.make_map()
     reduce = _Sum.make_reduce()
 
 
-class _Max(ReductionTemplate):
+class _Max(DataFrameReductionTemplate):
     _parameters = ["frame", "skipna", "numeric_only"]
     _defaults = {"skipna": True, "numeric_only": None}
     reduction_chunk = M.max
@@ -291,18 +383,18 @@ class _Max(ReductionTemplate):
             return self.frame[parent.operand("columns")].max(skipna=self.skipna)
 
 
-class Max(_Max, Reduction):
+class Max(_Max, DataFrameReduction):
     map = _Max.make_map()
     reduce = _Max.make_reduce()
 
 
-class _Len(ReductionTemplate):
+class _Len(DataFrameReductionTemplate):
     _parameters = ["frame"]
     reduction_chunk = staticmethod(len)
     reduction_aggregate = M.sum
 
 
-class Len(_Len, Reduction):
+class Len(_Len, DataFrameReduction):
     map = _Len.make_map()
     reduce = _Len.make_reduce()
 
@@ -312,13 +404,13 @@ class Len(_Len, Reduction):
             return Len(child)
 
 
-class _Size(ReductionTemplate):
+class _Size(DataFrameReductionTemplate):
     _parameters = ["frame"]
     reduction_chunk = staticmethod(lambda df: df.size)
     reduction_aggregate = sum
 
 
-class Size(_Size, Reduction):
+class Size(_Size, DataFrameReduction):
     map = _Size.make_map()
     reduce = _Size.make_reduce()
 
@@ -329,7 +421,7 @@ class Size(_Size, Reduction):
             return Len(self.frame)
 
 
-class Mean(Reduction):
+class Mean(DataFrameReduction):
     _parameters = ["frame", "skipna", "numeric_only"]
     _defaults = {"skipna": True, "numeric_only": None}
 
@@ -346,7 +438,7 @@ class Mean(Reduction):
         )
 
 
-class _Count(ReductionTemplate):
+class _Count(DataFrameReductionTemplate):
     _parameters = ["frame", "numeric_only"]
     _defaults = {"numeric_only": None}
     split_every = 16
@@ -357,7 +449,7 @@ class _Count(ReductionTemplate):
         return df.sum().astype("int64")
 
 
-class Count(_Count, Reduction):
+class Count(_Count, DataFrameReduction):
     map = _Count.make_map()
     reduce = _Count.make_reduce()
 
@@ -366,7 +458,7 @@ class _Min(_Max):
     reduction_chunk = M.min
 
 
-class Min(_Min, Reduction):
+class Min(_Min, DataFrameReduction):
     map = _Min.make_map()
     reduce = _Min.make_reduce()
 
