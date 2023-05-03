@@ -13,6 +13,30 @@ from dask.utils import M, apply
 
 from dask_expr.expr import Blockwise, Elemwise, Expr, Projection
 
+##
+## Base MapReduce classes
+##
+
+
+class MapReduce(Expr):
+    _parameters = ["frame"]
+    split_every: int = 0
+    map = None
+    reduce = None
+
+    @property
+    def _meta(self):
+        mapped = self.map(*self.operands)
+        reduced = self.reduce(mapped, *self.operands[1:])
+        return reduced._meta
+
+    def _divisions(self):
+        return (None, None)
+
+    def _simplify_down(self):
+        mapped = self.map(*self.operands)
+        return self.reduce(mapped, *self.operands[1:])
+
 
 class Map(Blockwise):
     _parameters = ["frame"]
@@ -90,24 +114,21 @@ class Reduce(Expr):
         return d
 
 
-class MapReduce(Expr):
-    _parameters = ["frame"]
-    split_every: int = 0
-    map: Expr | None = None
-    reduce: Expr | None = None
+##
+## Simple class reductions
+##
 
-    @property
-    def _meta(self):
-        mapped = self.map(*self.operands)
-        reduced = self.reduce(mapped, *self.operands[1:])
-        return reduced._meta
 
-    def _divisions(self):
-        return (None, None)
-
-    def _simplify_down(self):
-        mapped = self.map(*self.operands)
-        return self.reduce(mapped, *self.operands[1:])
+class Reduction(MapReduce):
+    def __str__(self):
+        params = {param: self.operand(param) for param in self._parameters[1:]}
+        s = ", ".join(
+            k + "=" + repr(v) for k, v in params.items() if v != self._defaults.get(k)
+        )
+        base = str(self.frame)
+        if " " in base:
+            base = "(" + base + ")"
+        return f"{base}.{self.__class__.__name__.lower()}({s})"
 
 
 class ReductionMap(Map):
@@ -155,24 +176,40 @@ class ReductionReduce(Reduce):
         return func(df, **kwargs)
 
 
-class Reduction(MapReduce):
-    def __str__(self):
-        params = {param: self.operand(param) for param in self._parameters[1:]}
-        s = ", ".join(
-            k + "=" + repr(v) for k, v in params.items() if v != self._defaults.get(k)
-        )
-        base = str(self.frame)
-        if " " in base:
-            base = "(" + base + ")"
-        return f"{base}.{self.__class__.__name__.lower()}({s})"
-
-
 ##
 ## Templates
 ##
 
 
 class MapReduceTemplate:
+    """MapReduce sub-class template
+
+    This non-`Expr` class defines attributs that are
+    shared between the 'map' and 'reduce' stages of a
+    typical map-reduce operation. The purpose of this
+    class is to reduce the amount of boiler-plate code
+    needed to define a `MapReduce` sub-class.
+
+    Typical usage:
+
+        # Define a template
+        class MyTemplate(MapReduce):
+            # Define common attributes
+            _parameters = [...]
+            ...
+
+        # Use the template to define an expression
+        class MyExpr(MyTemplate, MapReduce):
+            # Generate `map` and `reduce`
+            map = MyTemplate.make_map()
+            reduce = MyTemplate.make_reduce()
+
+
+    See Also
+    --------
+    MapReduce
+    """
+
     _map_base = Map
     _reduce_base = Reduce
 
@@ -196,12 +233,20 @@ class MapReduceTemplate:
 
 
 class ReductionTemplate(MapReduceTemplate):
+    """Reduction sub-class template
+
+    See Also
+    --------
+    Reduction
+    MapReduceTemplate
+    """
+
     _map_base = ReductionMap
     _reduce_base = ReductionReduce
 
 
 ##
-## Sum
+## Reduction definitions
 ##
 
 
@@ -229,11 +274,6 @@ class Sum(_Sum, Reduction):
     reduce = _Sum.make_reduce()
 
 
-##
-## Max
-##
-
-
 class _Max(ReductionTemplate):
     _parameters = ["frame", "skipna", "numeric_only"]
     _defaults = {"skipna": True, "numeric_only": None}
@@ -256,11 +296,6 @@ class Max(_Max, Reduction):
     reduce = _Max.make_reduce()
 
 
-##
-## Len
-##
-
-
 class _Len(ReductionTemplate):
     _parameters = ["frame"]
     reduction_chunk = staticmethod(len)
@@ -275,11 +310,6 @@ class Len(_Len, Reduction):
         if isinstance(self.frame, Elemwise):
             child = max(self.frame.dependencies(), key=lambda expr: expr.npartitions)
             return Len(child)
-
-
-##
-## Size
-##
 
 
 class _Size(ReductionTemplate):
@@ -299,11 +329,6 @@ class Size(_Size, Reduction):
             return Len(self.frame)
 
 
-##
-## Mean
-##
-
-
 class Mean(Reduction):
     _parameters = ["frame", "skipna", "numeric_only"]
     _defaults = {"skipna": True, "numeric_only": None}
@@ -319,11 +344,6 @@ class Mean(Reduction):
             self.frame.sum(skipna=self.skipna, numeric_only=self.numeric_only)
             / self.frame.count()
         )
-
-
-##
-## Count
-##
 
 
 class _Count(ReductionTemplate):
@@ -342,11 +362,6 @@ class Count(_Count, Reduction):
     reduce = _Count.make_reduce()
 
 
-##
-## Min
-##
-
-
 class _Min(_Max):
     reduction_chunk = M.min
 
@@ -354,11 +369,6 @@ class _Min(_Max):
 class Min(_Min, Reduction):
     map = _Min.make_map()
     reduce = _Min.make_reduce()
-
-
-##
-## Mode
-##
 
 
 class _Mode(MapReduceTemplate):
