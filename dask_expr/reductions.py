@@ -24,10 +24,10 @@ class MapReduce(Expr):
     This pattern is commonly used for reductions, groupby-aggregations, and
     more. A `MapReduce` subclass must define the following attributes:
 
-    -   `map`: An expression class to use for the initial partition-wise
+    -   `map`: A `Map`-based class to use for the initial partition-wise
         stage of the map-reduce. This should be a `Blockwise` expression
         if possible.
-    -   `reduce`: An expression class to use for the reduction stage of
+    -   `reduce`: A `Reduce`-based class to use for the reduction stage of
         the map-reduce. This is typically a tree-reduction.
 
     See Also
@@ -59,11 +59,11 @@ class MapReduce(Expr):
 class Map(Blockwise):
     """Perform the partition-wise 'map' stage of a map-reduce
 
-    This is commonly used for reductions, groupby-aggregations, and
-    more.  It requires a `chunk` method to be implemented, which
-    should correspond to a function to be applied directly to each
-    input partition. This function should be easy to serialize, and
-    can take in keyword arguments defined in `chunk_kwargs`.
+    This class is used by `MapReduce`. It requires a `chunk` method
+    to be implemented, which should correspond to a function to be
+    applied directly to each input partition. This function should
+    be easy to serialize, and can take in keyword arguments defined
+    in `chunk_kwargs`.
 
     See Also
     --------
@@ -93,8 +93,8 @@ class Map(Blockwise):
 class Reduce(Expr):
     """Perform the reduction stage of a map-reduce
 
-    This is commonly used for reductions, groupby-aggregations, and
-    more.  It requires two methods to be implemented:
+    This class is used by `MapReduce` for the reduction stage.
+    It requires two methods to be implemented:
 
     -   `combine`: applied to lists of intermediate partitions as they are
         combined in batches
