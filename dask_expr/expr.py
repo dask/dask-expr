@@ -336,17 +336,17 @@ class Expr:
     def sum(self, skipna=True, numeric_only=None, min_count=0):
         return Sum(self, skipna, numeric_only, min_count)
 
-    def mean(self, skipna=True, numeric_only=None):
+    def mean(self, skipna=True, numeric_only=None, min_count=0):
         return Mean(self, skipna=skipna, numeric_only=numeric_only)
 
-    def max(self, skipna=True, numeric_only=None):
-        return Max(self, skipna, numeric_only)
+    def max(self, skipna=True, numeric_only=None, min_count=0):
+        return Max(self, skipna, numeric_only, min_count)
 
     def mode(self, dropna=True):
         return Mode(self, dropna=dropna)
 
-    def min(self, skipna=True, numeric_only=None):
-        return Min(self, skipna, numeric_only)
+    def min(self, skipna=True, numeric_only=None, min_count=0):
+        return Min(self, skipna, numeric_only, min_count)
 
     def count(self, numeric_only=None):
         return Count(self, numeric_only)
