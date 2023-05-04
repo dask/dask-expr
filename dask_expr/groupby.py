@@ -16,7 +16,7 @@ from dask_expr.collection import new_collection
 from dask_expr.reductions import ApplyConcatApply
 
 ###
-### Groupby-Aggregation Expressions
+### Groupby-aggregation expressions
 ###
 
 
@@ -164,7 +164,7 @@ class GroupBy:
     """Collection container for groupby aggregations
 
     The purpose of this class is to expose an API similar
-    to Pandas' `Groupby`.
+    to Pandas' `Groupby` for dask-expr collections.
 
     See Also
     --------
