@@ -1,5 +1,6 @@
 import functools
 
+import numpy as np
 from dask.dataframe.core import (
     _concat,
     is_dataframe_like,
@@ -8,10 +9,19 @@ from dask.dataframe.core import (
     meta_nonempty,
     no_default,
 )
-from dask.dataframe.groupby import _apply_chunk, _determine_levels, _groupby_aggregate
+from dask.dataframe.groupby import (
+    _agg_finalize,
+    _apply_chunk,
+    _build_agg_args,
+    _determine_levels,
+    _groupby_aggregate,
+    _groupby_apply_funcs,
+    _normalize_spec,
+)
 from dask.utils import M
+from pandas.core.apply import reconstruct_func
 
-from dask_expr.collection import new_collection
+from dask_expr.collection import DataFrame, Series, new_collection
 from dask_expr.reductions import ApplyConcatApply
 
 ###
@@ -123,6 +133,86 @@ class GroupbyAggregation(ApplyConcatApply):
         return (None, None)
 
 
+class CustomAggregation(ApplyConcatApply):
+    _parameters = [
+        "frame",
+        "by",
+        "chunk_funcs",
+        "aggregate_funcs",
+        "finalizers",
+        "observed",
+        "dropna",
+    ]
+    _defaults = {
+        "observed": None,
+        "dropna": None,
+    }
+
+    @classmethod
+    def chunk(cls, df, by=None, **kwargs):
+        return _groupby_apply_funcs(df, *by, **kwargs)
+
+    @classmethod
+    def combine(cls, inputs, **kwargs):
+        return _groupby_apply_funcs(_concat(inputs), **kwargs)
+
+    @classmethod
+    def aggregate(cls, inputs, **kwargs):
+        return _agg_finalize(_concat(inputs), **kwargs)
+
+    @property
+    def levels(self):
+        if isinstance(self.by, (tuple, list)) and len(self.by) > 1:
+            levels = list(range(len(self.by)))
+        else:
+            levels = 0
+        return levels
+
+    @property
+    def dropna(self) -> dict:
+        dropna = self.operand("dropna")
+        if dropna is not None:
+            return {"dropna": dropna}
+        return {}
+
+    @property
+    def observed(self) -> dict:
+        observed = self.operand("observed")
+        if observed is not None:
+            return {"observed": observed}
+        return {}
+
+    @property
+    def chunk_kwargs(self) -> dict:
+        return {
+            "funcs": self.chunk_funcs,
+            "sort": False,
+            "by": self.by,
+            **self.observed,
+            **self.dropna,
+        }
+
+    @property
+    def combine_kwargs(self) -> dict:
+        return {
+            "funcs": self.aggregate_funcs,
+            "level": self.levels,
+            "sort": False,
+            **self.observed,
+            **self.dropna,
+        }
+
+    @property
+    def aggregate_kwargs(self) -> dict:
+        return {
+            "aggregate_funcs": self.aggregate_funcs,
+            "finalize_funcs": self.finalizers,
+            "level": self.levels,
+            **self.observed,
+            **self.dropna,
+        }
+
+
 class Sum(GroupbyAggregation):
     groupby_chunk = M.sum
 
@@ -229,3 +319,71 @@ class GroupBy:
     def max(self, numeric_only=no_default, **kwargs):
         numeric_kwargs = self._numeric_only_kwargs(numeric_only)
         return self._single_agg(Max, **kwargs, **numeric_kwargs)
+
+    def aggregate(self, arg=None, split_every=None, split_out=1, **kwargs):
+        relabeling = None
+        if arg is None:
+            relabeling, arg, columns, order = reconstruct_func(arg, **kwargs)
+        if relabeling:
+            raise NotImplementedError()
+        # TODO: Handle "SeriesGroupBy" case
+
+        if isinstance(self.obj, DataFrame):
+            if isinstance(self.by, tuple) or np.isscalar(self.by):
+                group_columns = {self.by}
+
+            elif isinstance(self.by, list):
+                group_columns = {
+                    i for i in self.by if isinstance(i, tuple) or np.isscalar(i)
+                }
+
+            else:
+                group_columns = set()
+
+            # NOTE: this step relies on the by normalization to replace
+            #       series with their name.
+            non_group_columns = [
+                col for col in self.obj.columns if col not in group_columns
+            ]
+            # TODO: need to colver "slice" case
+
+            spec = _normalize_spec(arg, non_group_columns)
+
+        elif isinstance(self.obj, Series):
+            if isinstance(arg, (list, tuple, dict)):
+                # implementation detail: if self.obj is a series, a pseudo column
+                # None is used to denote the series itself. This pseudo column is
+                # removed from the result columns before passing the spec along.
+                spec = _normalize_spec({None: arg}, [])
+                spec = [
+                    (result_column, func, input_column)
+                    for ((_, result_column), func, input_column) in spec
+                ]
+
+            else:
+                spec = _normalize_spec({None: arg}, [])
+                spec = [
+                    (self.obj.name, func, input_column)
+                    for (_, func, input_column) in spec
+                ]
+
+        else:
+            raise ValueError(f"aggregate on unknown object {self.obj}")
+
+        chunk_funcs, aggregate_funcs, finalizers = _build_agg_args(spec)
+
+        has_median = any(s[1] in ("median", np.median) for s in spec)
+        if has_median:
+            raise NotImplementedError()
+
+        return new_collection(
+            CustomAggregation(
+                self.obj.expr,
+                self.by,
+                chunk_funcs,
+                aggregate_funcs,
+                finalizers,
+                self.observed,
+                self.dropna,
+            )
+        )

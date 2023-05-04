@@ -32,3 +32,11 @@ def test_groupby_count(pdf, df):
 
     expect = pdf.groupby("x").count()
     assert_eq(agg, expect)
+
+
+def test_groupby_aggregate(pdf, df):
+    g = df.groupby("x")
+    agg = g.aggregate({"x": "count"})
+
+    expect = pdf.groupby("x").aggregate({"x": "count"})
+    assert_eq(agg, expect)
