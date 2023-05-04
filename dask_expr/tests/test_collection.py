@@ -321,11 +321,12 @@ def test_tree_repr(df, fuse):
     assert "1" in s
     assert "True" not in s
     assert "None" not in s
-    assert "skipna=False" in s
     assert str(df.seed) in s.lower()
     if fuse:
         assert "Fused" in s
-        assert s.count("|") == 9
+        assert "|" in s
+    else:
+        assert "skipna=False" in s
 
 
 def test_simple_graphs(df):

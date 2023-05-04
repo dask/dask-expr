@@ -1,5 +1,8 @@
+import functools
+
 import pandas as pd
 import toolz
+from dask.base import tokenize
 from dask.dataframe.core import (
     _concat,
     is_dataframe_like,
@@ -7,9 +10,35 @@ from dask.dataframe.core import (
     make_meta,
     meta_nonempty,
 )
-from dask.utils import M, apply
+from dask.utils import M, apply, funcname
 
-from dask_expr.expr import Elemwise, Expr, Projection
+from dask_expr.expr import Blockwise, Elemwise, Expr, Projection
+
+
+class ExprReference:
+    """Utility to wrap an `Expr` object
+
+    This class can be used to wrap an `Expr` object, and
+    include it within the operands of another `Expr` class
+    without the referenced object being included as a proper
+    node in the expression graph. `ApplyConcatApply` uses
+    this mechanism to split itself into multiple expressions.
+
+    See Also
+    --------
+    ApplyConcatApply
+    Chunk
+    TreeReduction
+    """
+
+    def __init__(self, expr: Expr):
+        self.expr = expr
+
+    def __str__(self):
+        return funcname(type(self.expr))
+
+    def __repr__(self):
+        return str(self)
 
 
 class ApplyConcatApply(Expr):
@@ -39,61 +68,6 @@ class ApplyConcatApply(Expr):
     combine_kwargs = {}
     aggregate_kwargs = {}
 
-    def __dask_postcompute__(self):
-        return toolz.first, ()
-
-    def _layer(self):
-        # Normalize functions in case not all are defined
-        chunk = self.chunk
-        chunk_kwargs = self.chunk_kwargs
-
-        if self.aggregate:
-            aggregate = self.aggregate
-            aggregate_kwargs = self.aggregate_kwargs
-        else:
-            aggregate = chunk
-            aggregate_kwargs = chunk_kwargs
-
-        if self.combine:
-            combine = self.combine
-            combine_kwargs = self.combine_kwargs
-        else:
-            combine = aggregate
-            combine_kwargs = aggregate_kwargs
-
-        d = {}
-        keys = self.frame.__dask_keys__()
-
-        # apply chunk to every input partition
-        for i, key in enumerate(keys):
-            if chunk_kwargs:
-                d[self._name, 0, i] = (apply, chunk, [key], chunk_kwargs)
-            else:
-                d[self._name, 0, i] = (chunk, key)
-
-        keys = list(d)
-        j = 1
-
-        # apply combine to batches of intermediate results
-        while len(keys) > 1:
-            new_keys = []
-            for i, batch in enumerate(
-                toolz.partition_all(self.split_every or len(keys), keys)
-            ):
-                batch = list(batch)
-                if combine_kwargs:
-                    d[self._name, j, i] = (apply, combine, [batch], self.combine_kwargs)
-                else:
-                    d[self._name, j, i] = (combine, batch)
-                new_keys.append((self._name, j, i))
-            j += 1
-            keys = new_keys
-
-        # apply aggregate to the final result
-        d[self._name, 0] = (apply, aggregate, [keys], aggregate_kwargs)
-
-        return d
-
     @property
     def _meta(self):
         meta = meta_nonempty(self.frame._meta)
@@ -103,7 +77,138 @@ class ApplyConcatApply(Expr):
         return make_meta(meta)
 
     def _divisions(self):
-        return [None, None]
+        return (None, None)
+
+    def _simplify_down(self):
+        aca_ref = ExprReference(self)
+        chunked = Chunk(self.frame, aca_ref)
+        reduced = TreeReduction(chunked, aca_ref)
+        return reduced
+
+
+class Chunk(Blockwise):
+    """Partition-wise component of `ApplyConcatApply`
+
+    This class is used within `ApplyConcatApply._simplify_down`.
+
+    See Also
+    --------
+    ApplyConcatApply
+    """
+
+    _parameters = ["frame", "aca"]
+
+    @functools.cached_property
+    def _name(self):
+        return "chunk-" + tokenize(self.frame, self.aca._name)
+
+    @property
+    def aca(self):
+        return self.operand("aca").expr
+
+    @property
+    def chunk(self):
+        return self.aca.chunk
+
+    @property
+    def chunk_kwargs(self):
+        return self.aca.chunk_kwargs or {}
+
+    @functools.cached_property
+    def _meta(self):
+        meta = meta_nonempty(self.frame._meta)
+        chunk_kwargs = self.chunk_kwargs or {}
+        return make_meta(self.chunk(meta, **chunk_kwargs))
+
+    def _task(self, index: int):
+        args = [self._blockwise_arg(self.frame, index)]
+        chunk_kwargs = self.chunk_kwargs or {}
+        return (apply, self.chunk, args, chunk_kwargs)
+
+    def _divisions(self):
+        return (None,) * (self.frame.npartitions + 1)
+
+
+class TreeReduction(Expr):
+    """Reduction component of `ApplyConcatApply`
+
+    This class is used within `ApplyConcatApply._simplify_down`.
+
+    See Also
+    --------
+    ApplyConcatApply
+    """
+
+    _parameters = ["frame", "aca"]
+    split_every = 0
+
+    @functools.cached_property
+    def _name(self):
+        return "reduction-" + tokenize(self.frame, self.aca._name)
+
+    @property
+    def aca(self):
+        return self.operand("aca").expr
+
+    @property
+    def aggregate(self):
+        return self.aca.aggregate or self.aca.chunk
+
+    @property
+    def combine(self):
+        return self.aca.combine or self.aggregate
+
+    @property
+    def aggregate_kwargs(self):
+        return self.aca.aggregate_kwargs or {}
+
+    @property
+    def combine_kwargs(self):
+        if self.aca.combine:
+            return self.aca.combine_kwargs or {}
+        return self.aggregate_kwargs
+
+    def __dask_postcompute__(self):
+        return toolz.first, ()
+
+    def _layer(self):
+        aggregate = self.aggregate
+        aggregate_kwargs = self.aggregate_kwargs
+        combine = self.combine
+        combine_kwargs = self.combine_kwargs
+
+        d = {}
+        j = 1
+        keys = self.frame.__dask_keys__()
+        # apply combine to batches of intermediate results
+        while len(keys) > 1:
+            new_keys = []
+            for i, batch in enumerate(
+                toolz.partition_all(self.split_every or len(keys), keys)
+            ):
+                batch = list(batch)
+                if combine_kwargs:
+                    d[(self._name, j, i)] = (apply, combine, [batch], combine_kwargs)
+                else:
+                    d[(self._name, j, i)] = (combine, batch)
+                new_keys.append((self._name, j, i))
+            j += 1
+            keys = new_keys
+
+        # apply aggregate to the final result
+        d[(self._name, 0)] = (apply, aggregate, [keys], aggregate_kwargs)
+
+        return d
+
+    @property
+    def _meta(self):
+        meta = meta_nonempty(self.frame._meta)
+        meta = self.combine([meta], **self.combine_kwargs)
+        meta = self.aggregate([meta], **self.aggregate_kwargs)
+        return make_meta(meta)
+
+    def _divisions(self):
+        return (None, None)
 
 
 class Reduction(ApplyConcatApply):
