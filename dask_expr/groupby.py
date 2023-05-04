@@ -9,7 +9,6 @@ from dask.dataframe.core import (
     no_default,
 )
 from dask.dataframe.groupby import _apply_chunk, _determine_levels, _groupby_aggregate
-from dask.dataframe.utils import get_numeric_only_kwargs
 from dask.utils import M
 
 from dask_expr.collection import new_collection
@@ -193,8 +192,8 @@ class GroupBy:
             raise NotImplementedError("sort=True not yet supported.")
 
     def _numeric_only_kwargs(self, numeric_only):
-        numeric_kwargs = get_numeric_only_kwargs(numeric_only)
-        return {"chunk_kwargs": numeric_kwargs, "aggregate_kwargs": numeric_kwargs}
+        kwargs = {} if numeric_only is no_default else {"numeric_only": numeric_only}
+        return {"chunk_kwargs": kwargs, "aggregate_kwargs": kwargs}
 
     def _single_agg(
         self, expr_cls, split_out=1, chunk_kwargs=None, aggregate_kwargs=None
