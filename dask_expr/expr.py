@@ -86,7 +86,7 @@ class Expr:
                     if param:
                         header += f" {param}={repr(op)}"
                     else:
-                        header += repr(op)
+                        header += f" {repr(op)}"
         lines = [header] + lines
         lines = [" " * indent + line for line in lines]
 

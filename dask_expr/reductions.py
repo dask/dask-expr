@@ -68,6 +68,12 @@ class ApplyConcatApply(Expr):
     combine_kwargs = {}
     aggregate_kwargs = {}
 
+    @functools.cached_property
+    def split_out(self):
+        if "split_out" in self._parameters:
+            return self.operand("split_out")
+        return 1
+
     @property
     def _meta(self):
         meta = meta_nonempty(self.frame._meta)
@@ -82,8 +88,10 @@ class ApplyConcatApply(Expr):
     def _simplify_down(self):
         aca_ref = ExprReference(self)
         chunked = Chunk(self.frame, aca_ref)
-        reduced = TreeReduction(chunked, aca_ref)
-        return reduced
+        if self.split_out > 1:
+            raise NotImplementedError("split_out > 1 is not supported yet")
+        else:
+            return TreeReduction(chunked, aca_ref, self.split_every)
 
 
 class Chunk(Blockwise):
@@ -122,8 +130,10 @@ class Chunk(Blockwise):
 
     def _task(self, index: int):
         args = [self._blockwise_arg(self.frame, index)]
-        chunk_kwargs = self.chunk_kwargs or {}
-        return (apply, self.chunk, args, chunk_kwargs)
+        if self.chunk_kwargs:
+            return (apply, self.chunk, args, self.chunk_kwargs)
+        else:
+            return (self.chunk,) + tuple(args)
 
     def _divisions(self):
         return (None,) * (self.frame.npartitions + 1)
@@ -139,8 +149,8 @@ class TreeReduction(Expr):
     ApplyConcatApply
     """
 
-    _parameters = ["frame", "aca"]
-    split_every = 0
+    _parameters = ["frame", "aca", "split_every"]
+    _defaults = {"split_every": 0}
 
     @functools.cached_property
     def _name(self):
@@ -167,9 +177,6 @@ class TreeReduction(Expr):
         if self.aca.combine:
             return self.aca.combine_kwargs or {}
         return self.aggregate_kwargs
-
-    def __dask_postcompute__(self):
-        return toolz.first, ()
 
     def _layer(self):
         aggregate = self.aggregate
@@ -226,15 +233,16 @@ class Reduction(ApplyConcatApply):
     methods.
     """
 
-    _defaults = {
-        "skipna": True,
-        "numeric_only": None,
-        "min_count": 0,
-        "dropna": True,
-    }
     reduction_chunk = None
     reduction_combine = None
     reduction_aggregate = None
+
+    @functools.cached_property
+    def split_out(self):
+        # Require split_out == 1 for Reductions
+        if "split_out" in self._parameters and self.operand("split_out") != 1:
+            raise ValueError("`split_out` must be 1 for a Reduction")
+        return 1
 
     @classmethod
     def chunk(cls, df, **kwargs):
@@ -260,7 +268,7 @@ class Reduction(ApplyConcatApply):
         return toolz.first, ()
 
     def _divisions(self):
-        return [None, None]
+        return (None, None)
 
     def __str__(self):
         params = {param: self.operand(param) for param in self._parameters[1:]}
@@ -275,6 +283,11 @@ class Reduction(ApplyConcatApply):
 
 class Sum(Reduction):
     _parameters = ["frame", "skipna", "numeric_only", "min_count"]
+    _defaults = {
+        "skipna": True,
+        "numeric_only": None,
+        "min_count": 0,
+    }
     reduction_chunk = M.sum
 
     @property
@@ -295,7 +308,8 @@ class Sum(Reduction):
 
 
 class Max(Reduction):
-    _parameters = ["frame", "skipna"]
+    _parameters = ["frame", "skipna", "numeric_only"]
+    _defaults = {"skipna": True, "numeric_only": None}
     reduction_chunk = M.max
 
     @property
@@ -349,6 +363,7 @@ class Mean(Reduction):
 
 class Count(Reduction):
     _parameters = ["frame", "numeric_only"]
+    _defaults = {"numeric_only": None}
     split_every = 16
     reduction_chunk = M.count
 
