@@ -214,9 +214,9 @@ class FrameBase(DaskMethodsMixin):
         )
 
     def groupby(self, *args, **kwargs):
-        from dask_expr.groupby import CollectionGroupBy
+        from dask_expr.groupby import GroupBy
 
-        return CollectionGroupBy(self, *args, **kwargs)
+        return GroupBy(self, *args, **kwargs)
 
     def map_partitions(
         self,

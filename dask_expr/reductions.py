@@ -88,7 +88,7 @@ class ApplyConcatApply(Expr):
             ):
                 batch = list(batch)
                 if combine_kwargs:
-                    d[self._name, j, i] = (apply, combine, [batch], self.combine_kwargs)
+                    d[self._name, j, i] = (apply, combine, [batch], combine_kwargs)
                 else:
                     d[self._name, j, i] = (combine, batch)
                 new_keys.append((self._name, j, i))
@@ -109,8 +109,14 @@ class ApplyConcatApply(Expr):
         ]
         meta = self.chunk(meta, *args, **self.chunk_kwargs)
         aggregate = self.aggregate or (lambda x: x)
-        combine = self.combine or aggregate
-        meta = combine([meta], **self.combine_kwargs)
+        if self.combine:
+            combine = self.combine
+            combine_kwargs = self.combine_kwargs
+        else:
+            combine = aggregate
+            combine_kwargs = self.aggregate_kwargs
+
+        meta = combine([meta], **combine_kwargs)
         meta = aggregate([meta], **self.aggregate_kwargs)
         return make_meta(meta)
 

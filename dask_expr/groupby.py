@@ -1,182 +1,232 @@
 import functools
 
-from dask.dataframe.core import _concat
-
-# from dask.dataframe.groupby import _apply_chunk, _groupby_aggregate
-from dask.dataframe.groupby import _determine_levels, _groupby_raise_unaligned
+from dask.dataframe.core import (
+    _concat,
+    is_dataframe_like,
+    is_series_like,
+    make_meta,
+    meta_nonempty,
+    no_default,
+)
+from dask.dataframe.groupby import _apply_chunk, _determine_levels, _groupby_aggregate
+from dask.dataframe.utils import get_numeric_only_kwargs
 from dask.utils import M
 
 from dask_expr.collection import new_collection
-from dask_expr.expr import Expr
 from dask_expr.reductions import ApplyConcatApply
 
 ###
-### Groupby Expression API
+### Groupby-Aggregation Expressions
 ###
 
 
-class GroupBy(Expr):
-    """Intermediate Groupby expresssion
+class GroupbyAggregation(ApplyConcatApply):
+    """General groupby aggregation
 
     This is an abstract class in the sense that it
     cannot generate a task graph until it is converted
     to a scalar, series, or dataframe-like expression.
 
+    Sub-classes must implement the following methods:
+
+    -   `groupby_chunk`: Applied to each group within
+        the `chunk` method of `ApplyConcatApply`
+    -   `groupby_aggregate`: Applied to each group within
+        the `aggregate` method of `ApplyConcatApply`
+
     Parameters
     ----------
-    obj: Expr
-        Dataframe- or series-like expression to group
+    frame: Expr
+        Dataframe- or series-like expression to group.
     by: str, list or Series
         The key for grouping
-    sort: bool
-        Whether the output aggregation should have sorted keys.
-    **options: dict
-        Other groupby options to pass through to backend.
+    observed:
+        Passed through to dataframe backend.
+    dropna:
+        Whether rows with NA values should be dropped.
+    chunk_kwargs:
+        Key-word arguments to pass to `groupby_chunk`.
+    aggregate_kwargs:
+        Key-word arguments to pass to `aggregate_chunk`.
     """
 
     _parameters = [
-        "obj",
-        "by",
-        "sort",
-        "options",
-    ]
-
-    def _layer(self):
-        raise NotImplementedError(
-            f"{self} is abstract! Please use the Grouby API to "
-            f"convert to a scalar, series, or dataframe-like "
-            f"object before computing."
-        )
-
-    def _single_agg(
-        self,
-        func,
-        aggfunc=None,
-        chunk_kwargs=None,
-        aggregate_kwargs=None,
-        split_out=1,
-        split_every=16,
-    ):
-        """Aggregation with a single function/aggfunc"""
-        if aggfunc is None:
-            aggfunc = func
-
-        if chunk_kwargs is None:
-            chunk_kwargs = {}
-
-        if aggregate_kwargs is None:
-            aggregate_kwargs = {}
-
-        frame = self.obj
-        by = self.by if isinstance(self.by, (list, tuple)) else [self.by]
-        levels = _determine_levels(by)
-
-        return SingleAgg(
-            frame,
-            by,
-            func,
-            chunk_kwargs,
-            aggfunc,
-            levels,
-            aggregate_kwargs,
-            self.options,
-            split_out,
-            split_every,
-        )
-
-    def count(self, split_out=1):
-        return self._single_agg(
-            func=M.count,
-            aggfunc=M.sum,
-            split_out=split_out,
-        )
-
-
-class SingleAgg(ApplyConcatApply):
-    _parameters = [
         "frame",
         "by",
-        "chunk",
+        "observed",
+        "dropna",
         "chunk_kwargs",
-        "aggregate",
-        "levels",
         "aggregate_kwargs",
-        "groupby_kwargs",
-        "split_out",
-        "split_every",
     ]
+    _defaults = {
+        "observed": None,
+        "dropna": None,
+        "chunk_kwargs": None,
+        "aggregate_kwargs": None,
+    }
 
-    @staticmethod
-    def _apply_chunk(df, **kwargs):
-        func = kwargs.pop("chunk")
-        by = kwargs.pop("by")
-        groupby_kwargs = kwargs.pop("groupby_kwargs")
-        g = _groupby_raise_unaligned(df, by=by, **groupby_kwargs)
-        return func(g, **kwargs)
+    groupby_chunk = None
+    groupby_aggregate = None
 
-    @staticmethod
-    def _groupby_aggregate(dfs, **kwargs):
-        aggfunc = kwargs.pop("aggfunc")
-        levels = kwargs.pop("levels")
-        groupby_kwargs = kwargs.pop("groupby_kwargs")
-        grouped = _concat(dfs).groupby(level=levels, **groupby_kwargs)
-        return aggfunc(grouped, **kwargs)
+    @classmethod
+    def chunk(cls, df, by=None, **kwargs):
+        return _apply_chunk(df, *by, **kwargs)
 
-    @functools.cached_property
-    def chunk(self):
-        return functools.partial(
-            self._apply_chunk,
-            by=self.operand("by"),
-            chunk=self.operand("chunk"),
-            groupby_kwargs=self.operand("groupby_kwargs"),
+    @classmethod
+    def aggregate(cls, inputs, **kwargs):
+        return _groupby_aggregate(_concat(inputs), **kwargs)
+
+    @property
+    def dropna(self) -> dict:
+        dropna = self.operand("dropna")
+        if dropna is not None:
+            return {"dropna": dropna}
+        return {}
+
+    @property
+    def observed(self) -> dict:
+        observed = self.operand("observed")
+        if observed is not None:
+            return {"observed": observed}
+        return {}
+
+    @property
+    def chunk_kwargs(self) -> dict:
+        chunk_kwargs = self.operand("chunk_kwargs") or {}
+        meta = make_meta(
+            self.groupby_chunk(
+                meta_nonempty(self.frame._meta),
+                **chunk_kwargs,
+            )
         )
+        columns = meta.name if is_series_like(meta) else meta.columns
+        return {
+            "chunk": self.groupby_chunk,
+            "columns": columns,
+            "by": self.by,
+            **self.observed,
+            **self.dropna,
+            **chunk_kwargs,
+        }
 
+    @property
+    def aggregate_kwargs(self) -> dict:
+        groupby_aggregate = self.groupby_aggregate or self.groupby_chunk
+        return {
+            "aggfunc": groupby_aggregate,
+            "levels": _determine_levels(self.by),
+            **self.observed,
+            **self.dropna,
+            **(self.operand("aggregate_kwargs") or {}),
+        }
+
+    def _divisions(self):
+        return (None, None)
+
+
+class Sum(GroupbyAggregation):
+    groupby_chunk = M.sum
+
+
+class Min(GroupbyAggregation):
+    groupby_chunk = M.min
+
+
+class Max(GroupbyAggregation):
+    groupby_chunk = M.max
+
+
+class Count(GroupbyAggregation):
+    groupby_chunk = M.count
+    groupby_aggregate = M.sum
+
+
+class Mean(GroupbyAggregation):
     @functools.cached_property
-    def aggregate(self):
-        return functools.partial(
-            self._groupby_aggregate,
-            aggfunc=self.operand("aggregate"),
-            levels=self.operand("levels"),
-            groupby_kwargs=self.operand("groupby_kwargs"),
-        )
+    def _meta(self):
+        return self.simplify()._meta
 
-    @property
-    def split_every(self):
-        return self.operand("split_every")
-
-    @property
-    def chunk_kwargs(self):
-        return self.operand("chunk_kwargs")
-
-    @property
-    def aggregate_kwargs(self):
-        return self.operand("aggregate_kwargs")
+    def _simplify_down(self):
+        s = Sum(*self.operands)
+        # Drop chunk/aggregate_kwargs for count
+        c = Count(*self.operands[:4])
+        if is_dataframe_like(s._meta):
+            c = c[s.columns]
+        return s / c
 
 
 ###
-### Collection Groupby API
+### Groupby Collection API
 ###
 
 
-class CollectionGroupBy:
-    """Abstract Groupby-expression container"""
+class GroupBy:
+    """Collection container for groupby aggregations
+
+    The purpose of this class is to expose an API similar
+    to Pandas' `Groupby`.
+
+    See Also
+    --------
+    GroupbyAggregation
+    """
 
     def __init__(
         self,
         obj,
         by,
-        sort=True,
-        **options,
+        sort=None,
+        observed=None,
+        dropna=None,
     ):
-        for key in by if isinstance(by, (tuple, list)) else [by]:
+        self.by = by if isinstance(by, (tuple, list)) else [by]
+        self.obj = obj
+        self.sort = sort
+        self.observed = observed
+        self.dropna = dropna
+
+        for key in self.by:
             if not isinstance(key, (str, int)):
                 raise NotImplementedError("Can only group on column names (for now).")
 
-        self._expr = GroupBy(obj.expr, by, sort, options)
+        if self.sort:
+            raise NotImplementedError("sort=True not yet supported.")
 
-    @property
-    def expr(self):
-        return self._expr
+    def _numeric_only_kwargs(self, numeric_only):
+        numeric_kwargs = get_numeric_only_kwargs(numeric_only)
+        return {"chunk_kwargs": numeric_kwargs, "aggregate_kwargs": numeric_kwargs}
 
-    def count(self, split_out=1):
-        return new_collection(self.expr.count(split_out=split_out))
+    def _single_agg(
+        self, expr_cls, split_out=1, chunk_kwargs=None, aggregate_kwargs=None
+    ):
+        if split_out > 1:
+            raise NotImplementedError("split_out>1 not yet supported")
+        return new_collection(
+            expr_cls(
+                self.obj.expr,
+                self.by,
+                self.observed,
+                self.dropna,
+                chunk_kwargs=chunk_kwargs,
+                aggregate_kwargs=aggregate_kwargs,
+            )
+        )
+
+    def count(self, **kwargs):
+        return self._single_agg(Count, **kwargs)
+
+    def sum(self, numeric_only=no_default, **kwargs):
+        numeric_kwargs = self._numeric_only_kwargs(numeric_only)
+        return self._single_agg(Sum, **kwargs, **numeric_kwargs)
+
+    def mean(self, numeric_only=no_default, **kwargs):
+        numeric_kwargs = self._numeric_only_kwargs(numeric_only)
+        return self._single_agg(Mean, **kwargs, **numeric_kwargs)
+
+    def min(self, numeric_only=no_default, **kwargs):
+        numeric_kwargs = self._numeric_only_kwargs(numeric_only)
+        return self._single_agg(Min, **kwargs, **numeric_kwargs)
+
+    def max(self, numeric_only=no_default, **kwargs):
+        numeric_kwargs = self._numeric_only_kwargs(numeric_only)
+        return self._single_agg(Max, **kwargs, **numeric_kwargs)
