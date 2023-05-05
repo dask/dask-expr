@@ -34,9 +34,29 @@ def test_groupby_count(pdf, df):
     assert_eq(agg, expect)
 
 
-def test_groupby_aggregate(pdf, df):
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"x": "count"},
+        {"x": ["count"]},
+        {"x": ["count"], "y": "mean"},
+        {"x": ["sum", "mean"]},
+        ["min", "mean"],
+        "sum",
+    ],
+)
+def test_groupby_agg(pdf, df, spec):
     g = df.groupby("x")
-    agg = g.aggregate({"x": "count"})
+    agg = g.agg(spec)
 
-    expect = pdf.groupby("x").aggregate({"x": "count"})
+    expect = pdf.groupby("x").agg(spec)
+    assert_eq(agg, expect)
+
+
+def test_groupby_agg_column_projection(pdf, df):
+    g = df.groupby("x")
+    agg = g.agg({"x": "count"}).simplify()
+
+    assert list(agg.frame.columns) == ["x"]
+    expect = pdf.groupby("x").agg({"x": "count"})
     assert_eq(agg, expect)
