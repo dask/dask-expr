@@ -28,14 +28,50 @@ from dask_expr.reductions import ApplyConcatApply
 ###
 
 
-class GroupbyAggregation(ApplyConcatApply):
-    """General groupby aggregation
+class BaseAggregation(ApplyConcatApply):
+    """Groupby-aggregation base class
 
-    This is an abstract class in the sense that it
-    cannot generate a task graph until it is converted
-    to a scalar, series, or dataframe-like expression.
+    This class does very little besides define some
+    common properties used by `SingleAggregation` and
+    `GroupbyAggregation`.
 
-    Sub-classes must implement the following methods:
+    See Also
+    --------
+    SingleAggregation
+    GroupbyAggregation
+    """
+
+    @property
+    def dropna(self) -> dict:
+        dropna = self.operand("dropna")
+        if dropna is not None:
+            return {"dropna": dropna}
+        return {}
+
+    @property
+    def observed(self) -> dict:
+        observed = self.operand("observed")
+        if observed is not None:
+            return {"observed": observed}
+        return {}
+
+    @property
+    def levels(self):
+        if isinstance(self.by, (tuple, list)) and len(self.by) > 1:
+            levels = list(range(len(self.by)))
+        else:
+            levels = 0
+        return levels
+
+    def _divisions(self):
+        return (None, None)
+
+
+class SingleAggregation(BaseAggregation):
+    """Single groupby aggregation
+
+    This is an abstract class. Sub-classes must implement
+    the following methods:
 
     -   `groupby_chunk`: Applied to each group within
         the `chunk` method of `ApplyConcatApply`
@@ -85,28 +121,6 @@ class GroupbyAggregation(ApplyConcatApply):
         return _groupby_aggregate(_concat(inputs), **kwargs)
 
     @property
-    def dropna(self) -> dict:
-        dropna = self.operand("dropna")
-        if dropna is not None:
-            return {"dropna": dropna}
-        return {}
-
-    @property
-    def observed(self) -> dict:
-        observed = self.operand("observed")
-        if observed is not None:
-            return {"observed": observed}
-        return {}
-
-    @property
-    def levels(self):
-        if isinstance(self.by, (tuple, list)) and len(self.by) > 1:
-            levels = list(range(len(self.by)))
-        else:
-            levels = 0
-        return levels
-
-    @property
     def chunk_kwargs(self) -> dict:
         chunk_kwargs = self.operand("chunk_kwargs") or {}
         meta = make_meta(
@@ -135,9 +149,6 @@ class GroupbyAggregation(ApplyConcatApply):
             **self.dropna,
             **(self.operand("aggregate_kwargs") or {}),
         }
-
-    def _divisions(self):
-        return (None, None)
 
 
 class AggregationSpec:
@@ -175,7 +186,32 @@ def normalize_expression(spec):
     return spec.spec
 
 
-class CustomAggregation(GroupbyAggregation):
+class GroupbyAggregation(BaseAggregation):
+    """General groupby aggregation
+
+    This class can be used directly to perform a general
+    groupby aggregation by passing in an `AggregationSpec`
+    object for the `aggs` operand.
+
+    Parameters
+    ----------
+    frame: Expr
+        Dataframe- or series-like expression to group.
+    by: str, list or Series
+        The key for grouping
+    aggs: AggregationSpec
+        Aggregation spec defining the specific aggregations
+        to perform.
+    observed:
+        Passed through to dataframe backend.
+    dropna:
+        Whether rows with NA values should be dropped.
+    chunk_kwargs:
+        Key-word arguments to pass to `groupby_chunk`.
+    aggregate_kwargs:
+        Key-word arguments to pass to `aggregate_chunk`.
+    """
+
     _parameters = [
         "frame",
         "by",
@@ -252,24 +288,24 @@ class CustomAggregation(GroupbyAggregation):
             return type(self)(self.frame[list(column_projection)], *self.operands[1:])
 
 
-class Sum(GroupbyAggregation):
+class Sum(SingleAggregation):
     groupby_chunk = M.sum
 
 
-class Min(GroupbyAggregation):
+class Min(SingleAggregation):
     groupby_chunk = M.min
 
 
-class Max(GroupbyAggregation):
+class Max(SingleAggregation):
     groupby_chunk = M.max
 
 
-class Count(GroupbyAggregation):
+class Count(SingleAggregation):
     groupby_chunk = M.count
     groupby_aggregate = M.sum
 
 
-class Mean(GroupbyAggregation):
+class Mean(SingleAggregation):
     @functools.cached_property
     def _meta(self):
         return self.simplify()._meta
@@ -296,7 +332,7 @@ class GroupBy:
 
     See Also
     --------
-    GroupbyAggregation
+    SingleAggregation
     """
 
     def __init__(
@@ -372,7 +408,7 @@ class GroupBy:
             raise NotImplementedError("split_out>1 not yet supported")
 
         return new_collection(
-            CustomAggregation(
+            GroupbyAggregation(
                 self.obj.expr,
                 self.by,
                 AggregationSpec(spec),
