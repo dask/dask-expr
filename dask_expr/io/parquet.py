@@ -3,6 +3,7 @@ from __future__ import annotations
 import operator
 from functools import cached_property
 
+from dask import config
 from dask.dataframe.io.parquet.core import (
     ParquetFunctionWrapper,
     get_engine,
@@ -69,8 +70,15 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
     }
 
     @property
+    def _dataframe_backend(self):
+        return config.get("dataframe.backend")
+
+    @property
     def engine(self):
-        return get_engine("pyarrow")
+        backend = self._dataframe_backend
+        if backend == "pandas":
+            backend = "pyarrow"
+        return get_engine(backend)
 
     @property
     def columns(self):
@@ -107,7 +115,10 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
                 kwargs["filters"] = (kwargs["filters"] or tuple()) + (
                     (column, op, value),
                 )
-                return ReadParquet(**kwargs)
+                if self._dataframe_backend == "pandas":
+                    # Can only guarentee row-wise filtering for pandas
+                    return ReadParquet(**kwargs)
+                return type(parent)(ReadParquet(**kwargs), *parent.operands[1:])
             if (
                 isinstance(parent.predicate.right, ReadParquet)
                 and parent.predicate.right.path == self.path
@@ -122,7 +133,10 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
                 kwargs["filters"] = (kwargs["filters"] or tuple()) + (
                     (column, op, value),
                 )
-                return ReadParquet(**kwargs)
+                if self._dataframe_backend == "pandas":
+                    # Can only guarentee row-wise filtering for pandas
+                    return ReadParquet(**kwargs)
+                return type(parent)(ReadParquet(**kwargs), *parent.operands[1:])
 
     @cached_property
     def _dataset_info(self):
