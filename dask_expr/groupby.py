@@ -1,7 +1,6 @@
 import functools
 
 import numpy as np
-from dask.base import normalize_token
 from dask.dataframe.core import (
     _concat,
     is_dataframe_like,
@@ -14,6 +13,7 @@ from dask.dataframe.groupby import (
     _agg_finalize,
     _apply_chunk,
     _build_agg_args,
+    _determine_levels,
     _groupby_aggregate,
     _groupby_apply_funcs,
     _normalize_spec,
@@ -23,6 +23,13 @@ from dask.utils import M
 from dask_expr.collection import DataFrame, new_collection
 from dask_expr.reductions import ApplyConcatApply
 
+
+def _as_dict(key, value):
+    # Utility to convert a single kwarg to a dict.
+    # The dict will be empty if the value is None
+    return {} if value is None else {key: value}
+
+
 ###
 ### Groupby-aggregation expressions
 ###
@@ -31,37 +38,14 @@ from dask_expr.reductions import ApplyConcatApply
 class BaseAggregation(ApplyConcatApply):
     """Groupby-aggregation base class
 
-    This class does very little besides define some
-    common properties used by `SingleAggregation` and
-    `GroupbyAggregation`.
+    This class does very little besides provide a base
+    class for `SingleAggregation` and `GroupbyAggregation`.
 
     See Also
     --------
     SingleAggregation
     GroupbyAggregation
     """
-
-    @property
-    def dropna(self) -> dict:
-        dropna = self.operand("dropna")
-        if dropna is not None:
-            return {"dropna": dropna}
-        return {}
-
-    @property
-    def observed(self) -> dict:
-        observed = self.operand("observed")
-        if observed is not None:
-            return {"observed": observed}
-        return {}
-
-    @property
-    def levels(self):
-        if isinstance(self.by, (tuple, list)) and len(self.by) > 1:
-            levels = list(range(len(self.by)))
-        else:
-            levels = 0
-        return levels
 
     def _divisions(self):
         return (None, None)
@@ -134,64 +118,30 @@ class SingleAggregation(BaseAggregation):
             "chunk": self.groupby_chunk,
             "columns": columns,
             "by": self.by,
-            **self.observed,
-            **self.dropna,
+            **_as_dict("observed", self.observed),
+            **_as_dict("dropna", self.dropna),
             **chunk_kwargs,
         }
 
     @property
     def aggregate_kwargs(self) -> dict:
+        aggregate_kwargs = self.operand("aggregate_kwargs") or {}
         groupby_aggregate = self.groupby_aggregate or self.groupby_chunk
         return {
             "aggfunc": groupby_aggregate,
-            "levels": self.levels,
-            **self.observed,
-            **self.dropna,
-            **(self.operand("aggregate_kwargs") or {}),
+            "levels": _determine_levels(self.by),
+            **_as_dict("observed", self.observed),
+            **_as_dict("dropna", self.dropna),
+            **aggregate_kwargs,
         }
-
-
-class AggregationSpec:
-    """Utility class to wrap a raw groupby-aggregation spec"""
-
-    def __init__(self, spec):
-        self.spec = spec
-
-    def __str__(self):
-        return f"{self.spec}"
-
-    def __repr__(self):
-        return str(self)
-
-    def build(self, frame, by):
-        group_columns = set(by)
-        non_group_columns = [col for col in frame.columns if col not in group_columns]
-        spec = _normalize_spec(self.spec, non_group_columns)
-
-        # Median not supported yet
-        has_median = any(s[1] in ("median", np.median) for s in spec)
-        if has_median:
-            raise NotImplementedError("median not yet supported")
-
-        chunk_funcs, aggregate_funcs, finalizers = _build_agg_args(spec)
-        return {
-            "chunk_funcs": chunk_funcs,
-            "aggregate_funcs": aggregate_funcs,
-            "finalizers": finalizers,
-        }
-
-
-@normalize_token.register(AggregationSpec)
-def normalize_expression(spec):
-    return spec.spec
 
 
 class GroupbyAggregation(BaseAggregation):
     """General groupby aggregation
 
     This class can be used directly to perform a general
-    groupby aggregation by passing in an `AggregationSpec`
-    object for the `aggs` operand.
+    groupby aggregation by passing in a `str`, `list` or
+    `dict`-based specification using the `arg` operand.
 
     Parameters
     ----------
@@ -199,7 +149,7 @@ class GroupbyAggregation(BaseAggregation):
         Dataframe- or series-like expression to group.
     by: str, list or Series
         The key for grouping
-    aggs: AggregationSpec
+    arg: str, list or dict
         Aggregation spec defining the specific aggregations
         to perform.
     observed:
@@ -215,7 +165,7 @@ class GroupbyAggregation(BaseAggregation):
     _parameters = [
         "frame",
         "by",
-        "aggs",
+        "arg",
         "observed",
         "dropna",
         "split_every",
@@ -232,7 +182,21 @@ class GroupbyAggregation(BaseAggregation):
 
     @functools.cached_property
     def spec(self):
-        return self.aggs.build(self.frame, self.by)
+        # Converts the `arg` operand into specific
+        # chunk, aggregate, and finalizer functions
+        group_columns = set(self.by)
+        non_group_columns = [
+            col for col in self.frame.columns if col not in group_columns
+        ]
+        spec = _normalize_spec(self.arg, non_group_columns)
+
+        # Median not supported yet
+        has_median = any(s[1] in ("median", np.median) for s in spec)
+        if has_median:
+            raise NotImplementedError("median not yet supported")
+
+        keys = ["chunk_funcs", "aggregate_funcs", "finalizers"]
+        return dict(zip(keys, _build_agg_args(spec)))
 
     @classmethod
     def chunk(cls, df, by=None, **kwargs):
@@ -252,18 +216,18 @@ class GroupbyAggregation(BaseAggregation):
             "funcs": self.spec["chunk_funcs"],
             "sort": False,
             "by": self.by,
-            **self.observed,
-            **self.dropna,
+            **_as_dict("observed", self.observed),
+            **_as_dict("dropna", self.dropna),
         }
 
     @property
     def combine_kwargs(self) -> dict:
         return {
             "funcs": self.spec["aggregate_funcs"],
-            "level": self.levels,
+            "level": _determine_levels(self.by),
             "sort": False,
-            **self.observed,
-            **self.dropna,
+            **_as_dict("observed", self.observed),
+            **_as_dict("dropna", self.dropna),
         }
 
     @property
@@ -271,18 +235,17 @@ class GroupbyAggregation(BaseAggregation):
         return {
             "aggregate_funcs": self.spec["aggregate_funcs"],
             "finalize_funcs": self.spec["finalizers"],
-            "level": self.levels,
-            **self.observed,
-            **self.dropna,
+            "level": _determine_levels(self.by),
+            **_as_dict("observed", self.observed),
+            **_as_dict("dropna", self.dropna),
         }
 
     def _simplify_down(self):
         # Use agg-spec information to add column projection
         column_projection = None
-        spec = self.aggs.spec
-        if isinstance(spec, dict):
+        if isinstance(self.arg, dict):
             column_projection = (
-                set(self.by).union(spec.keys()).intersection(self.frame.columns)
+                set(self.by).union(self.arg.keys()).intersection(self.frame.columns)
             )
         if column_projection and column_projection < set(self.frame.columns):
             return type(self)(self.frame[list(column_projection)], *self.operands[1:])
@@ -400,9 +363,9 @@ class GroupBy:
         numeric_kwargs = self._numeric_only_kwargs(numeric_only)
         return self._single_agg(Max, **kwargs, **numeric_kwargs)
 
-    def aggregate(self, spec=None, split_every=8, split_out=1):
-        if spec is None:
-            raise NotImplementedError("spec=None not supported")
+    def aggregate(self, arg=None, split_every=8, split_out=1):
+        if arg is None:
+            raise NotImplementedError("arg=None not supported")
 
         if split_out > 1:
             raise NotImplementedError("split_out>1 not yet supported")
@@ -411,7 +374,7 @@ class GroupBy:
             GroupbyAggregation(
                 self.obj.expr,
                 self.by,
-                AggregationSpec(spec),
+                arg,
                 self.observed,
                 self.dropna,
                 split_every,
