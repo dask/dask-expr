@@ -9,6 +9,7 @@ from dask.utils import M
 
 from dask_expr import expr, from_pandas, optimize
 from dask_expr.datasets import timeseries
+from dask_expr.tests.utils import cpu_gpu
 
 
 @pytest.fixture
@@ -65,13 +66,16 @@ def test_meta_blockwise():
     assert set(cc.columns) == {"x", "y", "z"}
 
 
-def test_dask(pdf, df):
+@cpu_gpu()
+def test_dask(pdf):
+    df = from_pandas(pdf, 10)
     assert (df.x + df.y).npartitions == 10
     z = (df.x + df.y).sum()
 
     assert assert_eq(z, (pdf.x + pdf.y).sum())
 
 
+@cpu_gpu()
 @pytest.mark.parametrize(
     "func",
     [
@@ -86,18 +90,20 @@ def test_dask(pdf, df):
         ),
     ],
 )
-def test_reductions(func, pdf, df):
+def test_reductions(func, pdf):
+    df = from_pandas(pdf, 10)
     assert_eq(func(df), func(pdf))
     assert_eq(func(df.x), func(pdf.x))
 
 
-def test_mode():
-    pdf = pd.DataFrame({"x": [1, 2, 3, 1, 2]})
+@cpu_gpu({"x": [1, 2, 3, 1, 2]})
+def test_mode(pdf):
     df = from_pandas(pdf, npartitions=3)
 
     assert_eq(df.x.mode(), pdf.x.mode(), check_names=False)
 
 
+@cpu_gpu()
 @pytest.mark.parametrize(
     "func",
     [
@@ -112,7 +118,8 @@ def test_mode():
         lambda df: df.x != df.y,
     ],
 )
-def test_conditionals(func, pdf, df):
+def test_conditionals(func, pdf):
+    df = from_pandas(pdf, 10)
     assert_eq(func(pdf), func(df), check_names=False)
 
 
@@ -139,7 +146,7 @@ def test_repr(df):
     assert "sum(skipna=False)" in s
 
 
-def test_columns_traverse_filters(pdf, df):
+def test_columns_traverse_filters(df):
     result = optimize(df[df.x > 5].y, fuse=False)
     expected = df.y[df.x > 5]
 
@@ -243,7 +250,7 @@ def test_from_pandas(pdf):
     assert "pandas" in df._name
 
 
-def test_copy(pdf, df):
+def test_copy(df):
     original = df.copy()
     columns = tuple(original.columns)
 
@@ -253,7 +260,10 @@ def test_copy(pdf, df):
     assert "z" not in original.columns
 
 
-def test_partitions(pdf, df):
+@cpu_gpu()
+def test_partitions(pdf):
+    df = from_pandas(pdf, 10)
+    import pdb; pdb.set_trace()
     assert_eq(df.partitions[0], pdf.iloc[:10])
     assert_eq(df.partitions[1], pdf.iloc[10:20])
     assert_eq(df.partitions[1:3], pdf.iloc[10:30])
@@ -278,7 +288,9 @@ def test_column_getattr(df):
         df.foo
 
 
-def test_serialization(pdf, df):
+@cpu_gpu()
+def test_serialization(pdf):
+    df = from_pandas(pdf, 10)
     before = pickle.dumps(df)
 
     assert len(before) < 200 + len(pickle.dumps(pdf))
@@ -297,7 +309,9 @@ def test_serialization(pdf, df):
     assert_eq(pickle.loads(before), pickle.loads(after))
 
 
-def test_size_optimized(df):
+@cpu_gpu()
+def test_size_optimized(pdf):
+    df = from_pandas(pdf, 10)
     expr = (df.x + 1).apply(lambda x: x).size
     out = optimize(expr)
     expected = optimize(df.x.size)
@@ -310,7 +324,7 @@ def test_size_optimized(df):
 
 
 @pytest.mark.parametrize("fuse", [True, False])
-def test_tree_repr(df, fuse):
+def test_tree_repr(fuse):
     df = timeseries()
     expr = ((df.x + 1).sum(skipna=False) + df.y.mean()).expr
     expr = expr.optimize() if fuse else expr
