@@ -34,7 +34,6 @@ class ApplyConcatApply(Expr):
     chunk = None
     combine = None
     aggregate = None
-    split_every = 0
     chunk_kwargs = {}
     combine_kwargs = {}
     aggregate_kwargs = {}
@@ -46,6 +45,7 @@ class ApplyConcatApply(Expr):
         # Normalize functions in case not all are defined
         chunk = self.chunk
         chunk_kwargs = self.chunk_kwargs
+        split_every = getattr(self, "split_every", 0)
 
         if self.aggregate:
             aggregate = self.aggregate
@@ -78,7 +78,7 @@ class ApplyConcatApply(Expr):
         while len(keys) > 1:
             new_keys = []
             for i, batch in enumerate(
-                toolz.partition_all(self.split_every or len(keys), keys)
+                toolz.partition_all(split_every or len(keys), keys)
             ):
                 batch = list(batch)
                 if combine_kwargs:
@@ -111,7 +111,7 @@ class ApplyConcatApply(Expr):
         return make_meta(meta)
 
     def _divisions(self):
-        return [None, None]
+        return (None, None)
 
 
 class Reduction(ApplyConcatApply):

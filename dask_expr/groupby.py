@@ -35,23 +35,7 @@ def _as_dict(key, value):
 ###
 
 
-class BaseAggregation(ApplyConcatApply):
-    """Groupby-aggregation base class
-
-    This class does very little besides provide a base
-    class for `SingleAggregation` and `GroupbyAggregation`.
-
-    See Also
-    --------
-    SingleAggregation
-    GroupbyAggregation
-    """
-
-    def _divisions(self):
-        return (None, None)
-
-
-class SingleAggregation(BaseAggregation):
+class SingleAggregation(ApplyConcatApply):
     """Single groupby aggregation
 
     This is an abstract class. Sub-classes must implement
@@ -136,7 +120,7 @@ class SingleAggregation(BaseAggregation):
         }
 
 
-class GroupbyAggregation(BaseAggregation):
+class GroupbyAggregation(ApplyConcatApply):
     """General groupby aggregation
 
     This class can be used directly to perform a general
@@ -175,10 +159,6 @@ class GroupbyAggregation(BaseAggregation):
         "dropna": None,
         "split_every": 8,
     }
-
-    @property
-    def split_every(self):
-        return self.operand("split_every")
 
     @functools.cached_property
     def spec(self):
