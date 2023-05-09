@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import functools
 import numbers
 import operator
@@ -425,7 +427,7 @@ class Expr:
     def __dask_keys__(self):
         return [(self._name, i) for i in range(self.npartitions)]
 
-    def substitute(self, substitutions: dict) -> "Expr":
+    def substitute(self, substitutions: dict) -> Expr:
         """Substitute specific `Expr` instances within `self`
 
         Parameters
