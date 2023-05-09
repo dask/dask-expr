@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import functools
 import numbers
 import operator
@@ -17,8 +15,10 @@ from dask.dataframe.core import (
     _get_meta_map_partitions,
     apply_and_enforce,
     is_dataframe_like,
+    is_index_like,
+    is_series_like,
 )
-from dask.utils import M, apply, funcname, import_required
+from dask.utils import M, apply, funcname, import_required, is_arraylike
 
 replacement_rules = []
 
@@ -83,6 +83,14 @@ class Expr:
 
                 if isinstance(op, pd.core.base.PandasObject):
                     op = "<pandas>"
+                elif is_dataframe_like(op):
+                    op = "<dataframe>"
+                elif is_index_like(op):
+                    op = "<index>"
+                elif is_series_like(op):
+                    op = "<series>"
+                elif is_arraylike(op):
+                    op = "<array>"
 
                 elif repr(op) != repr(default):
                     if param:
@@ -417,7 +425,7 @@ class Expr:
     def __dask_keys__(self):
         return [(self._name, i) for i in range(self.npartitions)]
 
-    def substitute(self, substitutions: dict) -> Expr:
+    def substitute(self, substitutions: dict) -> "Expr":
         """Substitute specific `Expr` instances within `self`
 
         Parameters
@@ -776,6 +784,13 @@ class Projection(Elemwise):
             return pd.Index(self.operand("columns"))
         else:
             return self.operand("columns")
+
+    @property
+    def _meta(self):
+        if is_dataframe_like(self.frame._meta):
+            return super()._meta
+        # Avoid column selection for Series/Index
+        return self.frame._meta
 
     def _node_label_args(self):
         return [self.frame, self.operand("columns")]
