@@ -13,6 +13,7 @@ from dask.dataframe.io.parquet.core import (
 from dask.dataframe.io.parquet.utils import _split_user_options
 from dask.utils import natural_sort_key
 
+from dask_expr import backends
 from dask_expr.expr import EQ, GE, GT, LE, LT, NE, Expr, Filter, Projection
 from dask_expr.io import BlockwiseIO, PartitionsFiltered
 
@@ -79,18 +80,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         if backend == "pandas":
             backend = "pyarrow"
         elif backend == "cudf":
-            from dask_cudf.io.parquet import CudfEngine
-
-            class PatchedCudfEngine(CudfEngine):
-                @classmethod
-                def _create_dd_meta(cls, *args, **kwargs):
-                    import cudf
-
-                    meta = CudfEngine._create_dd_meta(*args, **kwargs)
-                    return cudf.from_pandas(meta)
-
-            return PatchedCudfEngine
-
+            return backends._cudf_parquet_engine()
         return get_engine(backend)
 
     @property
@@ -130,7 +120,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
                 if new_filter not in old_filters:
                     kwargs["filters"] = old_filters + (new_filter,)
                     if self._dataframe_backend == "cudf":
-                        # Need row-wise filtering in cudf
+                        # TODO: Need row-wise filtering in `cudf.read_parquet`
                         return type(parent)(ReadParquet(**kwargs), *parent.operands[1:])
                     return ReadParquet(**kwargs)
             if (
@@ -149,7 +139,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
                 if new_filter not in old_filters:
                     kwargs["filters"] = old_filters + (new_filter,)
                     if self._dataframe_backend == "cudf":
-                        # Need row-wise filtering in cudf
+                        # TODO: Need row-wise filtering in `cudf.read_parquet`
                         return type(parent)(ReadParquet(**kwargs), *parent.operands[1:])
                     return ReadParquet(**kwargs)
 
