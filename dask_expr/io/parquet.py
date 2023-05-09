@@ -78,6 +78,19 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         backend = self._dataframe_backend
         if backend == "pandas":
             backend = "pyarrow"
+        elif backend == "cudf":
+            from dask_cudf.io.parquet import CudfEngine
+
+            class PatchedCudfEngine(CudfEngine):
+                @classmethod
+                def _create_dd_meta(cls, *args, **kwargs):
+                    import cudf
+
+                    meta = CudfEngine._create_dd_meta(*args, **kwargs)
+                    return cudf.from_pandas(meta)
+
+            return PatchedCudfEngine
+
         return get_engine(backend)
 
     @property

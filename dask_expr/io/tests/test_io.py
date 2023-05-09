@@ -3,10 +3,13 @@ import os
 import dask.dataframe as dd
 import pandas as pd
 import pytest
+from dask import config
 from dask.dataframe.utils import assert_eq
 
 from dask_expr import from_pandas, optimize, read_csv, read_parquet
 from dask_expr.io import ReadParquet
+
+config.set({"dataframe.backend": "cudf"})
 
 
 def _make_file(dir, format="parquet", df=None):

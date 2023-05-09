@@ -15,8 +15,10 @@ from dask.dataframe.core import (
     _get_meta_map_partitions,
     apply_and_enforce,
     is_dataframe_like,
+    is_index_like,
+    is_series_like,
 )
-from dask.utils import M, apply, funcname, import_required
+from dask.utils import M, apply, funcname, import_required, is_arraylike
 
 replacement_rules = []
 
@@ -80,7 +82,15 @@ class Expr:
                     default = "--no-default--"
 
                 if isinstance(op, pd.core.base.PandasObject):
-                    op = "<pandas>"
+                    op = "<pandas-object>"
+                elif is_dataframe_like(op):
+                    op = "<dataframe-like>"
+                elif is_index_like(op):
+                    op = "<index-like>"
+                elif is_series_like(op):
+                    op = "<series-like>"
+                elif is_arraylike(op):
+                    op = "<array-like>"
 
                 elif repr(op) != repr(default):
                     if param:
@@ -774,6 +784,13 @@ class Projection(Elemwise):
             return pd.Index(self.operand("columns"))
         else:
             return self.operand("columns")
+
+    @property
+    def _meta(self):
+        if is_dataframe_like(self.frame._meta):
+            return super()._meta
+        # Avoid column selection for Series/Index
+        return self.frame._meta
 
     def _node_label_args(self):
         return [self.frame, self.operand("columns")]

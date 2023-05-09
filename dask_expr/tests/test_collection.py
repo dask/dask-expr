@@ -1,7 +1,11 @@
+from __future__ import annotations
+
+import functools
 import operator
 import pickle
 
 import dask
+import numpy as np
 import pandas as pd
 import pytest
 from dask.dataframe.utils import assert_eq
@@ -9,14 +13,29 @@ from dask.utils import M
 
 from dask_expr import expr, from_pandas, optimize
 from dask_expr.datasets import timeseries
-from dask_expr.tests.utils import cpu_gpu
+
+try:
+    import cudf
+
+except ImportError:
+    cudf = None
+
+
+@functools.cache
+def _pdf():
+    pdf = pd.DataFrame({"x": range(100)})
+    pdf["y"] = pdf.x * 10.0
+    return pdf
+
+
+@functools.cache
+def _gdf():
+    return None if cudf is None else cudf.from_pandas(_pdf())
 
 
 @pytest.fixture
 def pdf():
-    pdf = pd.DataFrame({"x": range(100)})
-    pdf["y"] = pdf.x * 10.0
-    yield pdf
+    yield _pdf()
 
 
 @pytest.fixture
@@ -24,6 +43,29 @@ def df(pdf):
     yield from_pandas(pdf, npartitions=10)
 
 
+def cpu_gpu(data: dict | None = None, npartitions: int = 10):
+    """DataFrame parameterization for cpu and gpu backed data"""
+    if data is None:
+        pdf, gdf = _pdf(), _gdf()
+    else:
+        pdf = pd.DataFrame(data)
+        gdf = None if cudf is None else cudf.from_pandas(pdf)
+
+    return pytest.mark.parametrize(
+        "pdf,df",
+        [
+            pytest.param(pdf, from_pandas(pdf, npartitions), id="pandas"),
+            pytest.param(
+                gdf,
+                from_pandas(gdf, npartitions) if cudf else None,
+                id="cudf",
+                marks=pytest.mark.skipif(cudf is None, reason="cudf not found"),
+            ),
+        ],
+    )
+
+
+@cpu_gpu()
 def test_del(pdf, df):
     pdf = pdf.copy()
 
@@ -33,6 +75,7 @@ def test_del(pdf, df):
     assert_eq(pdf, df)
 
 
+@cpu_gpu()
 def test_setitem(pdf, df):
     pdf = pdf.copy()
 
@@ -48,7 +91,7 @@ def test_meta_divisions_name():
     assert list(df.columns) == list(a.columns)
     assert df.npartitions == 2
 
-    assert df.x.sum()._meta == 0
+    assert np.isscalar(df.x.sum()._meta)
     assert df.x.sum().npartitions == 1
 
     assert "mul" in df._name
@@ -67,8 +110,7 @@ def test_meta_blockwise():
 
 
 @cpu_gpu()
-def test_dask(pdf):
-    df = from_pandas(pdf, 10)
+def test_dask(pdf, df):
     assert (df.x + df.y).npartitions == 10
     z = (df.x + df.y).sum()
 
@@ -90,16 +132,13 @@ def test_dask(pdf):
         ),
     ],
 )
-def test_reductions(func, pdf):
-    df = from_pandas(pdf, 10)
+def test_reductions(func, pdf, df):
     assert_eq(func(df), func(pdf))
     assert_eq(func(df.x), func(pdf.x))
 
 
-@cpu_gpu({"x": [1, 2, 3, 1, 2]})
-def test_mode(pdf):
-    df = from_pandas(pdf, npartitions=3)
-
+@cpu_gpu({"x": [1, 2, 3, 1, 2]}, 3)
+def test_mode(pdf, df):
     assert_eq(df.x.mode(), pdf.x.mode(), check_names=False)
 
 
@@ -118,8 +157,7 @@ def test_mode(pdf):
         lambda df: df.x != df.y,
     ],
 )
-def test_conditionals(func, pdf):
-    df = from_pandas(pdf, 10)
+def test_conditionals(func, pdf, df):
     assert_eq(func(pdf), func(df), check_names=False)
 
 
@@ -261,9 +299,7 @@ def test_copy(df):
 
 
 @cpu_gpu()
-def test_partitions(pdf):
-    df = from_pandas(pdf, 10)
-    import pdb; pdb.set_trace()
+def test_partitions(pdf, df):
     assert_eq(df.partitions[0], pdf.iloc[:10])
     assert_eq(df.partitions[1], pdf.iloc[10:20])
     assert_eq(df.partitions[1:3], pdf.iloc[10:30])
@@ -289,8 +325,7 @@ def test_column_getattr(df):
 
 
 @cpu_gpu()
-def test_serialization(pdf):
-    df = from_pandas(pdf, 10)
+def test_serialization(pdf, df):
     before = pickle.dumps(df)
 
     assert len(before) < 200 + len(pickle.dumps(pdf))
@@ -309,9 +344,7 @@ def test_serialization(pdf):
     assert_eq(pickle.loads(before), pickle.loads(after))
 
 
-@cpu_gpu()
-def test_size_optimized(pdf):
-    df = from_pandas(pdf, 10)
+def test_size_optimized(df):
     expr = (df.x + 1).apply(lambda x: x).size
     out = optimize(expr)
     expected = optimize(df.x.size)
