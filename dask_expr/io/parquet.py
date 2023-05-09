@@ -125,13 +125,14 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
                 op = parent.predicate._operator_repr
                 column = parent.predicate.left.columns[0]
                 value = parent.predicate.right
-                kwargs["filters"] = (kwargs["filters"] or tuple()) + (
-                    (column, op, value),
-                )
-                if self._dataframe_backend == "pandas":
-                    # Can only guarentee row-wise filtering for pandas
+                old_filters = kwargs["filters"] or tuple()
+                new_filter = (column, op, value)
+                if new_filter not in old_filters:
+                    kwargs["filters"] = old_filters + (new_filter,)
+                    if self._dataframe_backend == "cudf":
+                        # Need row-wise filtering in cudf
+                        return type(parent)(ReadParquet(**kwargs), *parent.operands[1:])
                     return ReadParquet(**kwargs)
-                return type(parent)(ReadParquet(**kwargs), *parent.operands[1:])
             if (
                 isinstance(parent.predicate.right, ReadParquet)
                 and parent.predicate.right.path == self.path
@@ -143,13 +144,14 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
                 op = flip.get(op, op)._operator_repr
                 column = parent.predicate.right.columns[0]
                 value = parent.predicate.left
-                kwargs["filters"] = (kwargs["filters"] or tuple()) + (
-                    (column, op, value),
-                )
-                if self._dataframe_backend == "pandas":
-                    # Can only guarentee row-wise filtering for pandas
+                old_filters = kwargs["filters"] or tuple()
+                new_filter = (column, op, value)
+                if new_filter not in old_filters:
+                    kwargs["filters"] = old_filters + (new_filter,)
+                    if self._dataframe_backend == "cudf":
+                        # Need row-wise filtering in cudf
+                        return type(parent)(ReadParquet(**kwargs), *parent.operands[1:])
                     return ReadParquet(**kwargs)
-                return type(parent)(ReadParquet(**kwargs), *parent.operands[1:])
 
     @cached_property
     def _dataset_info(self):
