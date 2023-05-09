@@ -82,15 +82,15 @@ class Expr:
                     default = "--no-default--"
 
                 if isinstance(op, pd.core.base.PandasObject):
-                    op = "<pandas-object>"
+                    op = "<pandas>"
                 elif is_dataframe_like(op):
-                    op = "<dataframe-like>"
+                    op = "<dataframe>"
                 elif is_index_like(op):
-                    op = "<index-like>"
+                    op = "<index>"
                 elif is_series_like(op):
-                    op = "<series-like>"
+                    op = "<series>"
                 elif is_arraylike(op):
-                    op = "<array-like>"
+                    op = "<array>"
 
                 elif repr(op) != repr(default):
                     if param:
