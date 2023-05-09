@@ -1,9 +1,10 @@
 from dask.base import normalize_token
 
-# cuDF backend/dispatch utilities
+# Backend-specific dispatching and utilities
+#
 # TODO: cuDF-specific dispatching functions and
-# utilities should eventually live outside of
-# dask-expr (probably).
+# utilities should probably live outside of
+# dask-expr in the long run.
 #
 # WARNING: Everything in this file should be considered
 # private and experimental!
@@ -23,7 +24,8 @@ def register_cudf():
 def _cudf_parquet_engine():
     # Temporary utility to return patched version
     # of `dask_cudf.io.parquet.CudfEngine` for
-    # dask-expr testing
+    # dask-expr testing. This should be removed once
+    # `_create_dd_meta` has been added to `CudfEngine`
     from dask_cudf.io.parquet import CudfEngine
 
     class PatchedCudfEngine(CudfEngine):
