@@ -83,9 +83,9 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
 
             return pd.Index(_list_columns(columns_operand))
 
-    def _extract_filter(self, predicate) -> tuple | None:
-        # Extract the tuple-formatted filter expression
-        # for predicate-based Expr object
+    def _extract_filter(self, predicate) -> list | None:
+        # Extract the List[List[Tuple]] filter expression
+        # from a predicate-based Expr object
         if isinstance(predicate, (LE, GE, LT, GT, EQ, NE)):
             if (
                 isinstance(predicate.left, ReadParquet)
@@ -95,7 +95,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
                 op = predicate._operator_repr
                 column = predicate.left.columns[0]
                 value = predicate.right
-                return (column, op, value)
+                return [[(column, op, value)]]
             elif (
                 isinstance(predicate.right, ReadParquet)
                 and predicate.right.path == self.path
@@ -107,7 +107,19 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
                 op = flip.get(op, op)._operator_repr
                 column = predicate.right.columns[0]
                 value = predicate.left
-                return (column, op, value)
+                return [[(column, op, value)]]
+        elif isinstance(predicate, (AND, OR)):
+            left = self._extract_filter(predicate.left)
+            right = self._extract_filter(predicate.right)
+            if left and right:
+                left = to_dnf(left)
+                right = to_dnf(right)
+                if isinstance(predicate, AND):
+                    filter = And([left, right])
+                else:
+                    filter = Or([left, right])
+                return to_dnf(filter).to_list_tuple()
+
         return None
 
     def _simplify_up(self, parent):
@@ -121,26 +133,13 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             return ReadParquet(*operands)
 
         if isinstance(parent, Filter) and isinstance(
-            parent.predicate, (LE, GE, LT, GT, EQ, NE)
+            parent.predicate, (LE, GE, LT, GT, EQ, NE, AND, OR)
         ):
             conjunction = self._extract_filter(parent.predicate)
             if conjunction:
                 kwargs = dict(zip(self._parameters, self.operands))
                 filters = _add_filter(kwargs["filters"], conjunction)
                 kwargs["filters"] = filters
-                return ReadParquet(**kwargs)
-
-        if isinstance(parent, Filter) and isinstance(parent.predicate, (AND, OR)):
-            kwargs = dict(zip(self._parameters, self.operands))
-            left = self._extract_filter(parent.predicate.left)
-            right = self._extract_filter(parent.predicate.right)
-            if left and right:
-                kwargs = dict(zip(self._parameters, self.operands))
-                if isinstance(parent.predicate, AND):
-                    new_filter = [[left, right]]
-                else:
-                    new_filter = [[left], [right]]
-                kwargs["filters"] = _add_filter(kwargs["filters"], new_filter)
                 return ReadParquet(**kwargs)
 
     @cached_property

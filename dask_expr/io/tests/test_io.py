@@ -144,6 +144,15 @@ def test_predicate_pushdown_compound(tmpdir):
         check_index=False,
     )
 
+    # Test OR and AND
+    x = df[((df.a == 5) | (df.c > 20)) & (df.b != 0)]["b"]
+    z = optimize(x, fuse=False)
+    assert isinstance(z.expr, ReadParquet)
+    filters = [set(z.filters[0]), set(z.filters[1])]
+    assert {("c", ">", 20), ("b", "!=", 0)} in filters
+    assert {("a", "==", 5), ("b", "!=", 0)} in filters
+    assert_eq(y, z)
+
 
 @pytest.mark.parametrize("fmt", ["parquet", "csv", "pandas"])
 def test_io_culling(tmpdir, fmt):
