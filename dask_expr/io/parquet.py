@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import operator
 from functools import cached_property
 
@@ -12,7 +13,7 @@ from dask.dataframe.io.parquet.core import (
 from dask.dataframe.io.parquet.utils import _split_user_options
 from dask.utils import natural_sort_key
 
-from dask_expr.expr import EQ, GE, GT, LE, LT, NE, Expr, Filter, Projection
+from dask_expr.expr import AND, EQ, GE, GT, LE, LT, NE, OR, Expr, Filter, Projection
 from dask_expr.io import BlockwiseIO, PartitionsFiltered
 
 NONE_LABEL = "__null_dask_index__"
@@ -25,36 +26,6 @@ def _list_columns(columns):
     elif isinstance(columns, tuple):
         columns = list(columns)
     return columns
-
-
-def _normalize_filters(filters):
-    # Normalize filters to satisfy disjunctive-normal
-    # form (DNF): List[List[Tuple(str, str, Any)]],
-    # where the inner list of predicates is combined
-    # with an AND operator and the outer list of those
-    # conjunctions is combined with an OR operator
-    if not filters:
-        return None
-    if not isinstance(filters, list):
-        raise TypeError("filters must be `List[Tuple]` or `List[List[Tuple]]`")
-    disjunction = []
-    stack = filters.copy()
-    while stack:
-        conjunction, *stack = stack if isinstance(stack[0], list) else [stack]
-        disjunction.append(conjunction)
-    return disjunction
-
-
-def _add_conjunction(filters, predicate):
-    # Add a conjunction to a DNF `filters` expression.
-    # We assume that the conjunction must be true
-    # for every pre-existing disjunction
-    disjunctions = _normalize_filters(filters)
-    if disjunctions is None:
-        return [[predicate]]
-    for conjunction in disjunctions:
-        conjunction.append(predicate)
-    return disjunctions
 
 
 class ReadParquet(PartitionsFiltered, BlockwiseIO):
@@ -112,6 +83,33 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
 
             return pd.Index(_list_columns(columns_operand))
 
+    def _extract_filter(self, predicate) -> tuple | None:
+        # Extract the tuple-formatted filter expression
+        # for predicate-based Expr object
+        if isinstance(predicate, (LE, GE, LT, GT, EQ, NE)):
+            if (
+                isinstance(predicate.left, ReadParquet)
+                and predicate.left.path == self.path
+                and not isinstance(predicate.right, Expr)
+            ):
+                op = predicate._operator_repr
+                column = predicate.left.columns[0]
+                value = predicate.right
+                return (column, op, value)
+            elif (
+                isinstance(predicate.right, ReadParquet)
+                and predicate.right.path == self.path
+                and not isinstance(predicate.left, Expr)
+            ):
+                # Simple dict to make sure field comes first in filter
+                flip = {LE: GE, LT: GT, GE: LE, GT: LT}
+                op = predicate
+                op = flip.get(op, op)._operator_repr
+                column = predicate.right.columns[0]
+                value = predicate.left
+                return (column, op, value)
+        return None
+
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
             operands = list(self.operands)
@@ -125,33 +123,24 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         if isinstance(parent, Filter) and isinstance(
             parent.predicate, (LE, GE, LT, GT, EQ, NE)
         ):
-            kwargs = dict(zip(self._parameters, self.operands))
-            if (
-                isinstance(parent.predicate.left, ReadParquet)
-                and parent.predicate.left.path == self.path
-                and not isinstance(parent.predicate.right, Expr)
-            ):
-                op = parent.predicate._operator_repr
-                column = parent.predicate.left.columns[0]
-                value = parent.predicate.right
-                kwargs["filters"] = _add_conjunction(
-                    kwargs["filters"], (column, op, value)
-                )
+            conjunction = self._extract_filter(parent.predicate)
+            if conjunction:
+                kwargs = dict(zip(self._parameters, self.operands))
+                filters = _add_filter(kwargs["filters"], conjunction)
+                kwargs["filters"] = filters
                 return ReadParquet(**kwargs)
-            if (
-                isinstance(parent.predicate.right, ReadParquet)
-                and parent.predicate.right.path == self.path
-                and not isinstance(parent.predicate.left, Expr)
-            ):
-                # Simple dict to make sure field comes first in filter
-                flip = {LE: GE, LT: GT, GE: LE, GT: LT}
-                op = parent.predicate
-                op = flip.get(op, op)._operator_repr
-                column = parent.predicate.right.columns[0]
-                value = parent.predicate.left
-                kwargs["filters"] = _add_conjunction(
-                    kwargs["filters"], (column, op, value)
-                )
+
+        if isinstance(parent, Filter) and isinstance(parent.predicate, (AND, OR)):
+            kwargs = dict(zip(self._parameters, self.operands))
+            left = self._extract_filter(parent.predicate.left)
+            right = self._extract_filter(parent.predicate.right)
+            if left and right:
+                kwargs = dict(zip(self._parameters, self.operands))
+                if isinstance(parent.predicate, AND):
+                    new_filter = [[left, right]]
+                else:
+                    new_filter = [[left], [right]]
+                kwargs["filters"] = _add_filter(kwargs["filters"], new_filter)
                 return ReadParquet(**kwargs)
 
     @cached_property
@@ -295,3 +284,82 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         if self._series:
             return (operator.getitem, tsk, self.columns[0])
         return tsk
+
+
+#
+# Filtering/Predicate utilities
+#
+
+
+class Or(frozenset):
+    """Helper class for filter disjunctions"""
+
+    def to_list_tuple(self):
+        # NDF "or" is List[List[Tuple]]
+        def _maybe_list(val):
+            if isinstance(val, tuple) and val and isinstance(val[0], (tuple, list)):
+                return list(val)
+            return [val]
+
+        return [
+            _maybe_list(val.to_list_tuple())
+            if hasattr(val, "to_list_tuple")
+            else _maybe_list(val)
+            for val in self
+        ]
+
+
+class And(frozenset):
+    """Helper class for filter conjunctions"""
+
+    def to_list_tuple(self):
+        # NDF "and" is List[Tuple]
+        return tuple(
+            val.to_list_tuple() if hasattr(val, "to_list_tuple") else val
+            for val in self
+        )
+
+
+def to_dnf(filter: Or | And | list | tuple | None) -> Or | None:
+    """Normalize a filter expression to disjunctive normal form (DNF)
+
+    This function will always convert the provided expression
+    into `Or((And(...), ...))`. Call `to_list_tuple` on the
+    result to translate the filters into `List[List[Tuple]]`.
+    """
+
+    # Credit: https://stackoverflow.com/a/58372345
+    if not filter:
+        result = None
+    elif isinstance(filter, Or):
+        result = Or(se for e in filter for se in to_dnf(e))
+    elif isinstance(filter, And):
+        total = []
+        for c in itertools.product(*[to_dnf(e) for e in filter]):
+            total.append(And(se for e in c for se in e))
+        result = Or(total)
+    elif isinstance(filter, list):
+        disjunction = []
+        stack = filter.copy()
+        while stack:
+            conjunction, *stack = stack if isinstance(stack[0], list) else [stack]
+            disjunction.append(And(conjunction))
+        result = Or(disjunction)
+    elif isinstance(filter, tuple):
+        if isinstance(filter[0], tuple):
+            raise TypeError("filters must be List[Tuple] or List[List[Tuple]]")
+        result = Or((And((filter,)),))
+    else:
+        raise TypeError(f"{type(filter)} not a supported type for to_dnf")
+    return result
+
+
+def _add_filter(old_filters: list, new_filter: list | tuple) -> list:
+    # Add a new filter to an existing filters expression.
+    disjunctions = to_dnf(old_filters)
+    new = to_dnf(new_filter)
+    if disjunctions is None:
+        result = new
+    else:
+        result = And([disjunctions, new])
+    return to_dnf(result).to_list_tuple()

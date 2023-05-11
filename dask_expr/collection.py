@@ -332,6 +332,8 @@ for op in [
     "__rge__",
     "__eq__",
     "__ne__",
+    "__and__",
+    "__or__",
 ]:
     setattr(FrameBase, op, functools.partialmethod(_wrap_expr_op, op=op))
 
@@ -556,7 +558,7 @@ def read_parquet(
     filesystem="fsspec",
     **kwargs,
 ):
-    from dask_expr.io.parquet import ReadParquet, _list_columns, _normalize_filters
+    from dask_expr.io.parquet import ReadParquet, _list_columns  # , _normalize_filters
 
     if hasattr(path, "name"):
         path = stringify_path(path)
@@ -567,7 +569,8 @@ def read_parquet(
         ReadParquet(
             path,
             columns=_list_columns(columns),
-            filters=_normalize_filters(filters),
+            # filters=_normalize_filters(filters),
+            filters=filters,
             categories=categories,
             index=index,
             storage_options=storage_options,
