@@ -96,12 +96,8 @@ def test_predicate_pushdown(tmpdir):
     x = df[df.a == 5][df.c > 20]["b"]
     y = optimize(x, fuse=False)
     assert isinstance(y.expr, ReadParquet)
-    assert ("a", "==", 5) in y.expr.operand("filters") or (
-        "a",
-        "==",
-        5,
-    ) in y.expr.operand("filters")
-    assert ("c", ">", 20) in y.expr.operand("filters")
+    assert ("a", "==", 5) in y.expr.operand("filters")[0]
+    assert ("c", ">", 20) in y.expr.operand("filters")[0]
     assert list(y.columns) == ["b"]
 
     # Check computed result

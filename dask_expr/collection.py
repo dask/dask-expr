@@ -556,7 +556,7 @@ def read_parquet(
     filesystem="fsspec",
     **kwargs,
 ):
-    from dask_expr.io.parquet import ReadParquet, _list_columns
+    from dask_expr.io.parquet import ReadParquet, _list_columns, _normalize_filters
 
     if hasattr(path, "name"):
         path = stringify_path(path)
@@ -567,7 +567,7 @@ def read_parquet(
         ReadParquet(
             path,
             columns=_list_columns(columns),
-            filters=filters,
+            filters=_normalize_filters(filters),
             categories=categories,
             index=index,
             storage_options=storage_options,

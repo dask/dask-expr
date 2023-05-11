@@ -27,6 +27,36 @@ def _list_columns(columns):
     return columns
 
 
+def _normalize_filters(filters):
+    # Normalize filters to satisfy disjunctive-normal
+    # form (DNF): List[List[Tuple(str, str, Any)]],
+    # where the inner list of predicates is combined
+    # with an AND operator and the outer list of those
+    # conjunctions is combined with an OR operator
+    if not filters:
+        return None
+    if not isinstance(filters, list):
+        raise TypeError("filters must be `List[Tuple]` or `List[List[Tuple]]`")
+    disjunction = []
+    stack = filters.copy()
+    while stack:
+        conjunction, *stack = stack if isinstance(stack[0], list) else [stack]
+        disjunction.append(conjunction)
+    return disjunction
+
+
+def _add_conjunction(filters, predicate):
+    # Add a conjunction to a DNF `filters` expression.
+    # We assume that the conjunction must be true
+    # for every pre-existing disjunction
+    disjunctions = _normalize_filters(filters)
+    if disjunctions is None:
+        return [[predicate]]
+    for conjunction in disjunctions:
+        conjunction.append(predicate)
+    return disjunctions
+
+
 class ReadParquet(PartitionsFiltered, BlockwiseIO):
     """Read a parquet dataset"""
 
@@ -104,8 +134,8 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
                 op = parent.predicate._operator_repr
                 column = parent.predicate.left.columns[0]
                 value = parent.predicate.right
-                kwargs["filters"] = (kwargs["filters"] or tuple()) + (
-                    (column, op, value),
+                kwargs["filters"] = _add_conjunction(
+                    kwargs["filters"], (column, op, value)
                 )
                 return ReadParquet(**kwargs)
             if (
@@ -119,8 +149,8 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
                 op = flip.get(op, op)._operator_repr
                 column = parent.predicate.right.columns[0]
                 value = parent.predicate.left
-                kwargs["filters"] = (kwargs["filters"] or tuple()) + (
-                    (column, op, value),
+                kwargs["filters"] = _add_conjunction(
+                    kwargs["filters"], (column, op, value)
                 )
                 return ReadParquet(**kwargs)
 
