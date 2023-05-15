@@ -13,7 +13,7 @@ from dask.dataframe.io.parquet.core import (
 from dask.dataframe.io.parquet.utils import _split_user_options
 from dask.utils import natural_sort_key
 
-from dask_expr.expr import AND, EQ, GE, GT, LE, LT, NE, OR, Expr, Filter, Projection
+from dask_expr.expr import EQ, GE, GT, LE, LT, NE, And, Expr, Filter, Or, Projection
 from dask_expr.io import BlockwiseIO, PartitionsFiltered
 
 NONE_LABEL = "__null_dask_index__"
@@ -95,7 +95,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             return ReadParquet(*operands)
 
         if isinstance(parent, Filter) and isinstance(
-            parent.predicate, (LE, GE, LT, GT, EQ, NE, AND, OR)
+            parent.predicate, (LE, GE, LT, GT, EQ, NE, And, Or)
         ):
             # Predicate pushdown
             filters = _DNF.extract_pq_filters(self, parent.predicate)
@@ -359,11 +359,11 @@ class _DNF:
                 value = predicate_expr.left
                 _filters = (column, op, value)
 
-        elif isinstance(predicate_expr, (AND, OR)):
+        elif isinstance(predicate_expr, (And, Or)):
             left = cls.extract_pq_filters(pq_expr, predicate_expr.left)._filters
             right = cls.extract_pq_filters(pq_expr, predicate_expr.right)._filters
             if left and right:
-                if isinstance(predicate_expr, AND):
+                if isinstance(predicate_expr, And):
                     _filters = cls._And([left, right])
                 else:
                     _filters = cls._Or([left, right])

@@ -346,10 +346,10 @@ class Expr:
         return NE(other, self)
 
     def __and__(self, other):
-        return AND(other, self)
+        return And(other, self)
 
     def __or__(self, other):
-        return OR(other, self)
+        return Or(other, self)
 
     def sum(self, skipna=True, numeric_only=None, min_count=0):
         return Sum(self, skipna, numeric_only, min_count)
@@ -985,12 +985,12 @@ class NE(Binop):
     _operator_repr = "!="
 
 
-class AND(Binop):
+class And(Binop):
     operation = operator.and_
     _operator_repr = "&"
 
 
-class OR(Binop):
+class Or(Binop):
     operation = operator.or_
     _operator_repr = "|"
 
