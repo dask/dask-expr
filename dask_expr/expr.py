@@ -57,6 +57,11 @@ class Expr:
         except AttributeError:
             return 0
 
+    @functools.cached_property
+    def _len(self):
+        # TODO: Use single column
+        return Len(self)
+
     def __str__(self):
         s = ", ".join(
             str(param) + "=" + str(operand)
@@ -724,7 +729,10 @@ class Elemwise(Blockwise):
     optimizations, like `len` will care about which operations preserve length
     """
 
-    pass
+    @property
+    def _len(self):
+        # Length must be equal to parent
+        return self.frame._len
 
 
 class AsType(Elemwise):
@@ -1318,4 +1326,4 @@ class Fused(Blockwise):
 
 
 from dask_expr.io import BlockwiseIO
-from dask_expr.reductions import Count, Max, Mean, Min, Mode, Size, Sum
+from dask_expr.reductions import Count, Len, Max, Mean, Min, Mode, Size, Sum

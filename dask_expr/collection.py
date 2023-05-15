@@ -73,6 +73,12 @@ class FrameBase(DaskMethodsMixin):
     def size(self):
         return new_collection(self.expr.size)
 
+    def __len__(self):
+        _len = self.expr._len
+        if isinstance(_len, expr.Expr):
+            _len = new_collection(_len).compute()
+        return _len
+
     def __reduce__(self):
         return new_collection, (self._expr,)
 
@@ -546,7 +552,7 @@ def read_parquet(
     index=None,
     storage_options=None,
     dtype_backend=None,
-    calculate_divisions=False,
+    gather_statistics=True,
     ignore_metadata_file=False,
     metadata_task_size=None,
     split_row_groups="infer",
@@ -571,7 +577,7 @@ def read_parquet(
             categories=categories,
             index=index,
             storage_options=storage_options,
-            calculate_divisions=calculate_divisions,
+            gather_statistics=gather_statistics,
             ignore_metadata_file=ignore_metadata_file,
             metadata_task_size=metadata_task_size,
             split_row_groups=split_row_groups,

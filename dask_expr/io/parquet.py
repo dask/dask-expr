@@ -3,11 +3,13 @@ from __future__ import annotations
 import operator
 from functools import cached_property
 
+import pandas as pd
 from dask.dataframe.io.parquet.core import (
     ParquetFunctionWrapper,
+    aggregate_row_groups,
     get_engine,
-    process_statistics,
     set_index_columns,
+    sorted_columns,
 )
 from dask.dataframe.io.parquet.utils import _split_user_options
 from dask.utils import natural_sort_key
@@ -27,6 +29,60 @@ def _list_columns(columns):
     return columns
 
 
+def _align_statistics(parts, statistics):
+    # Make sure parts and statistics are aligned
+    # (if statistics is not empty)
+    if statistics and len(parts) != len(statistics):
+        statistics = []
+    if statistics:
+        result = list(
+            zip(
+                *[
+                    (part, stats)
+                    for part, stats in zip(parts, statistics)
+                    if stats["num-rows"] > 0
+                ]
+            )
+        )
+        parts, statistics = result or [[], []]
+    return parts, statistics
+
+
+def _aggregate_row_groups(parts, statistics, dataset_info):
+    # Aggregate parts/statistics if we are splitting by row-group
+    blocksize = (
+        dataset_info["blocksize"] if dataset_info["split_row_groups"] is True else None
+    )
+    split_row_groups = dataset_info["split_row_groups"]
+    fs = dataset_info["fs"]
+    aggregation_depth = dataset_info["aggregation_depth"]
+
+    if statistics:
+        if blocksize or (split_row_groups and int(split_row_groups) > 1):
+            parts, statistics = aggregate_row_groups(
+                parts, statistics, blocksize, split_row_groups, fs, aggregation_depth
+            )
+    return parts, statistics
+
+
+def _calculate_divisions(statistics, dataset_info, npartitions):
+    # Use statistics to define divisions
+    divisions = None
+    if statistics:
+        calculate_divisions = dataset_info["kwargs"].get("calculate_divisions", None)
+        index = dataset_info["index"]
+        process_columns = index if index and len(index) == 1 else None
+        if (calculate_divisions is not False) and process_columns:
+            for sorted_column_info in sorted_columns(
+                statistics, columns=process_columns
+            ):
+                if sorted_column_info["name"] in index:
+                    divisions = sorted_column_info["divisions"]
+                    break
+
+    return divisions or (None,) * (npartitions + 1)
+
+
 class ReadParquet(PartitionsFiltered, BlockwiseIO):
     """Read a parquet dataset"""
 
@@ -37,7 +93,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         "categories",
         "index",
         "storage_options",
-        "calculate_divisions",
+        "gather_statistics",
         "ignore_metadata_file",
         "metadata_task_size",
         "split_row_groups",
@@ -55,7 +111,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         "categories": None,
         "index": None,
         "storage_options": None,
-        "calculate_divisions": False,
+        "gather_statistics": True,
         "ignore_metadata_file": False,
         "metadata_task_size": None,
         "split_row_groups": "infer",
@@ -172,7 +228,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             fs,
             self.categories,
             index,
-            self.calculate_divisions,
+            self.gather_statistics,
             self.filters,
             self.split_row_groups,
             blocksize,
@@ -189,6 +245,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
 
         # Infer meta, accounting for index and columns arguments.
         meta = self.engine._create_dd_meta(dataset_info)
+        index = dataset_info["index"]
         index = [index] if isinstance(index, str) else index
         meta, index, columns = set_index_columns(
             meta, index, self.operand("columns"), auto_index_allowed
@@ -216,21 +273,14 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             dataset_info
         )
 
-        # Parse dataset statistics from metadata (if available)
-        parts, divisions, _ = process_statistics(
-            parts,
-            stats,
-            dataset_info["filters"],
-            dataset_info["index"],
-            (
-                dataset_info["blocksize"]
-                if dataset_info["split_row_groups"] is True
-                else None
-            ),
-            dataset_info["split_row_groups"],
-            dataset_info["fs"],
-            dataset_info["aggregation_depth"],
-        )
+        # Make sure parts and stats are aligned
+        parts, stats = _align_statistics(parts, stats)
+
+        # Use statistics to aggregate partitions
+        parts, stats = _aggregate_row_groups(parts, stats, dataset_info)
+
+        # Use statistics to calculate divisions
+        divisions = _calculate_divisions(stats, dataset_info, len(parts))
 
         meta = dataset_info["meta"]
         if len(divisions) < 2:
@@ -254,6 +304,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         return {
             "func": io_func,
             "parts": parts,
+            "statistics": stats,
             "divisions": divisions,
         }
 
@@ -265,3 +316,13 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         if self._series:
             return (operator.getitem, tsk, self.columns[0])
         return tsk
+
+    @property
+    def _statistics(self):
+        return self._plan["statistics"]
+
+    @property
+    def _len(self):
+        if self._statistics and not self.filters:
+            return pd.DataFrame(self._statistics)["num-rows"].sum()
+        return super()._len
