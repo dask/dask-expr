@@ -1321,4 +1321,4 @@ class Fused(Blockwise):
 
 
 from dask_expr.io import BlockwiseIO
-from dask_expr.reductions import Count, Max, Mean, Min, Mode, Size, Sum, Prod
+from dask_expr.reductions import Count, Max, Mean, Min, Mode, Prod, Size, Sum
