@@ -350,8 +350,17 @@ class Expr:
     def __ne__(self, other):
         return NE(other, self)
 
+    def __and__(self, other):
+        return And(other, self)
+
+    def __or__(self, other):
+        return Or(other, self)
+
     def sum(self, skipna=True, numeric_only=None, min_count=0):
         return Sum(self, skipna, numeric_only, min_count)
+
+    def prod(self, skipna=True, numeric_only=None, min_count=0):
+        return Prod(self, skipna, numeric_only, min_count)
 
     def mean(self, skipna=True, numeric_only=None, min_count=0):
         return Mean(self, skipna=skipna, numeric_only=numeric_only)
@@ -987,6 +996,16 @@ class NE(Binop):
     _operator_repr = "!="
 
 
+class And(Binop):
+    operation = operator.and_
+    _operator_repr = "&"
+
+
+class Or(Binop):
+    operation = operator.or_
+    _operator_repr = "|"
+
+
 class Partitions(Expr):
     """Select one or more partitions"""
 
@@ -1326,4 +1345,4 @@ class Fused(Blockwise):
 
 
 from dask_expr.io import BlockwiseIO
-from dask_expr.reductions import Count, Len, Max, Mean, Min, Mode, Size, Sum
+from dask_expr.reductions import Count, Len, Max, Mean, Min, Mode, Prod, Size, Sum
