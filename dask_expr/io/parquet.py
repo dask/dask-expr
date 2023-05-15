@@ -299,12 +299,15 @@ class _DNF:
         if not filters:
             result = None
         elif isinstance(filters, list):
-            disjunction = []
-            stack = filters.copy()
-            while stack:
-                conjunction, *stack = stack if isinstance(stack[0], list) else [stack]
-                disjunction.append(cls._And(conjunction))
-            result = cls._Or(disjunction)
+            conjunctions = filters if isinstance(filters[0], list) else [filters]
+            result = cls._Or([cls._And(conjunction) for conjunction in conjunctions])
+
+            # disjunction = []
+            # stack = filters.copy()
+            # while stack:
+            #     conjunction, *stack = stack if isinstance(stack[0], list) else [stack]
+            #     disjunction.append(cls._And(conjunction))
+            # result = cls._Or(disjunction)
         elif isinstance(filters, tuple):
             if isinstance(filters[0], tuple):
                 raise TypeError("filters must be List[Tuple] or List[List[Tuple]]")
