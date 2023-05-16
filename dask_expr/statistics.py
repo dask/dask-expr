@@ -10,7 +10,7 @@ from dask_expr.expr import Elemwise, Expr, Partitions
 
 @dataclass(frozen=True)
 class Statistics:
-    """Abstract expression-statistics class
+    """Abstract class for expression statistics
 
     See Also
     --------
@@ -23,8 +23,9 @@ class Statistics:
     def assume(self, parent: Expr) -> Statistics | None:
         """Statistics that a "parent" Expr may assume
 
-        A return value of `None` means that `type(Expr)` is
-        not eligable to assume these kind of statistics.
+        A return value of `None` (the default) means that
+        `type(Expr)` is not eligable to assume these kind
+        of statistics.
         """
         return None
 
