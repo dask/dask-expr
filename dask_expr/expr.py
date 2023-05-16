@@ -223,7 +223,7 @@ class Expr:
             for k, v in dep.statistics().items():
                 assert isinstance(v, Statistics)
                 if k not in statistics:
-                    val = v.inherit(self)
+                    val = v.assume(self)
                     if val:
                         statistics[k] = val
         return statistics
