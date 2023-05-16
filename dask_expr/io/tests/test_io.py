@@ -204,3 +204,14 @@ def test_parquet_complex_filters(tmpdir):
 
     assert_eq(got, expect)
     assert_eq(got.optimize(), expect)
+
+
+def test_parquet_row_count_statistics(tmpdir):
+    # NOTE: We should no longer need to set `index`
+    # or `calculate_divisions` to gather row-count
+    # statistics after dask#10290
+    df = read_parquet(_make_file(tmpdir), index="a", calculate_divisions=True)
+    pdf = df.compute()
+
+    s = (df["b"] + 1).astype("Int32")
+    assert s.statistics().get("row_count").sum() == len(pdf)
