@@ -24,8 +24,8 @@ class Statistics:
         """Statistics that a "parent" Expr may assume
 
         A return value of `None` (the default) means that
-        `type(Expr)` is not eligable to assume these kind
-        of statistics.
+        `parent` is not eligable to assume this kind of
+        statistics.
         """
         return None
 

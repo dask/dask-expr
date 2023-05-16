@@ -217,7 +217,7 @@ class Expr:
         """New statistics to add for this expression"""
         from dask_expr.statistics import Statistics
 
-        # Inherit statistics from dependencies
+        # Assume statistics from dependencies
         statistics = {}
         for dep in self.dependencies():
             for k, v in dep.statistics().items():
