@@ -20,11 +20,11 @@ class Statistics:
     data: Any
 
     @singledispatchmethod
-    def inherit(self, child: Expr) -> Statistics | None:
-        """New `Statistics` object that a "child" Expr mayinherit
+    def assume(self, parent: Expr) -> Statistics | None:
+        """Statistics that a "parent" Expr may assume
 
         A return value of `None` means that `type(Expr)` is
-        not eligable to inherit this kind of statistics.
+        not eligable to assume these kind of statistics.
         """
         return None
 
@@ -41,13 +41,13 @@ class PartitionStatistics(Statistics):
     data: Iterable
 
 
-@PartitionStatistics.inherit.register
-def _partitionstatistics_partitions(self, child: Partitions):
-    # A `Partitions` expression may inherit statistics
+@PartitionStatistics.assume.register
+def _partitionstatistics_partitions(self, parent: Partitions):
+    # A `Partitions` expression may assume statistics
     # from the selected partitions
     return type(self)(
         type(self.data)(
-            part for i, part in enumerate(self.data) if i in child.partitions
+            part for i, part in enumerate(self.data) if i in parent.partitions
         )
     )
 
@@ -66,8 +66,8 @@ class RowCountStatistics(PartitionStatistics):
         return sum(self.data)
 
 
-@RowCountStatistics.inherit.register
-def _rowcount_elemwise(self, child: Elemwise):
-    # All Element-wise operations may inherit
-    # row-count statistics "as is"
+@RowCountStatistics.assume.register
+def _rowcount_elemwise(self, parent: Elemwise):
+    # All Element-wise operations may assume
+    # row-count statistics
     return self
