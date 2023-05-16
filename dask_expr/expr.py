@@ -59,10 +59,9 @@ class Expr:
 
     @functools.cached_property
     def _len(self):
-        stats = self.statistics()
-        if "row_count" in stats:
-            return sum(stats["row_count"])
-        # TODO: Use single column
+        metadata = self.metadata()
+        if "row_count" in metadata:
+            return metadata["row_count"].sum()
         return Len(self)
 
     def __str__(self):
@@ -214,26 +213,38 @@ class Expr:
 
         return {(self._name, i): self._task(i) for i in range(self.npartitions)}
 
-    def _statistics(self):
-        return {}
+    def _metadata(self):
+        """New metadata to add for this expression"""
+        from dask_expr.metadata import Metadata
 
-    def statistics(self) -> dict:
-        """Known quantities of an expression, like length or min/max
+        # Inherit metadata from dependencies
+        metadata = {}
+        for dep in self.dependencies():
+            for k, v in dep.metadata().items():
+                assert isinstance(v, Metadata)
+                if k not in metadata:
+                    val = v.inherit(self)
+                    if val:
+                        metadata[k] = val
+        return metadata
 
-        To define this on a class create a `._statistics` method that returns a
-        dictionary of new statistics known by that class.  If nothing is known it
+    def metadata(self) -> dict:
+        """Known metadata of an expression, like partition statistics
+
+        To define this on a class create a `._metadata` method that returns a
+        dictionary of new metadata known by that class.  If nothing is known it
         is ok to return None.  Superclasses will also be consulted.
 
         Examples
         --------
-        >>> df.statistics()
-        {"length": 1000000}
+        >>> df.metadata()
+        {'row_count': RowCountMetadata(data=(1000000,))}
         """
         out = {}
         for typ in type(self).mro()[::-1]:
             if not issubclass(typ, Expr):
                 continue
-            d = typ._statistics(self)  # TODO: maybe this should be cached
+            d = typ._metadata(self) or {}
             if d:
                 out.update(d)  # TODO: this is fragile
         return out
@@ -765,10 +776,7 @@ class Elemwise(Blockwise):
     optimizations, like `len` will care about which operations preserve length
     """
 
-    def _statistics(self):
-        for dep in self.dependencies():
-            if "row_count" in dep.statistics():
-                return {"row_count": dep.statistics()["row_count"]}
+    pass
 
 
 class AsType(Elemwise):
@@ -1078,11 +1086,6 @@ class Partitions(Expr):
 
     def _node_label_args(self):
         return [self.frame, self.partitions]
-
-    def _statistics(self):
-        if "row_count" in self.frame.statistics():
-            row_counts = self.frame.statistics()["row_count"]
-            return {"row_count": tuple(row_counts[p] for p in self.partitions)}
 
 
 class PartitionsFiltered(Expr):

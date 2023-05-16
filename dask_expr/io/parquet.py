@@ -16,6 +16,7 @@ from dask.utils import natural_sort_key
 
 from dask_expr.expr import EQ, GE, GT, LE, LT, NE, And, Expr, Filter, Or, Projection
 from dask_expr.io import BlockwiseIO, PartitionsFiltered
+from dask_expr.metadata import RowCountMetadata
 
 NONE_LABEL = "__null_dask_index__"
 
@@ -296,10 +297,10 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             return (operator.getitem, tsk, self.columns[0])
         return tsk
 
-    def _statistics(self):
+    def _metadata(self):
         if self._pq_statistics and not self.filters:
             row_count = tuple(stat["num-rows"] for stat in self._pq_statistics)
-            return {"row_count": row_count}
+            return {"row_count": RowCountMetadata(row_count)}
 
     @property
     def _pq_statistics(self):
