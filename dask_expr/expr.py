@@ -59,6 +59,9 @@ class Expr:
 
     @functools.cached_property
     def _len(self):
+        stats = self.statistics()
+        if "row_count" in stats:
+            return sum(stats["row_count"])
         # TODO: Use single column
         return Len(self)
 
@@ -210,6 +213,30 @@ class Expr:
         """
 
         return {(self._name, i): self._task(i) for i in range(self.npartitions)}
+
+    def _statistics(self):
+        return {}
+
+    def statistics(self) -> dict:
+        """Known quantities of an expression, like length or min/max
+
+        To define this on a class create a `._statistics` method that returns a
+        dictionary of new statistics known by that class.  If nothing is known it
+        is ok to return None.  Superclasses will also be consulted.
+
+        Examples
+        --------
+        >>> df.statistics()
+        {"length": 1000000}
+        """
+        out = {}
+        for typ in type(self).mro()[::-1]:
+            if not issubclass(typ, Expr):
+                continue
+            d = typ._statistics(self)  # TODO: maybe this should be cached
+            if d:
+                out.update(d)  # TODO: this is fragile
+        return out
 
     def simplify(self):
         """Simplify expression
@@ -738,10 +765,10 @@ class Elemwise(Blockwise):
     optimizations, like `len` will care about which operations preserve length
     """
 
-    @property
-    def _len(self):
-        # Length must be equal to parent
-        return self.frame._len
+    def _statistics(self):
+        for dep in self.dependencies():
+            if "row_count" in dep.statistics():
+                return {"row_count": dep.statistics()["row_count"]}
 
 
 class AsType(Elemwise):
@@ -1051,6 +1078,11 @@ class Partitions(Expr):
 
     def _node_label_args(self):
         return [self.frame, self.partitions]
+
+    def _statistics(self):
+        if "row_count" in self.frame.statistics():
+            row_counts = self.frame.statistics()["row_count"]
+            return {"row_count": tuple(row_counts[p] for p in self.partitions)}
 
 
 class PartitionsFiltered(Expr):

@@ -4,7 +4,6 @@ import itertools
 import operator
 from functools import cached_property
 
-import pandas as pd
 from dask.dataframe.io.parquet.core import (
     ParquetFunctionWrapper,
     aggregate_row_groups,
@@ -297,15 +296,14 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             return (operator.getitem, tsk, self.columns[0])
         return tsk
 
-    @property
     def _statistics(self):
-        return self._plan["statistics"]
+        if self._pq_statistics and not self.filters:
+            row_count = tuple(stat["num-rows"] for stat in self._pq_statistics)
+            return {"row_count": row_count}
 
     @property
-    def _len(self):
-        if self._statistics and not self.filters:
-            return pd.DataFrame(self._statistics)["num-rows"].sum()
-        return super()._len
+    def _pq_statistics(self):
+        return self._plan["statistics"]
 
 
 #

@@ -68,6 +68,13 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
             divisions = (None,) * len(locations)
         return divisions, locations
 
+    def _statistics(self):
+        locations = self._locations()
+        row_counts = tuple(
+            offset - locations[i] for i, offset in enumerate(locations[1:])
+        )
+        return {"row_count": row_counts}
+
     def _divisions(self):
         return self._divisions_and_locations[0]
 
