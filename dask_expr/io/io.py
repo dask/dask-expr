@@ -4,7 +4,7 @@ import math
 from dask.dataframe.io.io import sorted_division_locations
 
 from dask_expr.expr import Blockwise, Expr, PartitionsFiltered
-from dask_expr.metadata import RowCountMetadata
+from dask_expr.statistics import RowCountStatistics
 
 
 class IO(Expr):
@@ -69,12 +69,12 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
             divisions = (None,) * len(locations)
         return divisions, locations
 
-    def _metadata(self):
+    def _statistics(self):
         locations = self._locations()
         row_counts = tuple(
             offset - locations[i] for i, offset in enumerate(locations[1:])
         )
-        return {"row_count": RowCountMetadata(row_counts)}
+        return {"row_count": RowCountStatistics(row_counts)}
 
     def _divisions(self):
         return self._divisions_and_locations[0]

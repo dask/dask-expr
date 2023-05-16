@@ -434,10 +434,10 @@ def test_repartition_divisions(df, opt):
 def test_statistics(df, pdf):
     df2 = df[["x"]] + 1
     assert len(df2) == len(pdf)
-    assert df2.metadata().get("row_count").sum() == len(pdf)
-    assert df[df.x > 5].metadata().get("row_count") is None
+    assert df2.statistics().get("row_count").sum() == len(pdf)
+    assert df[df.x > 5].statistics().get("row_count") is None
 
     # Check `partitions`
     first = df2.partitions[0].compute()
     assert len(df2.partitions[0]) == len(first)
-    assert df2.partitions[0].metadata().get("row_count").sum() == len(first)
+    assert df2.partitions[0].statistics().get("row_count").sum() == len(first)

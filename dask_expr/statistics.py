@@ -9,54 +9,41 @@ from dask_expr.expr import Elemwise, Expr, Partitions
 
 
 @dataclass(frozen=True)
-class Metadata:
-    """Abstract expression-metadata class
+class Statistics:
+    """Abstract expression-statistics class
 
     See Also
     --------
-    StaticMetadata
-    PartitionMetadata
+    PartitionStatistics
     """
 
     data: Any
 
     @singledispatchmethod
-    def inherit(self, child: Expr) -> Metadata | None:
-        """New `Metadata` object that a "child" Expr mayinherit
+    def inherit(self, child: Expr) -> Statistics | None:
+        """New `Statistics` object that a "child" Expr mayinherit
 
         A return value of `None` means that `type(Expr)` is
-        not eligable to inherit this kind of metadata.
+        not eligable to inherit this kind of statistics.
         """
         return None
 
 
 @dataclass(frozen=True)
-class StaticMetadata(Metadata):
-    """A static metadata object
-
-    This metadata is not partition-specific, and can be
-    inherited by any child `Expr`.
-    """
-
-    def inherit(self, child: Expr) -> StaticMetadata:
-        return self
-
-
-@dataclass(frozen=True)
-class PartitionMetadata(Metadata):
-    """Metadata containing a distinct value for every partition
+class PartitionStatistics(Statistics):
+    """Statistics containing a distinct value for every partition
 
     See Also
     --------
-    RowCountMetadata
+    RowCountStatistics
     """
 
     data: Iterable
 
 
-@PartitionMetadata.inherit.register
-def _partitionmetadata_partitions(self, child: Partitions):
-    # A `Partitions` expression may inherit metadata
+@PartitionStatistics.inherit.register
+def _partitionstatistics_partitions(self, child: Partitions):
+    # A `Partitions` expression may inherit statistics
     # from the selected partitions
     return type(self)(
         type(self.data)(
@@ -66,12 +53,12 @@ def _partitionmetadata_partitions(self, child: Partitions):
 
 
 #
-# PartitionMetadata sub-classes
+# PartitionStatistics sub-classes
 #
 
 
 @dataclass(frozen=True)
-class RowCountMetadata(PartitionMetadata):
+class RowCountStatistics(PartitionStatistics):
     """Tracks the row count of each partition"""
 
     def sum(self):
@@ -79,8 +66,8 @@ class RowCountMetadata(PartitionMetadata):
         return sum(self.data)
 
 
-@RowCountMetadata.inherit.register
+@RowCountStatistics.inherit.register
 def _rowcount_elemwise(self, child: Elemwise):
     # All Element-wise operations may inherit
-    # row-count metadata "as is"
+    # row-count statistics "as is"
     return self

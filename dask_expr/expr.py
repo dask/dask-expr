@@ -59,9 +59,9 @@ class Expr:
 
     @functools.cached_property
     def _len(self):
-        metadata = self.metadata()
-        if "row_count" in metadata:
-            return metadata["row_count"].sum()
+        statistics = self.statistics()
+        if "row_count" in statistics:
+            return statistics["row_count"].sum()
         return Len(self)
 
     def __str__(self):
@@ -213,38 +213,38 @@ class Expr:
 
         return {(self._name, i): self._task(i) for i in range(self.npartitions)}
 
-    def _metadata(self):
-        """New metadata to add for this expression"""
-        from dask_expr.metadata import Metadata
+    def _statistics(self):
+        """New statistics to add for this expression"""
+        from dask_expr.statistics import Statistics
 
-        # Inherit metadata from dependencies
-        metadata = {}
+        # Inherit statistics from dependencies
+        statistics = {}
         for dep in self.dependencies():
-            for k, v in dep.metadata().items():
-                assert isinstance(v, Metadata)
-                if k not in metadata:
+            for k, v in dep.statistics().items():
+                assert isinstance(v, Statistics)
+                if k not in statistics:
                     val = v.inherit(self)
                     if val:
-                        metadata[k] = val
-        return metadata
+                        statistics[k] = val
+        return statistics
 
-    def metadata(self) -> dict:
-        """Known metadata of an expression, like partition statistics
+    def statistics(self) -> dict:
+        """Known statistics of an expression, like partition statistics
 
-        To define this on a class create a `._metadata` method that returns a
-        dictionary of new metadata known by that class.  If nothing is known it
+        To define this on a class create a `._statistics` method that returns a
+        dictionary of new statistics known by that class.  If nothing is known it
         is ok to return None.  Superclasses will also be consulted.
 
         Examples
         --------
-        >>> df.metadata()
-        {'row_count': RowCountMetadata(data=(1000000,))}
+        >>> df.statistics()
+        {'row_count': RowCountStatistics(data=(1000000,))}
         """
         out = {}
         for typ in type(self).mro()[::-1]:
             if not issubclass(typ, Expr):
                 continue
-            d = typ._metadata(self) or {}
+            d = typ._statistics(self) or {}
             if d:
                 out.update(d)  # TODO: this is fragile
         return out
