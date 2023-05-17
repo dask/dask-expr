@@ -138,7 +138,6 @@ class Reduction(ApplyConcatApply):
     reduction_chunk = None
     reduction_combine = None
     reduction_aggregate = None
-    meth = None
 
     @classmethod
     def chunk(cls, df, **kwargs):
