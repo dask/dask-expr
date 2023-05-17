@@ -288,8 +288,6 @@ class Expr:
     def __getitem__(self, other):
         if isinstance(other, Expr):
             return Filter(self, other)  # df[df.x > 1]
-        # elif pd.api.types.is_scalar(other):
-        #     return GetitemScalar(self, other)
         else:
             return Projection(self, other)  # df[["a", "b", "c"]]
 
