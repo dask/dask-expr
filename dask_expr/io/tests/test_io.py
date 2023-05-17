@@ -206,7 +206,7 @@ def test_parquet_complex_filters(tmpdir):
     assert_eq(got.optimize(), expect)
 
 
-def test_parquet_row_count_statistics(tmpdir):
+def test_parquet_lengths(tmpdir):
     # NOTE: We should no longer need to set `index`
     # or `calculate_divisions` to gather row-count
     # statistics after dask#10290
@@ -214,4 +214,4 @@ def test_parquet_row_count_statistics(tmpdir):
     pdf = df.compute()
 
     s = (df["b"] + 1).astype("Int32")
-    assert s.statistics().get("row_count").sum() == len(pdf)
+    assert sum(s._lengths) == len(pdf)

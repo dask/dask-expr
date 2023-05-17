@@ -441,10 +441,8 @@ def test_len(df, pdf):
     assert len(df2.partitions[0]) == len(first)
 
 
-def test_row_count_statistics(df, pdf):
+def test_lengths(df, pdf):
     df2 = df[["x"]] + 1
-    assert df2.statistics().get("row_count").sum() == len(pdf)
-    assert df[df.x > 5].statistics().get("row_count") is None
-    assert df2.partitions[0].statistics().get("row_count").sum() == len(
-        df2.partitions[0]
-    )
+    assert sum(df2._lengths) == len(pdf)
+    assert df[df.x > 5]._lengths is None
+    assert sum(df2.partitions[0]._lengths) == len(df2.partitions[0])

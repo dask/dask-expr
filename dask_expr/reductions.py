@@ -9,7 +9,7 @@ from dask.dataframe.core import (
 )
 from dask.utils import M, apply
 
-from dask_expr.expr import Elemwise, Expr, Projection
+from dask_expr.expr import Elemwise, Expr, Literal, Projection
 
 
 class ApplyConcatApply(Expr):
@@ -244,7 +244,9 @@ class Len(Reduction):
     reduction_aggregate = sum
 
     def _simplify_down(self):
-        if isinstance(self.frame, Elemwise):
+        if self.frame._lengths:
+            return Literal(sum(self.frame._lengths))
+        elif isinstance(self.frame, Elemwise):
             child = max(self.frame.dependencies(), key=lambda expr: expr.npartitions)
             return Len(child)
 

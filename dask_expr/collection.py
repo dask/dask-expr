@@ -74,10 +74,11 @@ class FrameBase(DaskMethodsMixin):
         return new_collection(self.expr.size)
 
     def __len__(self):
-        _len = self.expr._len
-        if isinstance(_len, expr.Expr):
-            _len = new_collection(_len).compute()
-        return _len
+        return self._len
+
+    @functools.cached_property
+    def _len(self):
+        return new_collection(expr.Len(self.expr)).compute()
 
     def __reduce__(self):
         return new_collection, (self._expr,)

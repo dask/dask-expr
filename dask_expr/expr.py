@@ -19,6 +19,7 @@ from dask.dataframe.core import (
     is_dataframe_like,
     is_index_like,
     is_series_like,
+    make_meta,
 )
 from dask.utils import M, apply, funcname, import_required, is_arraylike
 
@@ -38,6 +39,7 @@ class Expr:
     associative = False
     _parameters = []
     _defaults = {}
+    _lengths = None
 
     def __init__(self, *args, **kwargs):
         operands = list(args)
@@ -56,13 +58,6 @@ class Expr:
             return meta.ndim
         except AttributeError:
             return 0
-
-    @functools.cached_property
-    def _len(self):
-        statistics = self.statistics()
-        if "row_count" in statistics:
-            return statistics["row_count"].sum()
-        return Len(self)
 
     def __str__(self):
         s = ", ".join(
@@ -212,42 +207,6 @@ class Expr:
         """
 
         return {(self._name, i): self._task(i) for i in range(self.npartitions)}
-
-    def _statistics(self):
-        """New statistics to add for this expression"""
-        from dask_expr.statistics import Statistics
-
-        # Assume statistics from dependencies
-        statistics = {}
-        for dep in self.dependencies():
-            for k, v in dep.statistics().items():
-                assert isinstance(v, Statistics)
-                if k not in statistics:
-                    val = v.assume(self)
-                    if val:
-                        statistics[k] = val
-        return statistics
-
-    def statistics(self) -> dict:
-        """Known statistics of an expression, like partition statistics
-
-        To define this on a class create a `._statistics` method that returns a
-        dictionary of new statistics known by that class.  If nothing is known it
-        is ok to return None.  Superclasses will also be consulted.
-
-        Examples
-        --------
-        >>> df.statistics()
-        {'row_count': RowCountStatistics(data=(1000000,))}
-        """
-        out = {}
-        for typ in type(self).mro()[::-1]:
-            if not issubclass(typ, Expr):
-                continue
-            d = typ._statistics(self) or {}
-            if d:
-                out.update(d)  # TODO: this is fragile
-        return out
 
     def simplify(self):
         """Simplify expression
@@ -634,6 +593,23 @@ class Expr:
         return g
 
 
+class Literal(Expr):
+    """Represent a literal (known) value as an `Expr`"""
+
+    _parameters = ["value"]
+
+    def _divisions(self):
+        return (None, None)
+
+    @property
+    def _meta(self):
+        return make_meta(self.value)
+
+    def _task(self, index: int):
+        assert index == 0
+        return self.value
+
+
 class Blockwise(Expr):
     """Super-class for block-wise operations
 
@@ -782,7 +758,9 @@ class Elemwise(Blockwise):
     optimizations, like `len` will care about which operations preserve length
     """
 
-    pass
+    @property
+    def _lengths(self):
+        return self.dependencies()[0]._lengths
 
 
 class AsType(Elemwise):
@@ -1093,6 +1071,12 @@ class Partitions(Expr):
     def _node_label_args(self):
         return [self.frame, self.partitions]
 
+    @property
+    def _lengths(self):
+        lengths = self.frame._lengths
+        if lengths:
+            return tuple(lengths[i] for i in self.partitions)
+
 
 class PartitionsFiltered(Expr):
     """Mixin class for partition filtering
@@ -1386,16 +1370,4 @@ class Fused(Blockwise):
 
 
 from dask_expr.io import BlockwiseIO
-from dask_expr.reductions import (
-    All,
-    Any,
-    Count,
-    Len,
-    Max,
-    Mean,
-    Min,
-    Mode,
-    Prod,
-    Size,
-    Sum,
-)
+from dask_expr.reductions import All, Any, Count, Max, Mean, Min, Mode, Prod, Size, Sum
