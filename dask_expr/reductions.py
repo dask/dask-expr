@@ -178,17 +178,12 @@ class Reduction(ApplyConcatApply):
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
-            if self.meth is None:
-                raise ValueError("Dispatch method must be specified")
-            return getattr(self.frame[parent.operand("columns")], self.meth)(
-                *self.operands[1:]
-            )
+            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
 
 
 class Sum(Reduction):
     _parameters = ["frame", "skipna", "numeric_only", "min_count"]
     reduction_chunk = M.sum
-    meth = "sum"
 
     @property
     def chunk_kwargs(self):
@@ -202,7 +197,6 @@ class Sum(Reduction):
 class Prod(Reduction):
     _parameters = ["frame", "skipna", "numeric_only", "min_count"]
     reduction_chunk = M.prod
-    meth = "prod"
 
     @property
     def chunk_kwargs(self):
@@ -216,7 +210,6 @@ class Prod(Reduction):
 class Max(Reduction):
     _parameters = ["frame", "skipna"]
     reduction_chunk = M.max
-    meth = "max"
 
     @property
     def chunk_kwargs(self):
@@ -228,7 +221,6 @@ class Max(Reduction):
 class Any(Reduction):
     _parameters = ["frame", "skipna"]
     reduction_chunk = M.any
-    meth = "any"
 
     @property
     def chunk_kwargs(self):
@@ -240,7 +232,6 @@ class Any(Reduction):
 class All(Reduction):
     _parameters = ["frame", "skipna"]
     reduction_chunk = M.all
-    meth = "all"
 
     @property
     def chunk_kwargs(self):
@@ -279,7 +270,6 @@ class Size(Reduction):
 class Mean(Reduction):
     _parameters = ["frame", "skipna", "numeric_only"]
     _defaults = {"skipna": True, "numeric_only": None}
-    meth = "mean"
 
     @property
     def _meta(self):
@@ -298,7 +288,6 @@ class Count(Reduction):
     _parameters = ["frame", "numeric_only"]
     split_every = 16
     reduction_chunk = M.count
-    meth = "count"
 
     @classmethod
     def reduction_aggregate(cls, df):
@@ -307,7 +296,6 @@ class Count(Reduction):
 
 class Min(Max):
     reduction_chunk = M.min
-    meth = "min"
 
 
 class Mode(ApplyConcatApply):
