@@ -296,10 +296,6 @@ class Count(Reduction):
 class Min(Max):
     reduction_chunk = M.min
 
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
-            return self.frame[parent.operand("columns")].min(skipna=self.skipna)
-
 
 class Mode(ApplyConcatApply):
     """
