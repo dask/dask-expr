@@ -850,7 +850,11 @@ class Index(Elemwise):
 
     @property
     def _meta(self):
-        return self.frame._meta.index
+        meta = self.frame._meta
+        # Handle scalar results
+        if is_series_like(meta) or is_dataframe_like(meta):
+            return self.frame._meta.index
+        return meta
 
     def _task(self, index: int):
         return (
