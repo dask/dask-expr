@@ -288,6 +288,8 @@ class Expr:
     def __getitem__(self, other):
         if isinstance(other, Expr):
             return Filter(self, other)  # df[df.x > 1]
+        # elif pd.api.types.is_scalar(other):
+        #     return GetitemScalar(self, other)
         else:
             return Projection(self, other)  # df[["a", "b", "c"]]
 
@@ -814,6 +816,9 @@ class Projection(Elemwise):
     def _meta(self):
         if is_dataframe_like(self.frame._meta):
             return super()._meta
+        # if we are not a DataFrame and have a scalar, we reduce to a scalar
+        if pd.api.types.is_scalar(self.operands[1]):
+            return 0
         # Avoid column selection for Series/Index
         return self.frame._meta
 
