@@ -138,6 +138,7 @@ class Reduction(ApplyConcatApply):
     reduction_chunk = None
     reduction_combine = None
     reduction_aggregate = None
+    meth = None
 
     @classmethod
     def chunk(cls, df, **kwargs):
@@ -175,10 +176,19 @@ class Reduction(ApplyConcatApply):
             base = "(" + base + ")"
         return f"{base}.{self.__class__.__name__.lower()}({s})"
 
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            if self.meth is None:
+                raise ValueError("Dispatch method must be specified")
+            return getattr(self.frame[parent.operand("columns")], self.meth)(
+                *self.operands[1:]
+            )
+
 
 class Sum(Reduction):
     _parameters = ["frame", "skipna", "numeric_only", "min_count"]
     reduction_chunk = M.sum
+    meth = "sum"
 
     @property
     def chunk_kwargs(self):
@@ -187,15 +197,12 @@ class Sum(Reduction):
             numeric_only=self.numeric_only,
             min_count=self.min_count,
         )
-
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
-            return self.frame[parent.operand("columns")].sum(*self.operands[1:])
 
 
 class Prod(Reduction):
     _parameters = ["frame", "skipna", "numeric_only", "min_count"]
     reduction_chunk = M.prod
+    meth = "prod"
 
     @property
     def chunk_kwargs(self):
@@ -205,54 +212,41 @@ class Prod(Reduction):
             min_count=self.min_count,
         )
 
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
-            return self.frame[parent.operand("columns")].prod(*self.operands[1:])
-
 
 class Max(Reduction):
     _parameters = ["frame", "skipna"]
     reduction_chunk = M.max
+    meth = "max"
 
     @property
     def chunk_kwargs(self):
         return dict(
             skipna=self.skipna,
         )
-
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
-            return self.frame[parent.operand("columns")].max(skipna=self.skipna)
 
 
 class Any(Reduction):
     _parameters = ["frame", "skipna"]
     reduction_chunk = M.any
+    meth = "any"
 
     @property
     def chunk_kwargs(self):
         return dict(
             skipna=self.skipna,
         )
-
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
-            return self.frame[parent.operand("columns")].any(skipna=self.skipna)
 
 
 class All(Reduction):
     _parameters = ["frame", "skipna"]
     reduction_chunk = M.all
+    meth = "all"
 
     @property
     def chunk_kwargs(self):
         return dict(
             skipna=self.skipna,
         )
-
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
-            return self.frame[parent.operand("columns")].all(skipna=self.skipna)
 
 
 class Len(Reduction):
@@ -263,6 +257,9 @@ class Len(Reduction):
         if isinstance(self.frame, Elemwise):
             child = max(self.frame.dependencies(), key=lambda expr: expr.npartitions)
             return Len(child)
+
+    def _simplify_up(self, parent):
+        return
 
 
 class Size(Reduction):
@@ -275,10 +272,14 @@ class Size(Reduction):
         else:
             return Len(self.frame)
 
+    def _simplify_up(self, parent):
+        return
+
 
 class Mean(Reduction):
     _parameters = ["frame", "skipna", "numeric_only"]
     _defaults = {"skipna": True, "numeric_only": None}
+    meth = "mean"
 
     @property
     def _meta(self):
@@ -297,6 +298,7 @@ class Count(Reduction):
     _parameters = ["frame", "numeric_only"]
     split_every = 16
     reduction_chunk = M.count
+    meth = "count"
 
     @classmethod
     def reduction_aggregate(cls, df):
@@ -305,6 +307,7 @@ class Count(Reduction):
 
 class Min(Max):
     reduction_chunk = M.min
+    meth = "min"
 
 
 class Mode(ApplyConcatApply):
