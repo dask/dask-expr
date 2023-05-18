@@ -77,23 +77,6 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
             if not self._filtered or i in self._partitions
         )
 
-    def _column_statistics(self, columns: list | None = None):
-        columns = columns or self.columns
-        maxes = []
-        mins = []
-        nulls = []
-        for i in range(self.npartitions):
-            df = self._task(i)[columns]
-            maxes.append(df.max().to_dict())
-            mins.append(df.min().to_dict())
-            nulls.append(df.isna().sum().to_dict())
-        if maxes:
-            maxes = type(df)(maxes)
-            mins = type(df)(mins)
-            nulls = type(df)(nulls)
-        # TODO: return something like:
-        # pd.concat([maxes, mins, nulls], axis=1, keys=["max", "min", "null"])
-
     def _divisions(self):
         return self._divisions_and_locations[0]
 
