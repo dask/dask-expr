@@ -244,139 +244,12 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
     @cached_property
     def _lengths(self):
         if not self.filters:
-            self._update_length_statistics()
+            _update_length_statistics(self)
             return self._length_pq_stats
-
-    def _update_length_statistics(self):
-        """Ensure that partition-length statistics are up to date"""
-
-        if not self._length_pq_stats:
-            if self._plan["statistics"]:
-                # Already have statistics from original API call
-                self._length_pq_stats = tuple(
-                    stat["num-rows"]
-                    for i, stat in enumerate(self._plan["statistics"])
-                    if not self._filtered or i in self._partitions
-                )
-            else:
-                # Need to go back and collect statistics
-                self._length_pq_stats = tuple(
-                    stat["num-rows"] for stat in self._collect_statistics()
-                )
-
-    def _update_column_statistics(self, columns: list | None = None):
-        """Ensure that min/max column statistics are up to date"""
-
-        def _record_column_statistics(all_stats, columns: list | None = None):
-            # Helper function to translate List[Dict] to Tuple or Dict
-            lengths = []
-            columns = columns or list(self.columns)
-            column_mins = {}
-            column_maxes = {}
-            for stats in all_stats:
-                lengths.append(stats["num-rows"])
-                for col_stats in stats.get("columns", []):
-                    name = col_stats.get("name")
-                    if name in columns:
-                        # Min
-                        if name not in column_mins:
-                            column_mins[name] = []
-                        column_mins[name].append(col_stats.get("min"))
-                        # Max
-                        if name not in column_maxes:
-                            column_maxes[name] = []
-                        column_maxes[name].append(col_stats.get("max"))
-            return lengths, column_mins, column_maxes
-
-        # First, try to use the statistics we already have
-        self._min_pq_stats = self._min_pq_stats or {}
-        self._max_pq_stats = self._max_pq_stats or {}
-        if not self._min_pq_stats and self._plan["statistics"]:
-            stats = [
-                stat
-                for i, stat in enumerate(self._plan["statistics"])
-                if not self._filtered or i in self._partitions
-            ]
-            lengths, column_mins, column_maxes = _record_column_statistics(stats)
-            if not self._length_pq_stats:
-                self._length_pq_stats = lengths
-            self._min_pq_stats = column_mins
-            self._max_pq_stats = column_maxes
-
-        # Find which column statistics are missing, and collect them
-        columns = [
-            col
-            for col in (columns or list(self.columns))
-            if col not in self._min_pq_stats
-        ]
-        if columns:
-            (
-                lengths,
-                column_mins,
-                column_maxes,
-            ) = _record_column_statistics(self._collect_statistics(columns), columns)
-            self._length_pq_stats = lengths
-            self._min_pq_stats.update(column_mins)
-            self._max_pq_stats.update(column_maxes)
-
-    def _collect_statistics(self, columns: list | None = None) -> list[dict] | None:
-        """Collect Parquet statistic for dataset paths"""
-
-        # Be strict about columns argument
-        if columns:
-            if not isinstance(columns, list):
-                raise ValueError(f"Expected columns to be a list, got {type(columns)}.")
-            elif not set(columns).issubset(set(self.columns)):
-                raise ValueError(
-                    f"columns={columns} must be a subset of {self.columns}"
-                )
-
-        # Collect statistics using layer information
-        fs = self._plan["func"].fs
-        parts = [
-            part
-            for i, part in enumerate(self._plan["parts"])
-            if not self._filtered or i in self._partitions
-        ]
-
-        # Execute with delayed for large and remote datasets
-        parallel = int(False if _is_local_fs(fs) else 16)
-        if parallel:
-            # Group parts corresponding to the same file.
-            # A single task should always parse statistics
-            # for all these parts at once (since they will
-            # all be in the same footer)
-            groups = defaultdict(list)
-            for part in parts:
-                for p in [part] if isinstance(part, dict) else part:
-                    path = p.get("piece")[0]
-                    groups[path].append(p)
-            group_keys = list(groups.keys())
-
-            # Compute and return flattened result
-            func = delayed(_read_partition_stats_group)
-            result = dask.compute(
-                [
-                    func(
-                        list(
-                            itertools.chain(
-                                *[groups[k] for k in group_keys[i : i + parallel]]
-                            )
-                        ),
-                        fs,
-                        columns=columns,
-                    )
-                    for i in range(0, len(group_keys), parallel)
-                ]
-            )[0]
-            return list(itertools.chain(*result))
-        else:
-            # Serial computation on client
-            return _read_partition_stats_group(parts, fs, columns=columns)
 
 
 #
-# Helper utilities
+# Helper functions
 #
 
 
@@ -441,6 +314,11 @@ def _calculate_divisions(statistics, dataset_info, npartitions):
                     break
 
     return divisions or (None,) * (npartitions + 1)
+
+
+#
+# Filtering logic
+#
 
 
 class _DNF:
@@ -556,6 +434,139 @@ class _DNF:
                     _filters = cls._Or([left, right])
 
         return _DNF(_filters)
+
+
+#
+# Parquet-statistics handling
+#
+
+
+def _update_length_statistics(expr: ReadParquet):
+    """Ensure that partition-length statistics are up to date"""
+
+    if not expr._length_pq_stats:
+        if expr._plan["statistics"]:
+            # Already have statistics from original API call
+            expr._length_pq_stats = tuple(
+                stat["num-rows"]
+                for i, stat in enumerate(expr._plan["statistics"])
+                if not expr._filtered or i in expr._partitions
+            )
+        else:
+            # Need to go back and collect statistics
+            expr._length_pq_stats = tuple(
+                stat["num-rows"] for stat in expr._collect_statistics()
+            )
+
+
+def _update_column_statistics(expr: ReadParquet, columns: list | None = None):
+    """Ensure that min/max column statistics are up to date"""
+
+    def _record_column_statistics(all_stats, columns: list | None = None):
+        # Helper function to translate List[Dict] to Tuple or Dict
+        lengths = []
+        columns = columns or list(expr.columns)
+        column_mins = {}
+        column_maxes = {}
+        for stats in all_stats:
+            lengths.append(stats["num-rows"])
+            for col_stats in stats.get("columns", []):
+                name = col_stats.get("name")
+                if name in columns:
+                    # Min
+                    if name not in column_mins:
+                        column_mins[name] = []
+                    column_mins[name].append(col_stats.get("min"))
+                    # Max
+                    if name not in column_maxes:
+                        column_maxes[name] = []
+                    column_maxes[name].append(col_stats.get("max"))
+        return lengths, column_mins, column_maxes
+
+    # First, try to use the statistics we already have
+    expr._min_pq_stats = expr._min_pq_stats or {}
+    expr._max_pq_stats = expr._max_pq_stats or {}
+    if not expr._min_pq_stats and expr._plan["statistics"]:
+        stats = [
+            stat
+            for i, stat in enumerate(expr._plan["statistics"])
+            if not expr._filtered or i in expr._partitions
+        ]
+        lengths, column_mins, column_maxes = _record_column_statistics(stats)
+        if not expr._length_pq_stats:
+            expr._length_pq_stats = lengths
+        expr._min_pq_stats = column_mins
+        expr._max_pq_stats = column_maxes
+
+    # Find which column statistics are missing, and collect them
+    columns = [
+        col for col in (columns or list(expr.columns)) if col not in expr._min_pq_stats
+    ]
+    if columns:
+        (
+            lengths,
+            column_mins,
+            column_maxes,
+        ) = _record_column_statistics(expr._collect_statistics(columns), columns)
+        expr._length_pq_stats = lengths
+        expr._min_pq_stats.update(column_mins)
+        expr._max_pq_stats.update(column_maxes)
+
+
+def _collect_statistics(
+    expr: ReadParquet, columns: list | None = None
+) -> list[dict] | None:
+    """Collect Parquet statistic for dataset paths"""
+
+    # Be strict about columns argument
+    if columns:
+        if not isinstance(columns, list):
+            raise ValueError(f"Expected columns to be a list, got {type(columns)}.")
+        elif not set(columns).issubset(set(expr.columns)):
+            raise ValueError(f"columns={columns} must be a subset of {expr.columns}")
+
+    # Collect statistics using layer information
+    fs = expr._plan["func"].fs
+    parts = [
+        part
+        for i, part in enumerate(expr._plan["parts"])
+        if not expr._filtered or i in expr._partitions
+    ]
+
+    # Execute with delayed for large and remote datasets
+    parallel = int(False if _is_local_fs(fs) else 16)
+    if parallel:
+        # Group parts corresponding to the same file.
+        # A single task should always parse statistics
+        # for all these parts at once (since they will
+        # all be in the same footer)
+        groups = defaultdict(list)
+        for part in parts:
+            for p in [part] if isinstance(part, dict) else part:
+                path = p.get("piece")[0]
+                groups[path].append(p)
+        group_keys = list(groups.keys())
+
+        # Compute and return flattened result
+        func = delayed(_read_partition_stats_group)
+        result = dask.compute(
+            [
+                func(
+                    list(
+                        itertools.chain(
+                            *[groups[k] for k in group_keys[i : i + parallel]]
+                        )
+                    ),
+                    fs,
+                    columns=columns,
+                )
+                for i in range(0, len(group_keys), parallel)
+            ]
+        )[0]
+        return list(itertools.chain(*result))
+    else:
+        # Serial computation on client
+        return _read_partition_stats_group(parts, fs, columns=columns)
 
 
 def _read_partition_stats_group(parts, fs, columns=None):
