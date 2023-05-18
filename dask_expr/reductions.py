@@ -251,7 +251,8 @@ class IdxMin(Reduction):
 
     @property
     def chunk_kwargs(self):
-        return dict(skipna=self.skipna, numeric_only=self.numeric_only, fn=self._fn)
+        # TODO: Add numeric_only after Dask release on May 26th
+        return dict(skipna=self.skipna, fn=self._fn)
 
     @property
     def combine_kwargs(self):
