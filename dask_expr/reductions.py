@@ -178,6 +178,10 @@ class Reduction(ApplyConcatApply):
             base = "(" + base + ")"
         return f"{base}.{self.__class__.__name__.lower()}({s})"
 
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+
 
 class Sum(Reduction):
     _parameters = ["frame", "skipna", "numeric_only", "min_count"]
@@ -190,10 +194,6 @@ class Sum(Reduction):
             numeric_only=self.numeric_only,
             min_count=self.min_count,
         )
-
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
-            return self.frame[parent.operand("columns")].sum(*self.operands[1:])
 
 
 class Prod(Reduction):
@@ -208,10 +208,6 @@ class Prod(Reduction):
             min_count=self.min_count,
         )
 
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
-            return self.frame[parent.operand("columns")].prod(*self.operands[1:])
-
 
 class Max(Reduction):
     _parameters = ["frame", "skipna"]
@@ -222,10 +218,6 @@ class Max(Reduction):
         return dict(
             skipna=self.skipna,
         )
-
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
-            return self.frame[parent.operand("columns")].max(skipna=self.skipna)
 
 
 class Any(Reduction):
@@ -238,10 +230,6 @@ class Any(Reduction):
             skipna=self.skipna,
         )
 
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
-            return self.frame[parent.operand("columns")].any(skipna=self.skipna)
-
 
 class All(Reduction):
     _parameters = ["frame", "skipna"]
@@ -252,10 +240,6 @@ class All(Reduction):
         return dict(
             skipna=self.skipna,
         )
-
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
-            return self.frame[parent.operand("columns")].all(skipna=self.skipna)
 
 
 class IdxMin(Reduction):
@@ -306,6 +290,9 @@ class Len(Reduction):
             child = max(self.frame.dependencies(), key=lambda expr: expr.npartitions)
             return Len(child)
 
+    def _simplify_up(self, parent):
+        return
+
 
 class Size(Reduction):
     reduction_chunk = staticmethod(lambda df: df.size)
@@ -316,6 +303,9 @@ class Size(Reduction):
             return len(self.frame.columns) * Len(self.frame)
         else:
             return Len(self.frame)
+
+    def _simplify_up(self, parent):
+        return
 
 
 class Mean(Reduction):
