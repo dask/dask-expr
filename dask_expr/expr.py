@@ -816,8 +816,8 @@ class Projection(Elemwise):
         if is_dataframe_like(self.frame._meta):
             return super()._meta
         # if we are not a DataFrame and have a scalar, we reduce to a scalar
-        if not isinstance(self.operands[1], list) and not hasattr(
-            self.operands[1], "dtype"
+        if not isinstance(self.operand("columns"), list) and not hasattr(
+            self.operand("columns"), "dtype"
         ):
             return meta_nonempty(self.frame._meta).iloc[0]
         # Avoid column selection for Series/Index
