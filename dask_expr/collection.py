@@ -17,6 +17,7 @@ from tlz import first
 from dask_expr import expr
 from dask_expr.expr import no_default
 from dask_expr.merge import Merge
+from dask_expr.reductions import Len
 from dask_expr.repartition import Repartition
 
 #
@@ -78,7 +79,7 @@ class FrameBase(DaskMethodsMixin):
 
     @functools.cached_property
     def _len(self):
-        return new_collection(expr.Len(self.expr)).compute()
+        return new_collection(Len(self.expr)).compute()
 
     def __reduce__(self):
         return new_collection, (self._expr,)
