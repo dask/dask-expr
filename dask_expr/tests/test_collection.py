@@ -101,7 +101,7 @@ def test_reductions(func, pdf, df):
 def test_nbytes(pdf, df):
     with pytest.raises(NotImplementedError, match="nbytes is not implemented"):
         df.nbytes
-    assert_eq(df.x.nbytes.compute(), pdf.x.nbytes)
+    assert_eq(df.x.nbytes, pdf.x.nbytes)
 
 
 def test_mode():
