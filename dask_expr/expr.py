@@ -20,6 +20,7 @@ from dask.dataframe.core import (
     is_index_like,
     is_series_like,
 )
+from dask.dataframe.dispatch import meta_nonempty
 from dask.utils import M, apply, funcname, import_required, is_arraylike
 
 replacement_rules = []
@@ -815,8 +816,10 @@ class Projection(Elemwise):
         if is_dataframe_like(self.frame._meta):
             return super()._meta
         # if we are not a DataFrame and have a scalar, we reduce to a scalar
-        if pd.api.types.is_scalar(self.operands[1]):
-            return 0
+        if not isinstance(self.operands[1], list) and not hasattr(
+            self.operands[1], "dtype"
+        ):
+            return meta_nonempty(self.frame._meta).iloc[0]
         # Avoid column selection for Series/Index
         return self.frame._meta
 

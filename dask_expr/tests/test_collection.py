@@ -94,8 +94,6 @@ def test_dask(pdf, df):
 def test_reductions(func, pdf, df):
     assert_eq(func(df), func(pdf))
     assert_eq(func(df.x), func(pdf.x))
-    # re-conversion to Series is necessary since Dask does not reduce. Trying to
-    # figure out whether this was intended or not
     # check_dtype False because sub-selection of columns that is pushed through
     # is not reflected in the meta calculation
     assert_eq(func(df)["x"], func(pdf)["x"], check_dtype=False)
