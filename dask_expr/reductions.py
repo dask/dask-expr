@@ -247,38 +247,23 @@ class IdxMin(Reduction):
     reduction_chunk = idxmaxmin_chunk
     reduction_combine = idxmaxmin_combine
     reduction_aggregate = idxmaxmin_agg
+    _fn = "idxmin"
 
     @property
     def chunk_kwargs(self):
-        return dict(skipna=self.skipna, numeric_only=self.numeric_only, fn="idxmin")
+        return dict(skipna=self.skipna, numeric_only=self.numeric_only, fn=self._fn)
 
     @property
     def combine_kwargs(self):
-        return dict(skipna=self.skipna, fn="idxmin")
+        return dict(skipna=self.skipna, fn=self._fn)
 
     @property
     def aggregate_kwargs(self):
         return {**self.chunk_kwargs, "scalar": is_series_like(self.frame._meta)}
 
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
-            return self.frame[parent.operand("columns")].idxmin(skipna=self.skipna)
-
 
 class IdxMax(IdxMin):
-    _parameters = ["frame", "skipna", "numeric_only"]
-
-    @property
-    def chunk_kwargs(self):
-        return dict(skipna=self.skipna, numeric_only=self.numeric_only, fn="idxmax")
-
-    @property
-    def combine_kwargs(self):
-        return dict(skipna=self.skipna, fn="idxmax")
-
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
-            return self.frame[parent.operand("columns")].idxmax(skipna=self.skipna)
+    _fn = "idxmax"
 
 
 class Len(Reduction):
