@@ -408,6 +408,12 @@ class Mode(ApplyConcatApply):
         return {"dropna": self.dropna}
 
 
+class MemoryUsage(Reduction):
+    _parameters = ["frame", "deep", "index"]
+    _defaults = {"deep": False, "index": True}
+    pass
+
+
 class ValueCounts(Reduction):
     _defaults = {
         "sort": None,
