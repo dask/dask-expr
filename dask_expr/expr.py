@@ -398,17 +398,6 @@ class Expr:
             raise NotImplementedError("value_counts not implemented for DataFrame")
         return ValueCounts(self, sort, ascending, dropna, normalize)
 
-    def memory_usage(self, deep=False, index=no_default):
-        if is_index_like(self._meta):
-            if index is not no_default:
-                raise TypeError(
-                    "index key-word is not supported when calculating memory_usage of index"
-                )
-            return MemoryUsage(self, deep=deep)
-        if index is no_default:
-            index = True
-        return MemoryUsage(self, deep=deep, _index=index)
-
     def min(self, skipna=True, numeric_only=False, min_count=0):
         return Min(self, skipna, numeric_only, min_count)
 
@@ -1397,7 +1386,6 @@ from dask_expr.reductions import (
     IdxMin,
     Max,
     Mean,
-    MemoryUsage,
     Min,
     Mode,
     NBytes,

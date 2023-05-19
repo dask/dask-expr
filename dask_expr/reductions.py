@@ -7,7 +7,6 @@ from dask.dataframe.core import (
     idxmaxmin_chunk,
     idxmaxmin_combine,
     is_dataframe_like,
-    is_index_like,
     is_series_like,
     make_meta,
     meta_nonempty,
@@ -444,24 +443,34 @@ class ValueCounts(Reduction):
         return
 
 
-class MemoryUsage(Reduction):
-    _parameters = ["frame", "deep", "_index"]
-    _defaults = {"deep": False, "_index": True}
+class MemoryUsageIndex(Reduction):
+    _parameters = ["frame", "deep"]
+    _defaults = {"deep": False}
     reduction_chunk = M.memory_usage
-    reduction_combine = staticmethod(
-        lambda x, is_dataframe: x.groupby(x.index).sum() if is_dataframe else x.sum()
-    )
+    reduction_combine = M.sum
     reduction_aggregate = M.sum
-
-    def _index_kwargs(self):
-        if is_index_like(self.frame._meta):
-            return {}
-        return {"index": self._index}
 
     @property
     def chunk_kwargs(self):
-        return {"deep": self.deep, **self._index_kwargs()}
+        return {"deep": self.deep}
+
+
+class MemoryUsageFrame(Reduction):
+    _parameters = ["frame", "deep", "_index"]
+    _defaults = {"deep": False, "_index": True}
+    reduction_chunk = M.memory_usage
+    reduction_aggregate = M.sum
+
+    @property
+    def chunk_kwargs(self):
+        return {"deep": self.deep, "index": self._index}
 
     @property
     def combine_kwargs(self):
         return {"is_dataframe": is_dataframe_like(self.frame._meta)}
+
+    @staticmethod
+    def reduction_combine(x, is_dataframe):
+        if is_dataframe:
+            return x.groupby(x.index).sum()
+        return x.sum()

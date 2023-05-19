@@ -130,9 +130,7 @@ def test_memory_usage(pdf):
     assert_eq(df.x.memory_usage(), pdf.x.memory_usage())
     assert_eq(df.x.memory_usage(index=False), pdf.x.memory_usage(index=False))
     assert_eq(df.index.memory_usage(), pdf.index.memory_usage())
-    with pytest.raises(
-        TypeError, match="index key-word is not supported when calculating"
-    ):
+    with pytest.raises(TypeError, match="got an unexpected keyword"):
         df.index.memory_usage(index=True)
 
 
