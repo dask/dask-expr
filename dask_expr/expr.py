@@ -21,6 +21,7 @@ from dask.dataframe.core import (
     is_series_like,
     make_meta,
 )
+from dask.dataframe.dispatch import meta_nonempty
 from dask.utils import M, apply, funcname, import_required, is_arraylike
 
 replacement_rules = []
@@ -290,6 +291,10 @@ class Expr:
     def size(self):
         return Size(self)
 
+    @property
+    def nbytes(self):
+        return NBytes(self)
+
     def __getitem__(self, other):
         if isinstance(other, Expr):
             return Filter(self, other)  # df[df.x > 1]
@@ -356,16 +361,16 @@ class Expr:
     def __or__(self, other):
         return Or(other, self)
 
-    def sum(self, skipna=True, numeric_only=None, min_count=0):
+    def sum(self, skipna=True, numeric_only=False, min_count=0):
         return Sum(self, skipna, numeric_only, min_count)
 
-    def prod(self, skipna=True, numeric_only=None, min_count=0):
+    def prod(self, skipna=True, numeric_only=False, min_count=0):
         return Prod(self, skipna, numeric_only, min_count)
 
-    def mean(self, skipna=True, numeric_only=None, min_count=0):
+    def mean(self, skipna=True, numeric_only=False, min_count=0):
         return Mean(self, skipna=skipna, numeric_only=numeric_only)
 
-    def max(self, skipna=True, numeric_only=None, min_count=0):
+    def max(self, skipna=True, numeric_only=False, min_count=0):
         return Max(self, skipna, numeric_only, min_count)
 
     def any(self, skipna=True):
@@ -374,13 +379,34 @@ class Expr:
     def all(self, skipna=True):
         return All(self, skipna=skipna)
 
+    def idxmin(self, skipna=True, numeric_only=False):
+        return IdxMin(self, skipna=skipna, numeric_only=numeric_only)
+
+    def idxmax(self, skipna=True, numeric_only=False):
+        return IdxMax(self, skipna=skipna, numeric_only=numeric_only)
+
+    def nlargest(self, n=5, columns=None):
+        if columns is not None and is_series_like(self._meta):
+            raise TypeError("columns not supported for Series")
+        return NLargest(self, n=n, _columns=columns)
+
+    def nsmallest(self, n=5, columns=None):
+        if columns is not None and is_series_like(self._meta):
+            raise TypeError("columns not supported for Series")
+        return NSmallest(self, n=n, _columns=columns)
+
     def mode(self, dropna=True):
         return Mode(self, dropna=dropna)
 
-    def min(self, skipna=True, numeric_only=None, min_count=0):
+    def value_counts(self, sort=None, ascending=False, dropna=True, normalize=False):
+        if is_dataframe_like(self.frame):
+            raise NotImplementedError("value_counts not implemented for DataFrame")
+        return ValueCounts(self, sort, ascending, dropna, normalize)
+
+    def min(self, skipna=True, numeric_only=False, min_count=0):
         return Min(self, skipna, numeric_only, min_count)
 
-    def count(self, numeric_only=None):
+    def count(self, numeric_only=False):
         return Count(self, numeric_only)
 
     def astype(self, dtypes):
@@ -876,6 +902,11 @@ class Projection(Elemwise):
     def _meta(self):
         if is_dataframe_like(self.frame._meta):
             return super()._meta
+        # if we are not a DataFrame and have a scalar, we reduce to a scalar
+        if not isinstance(self.operand("columns"), list) and not hasattr(
+            self.operand("columns"), "dtype"
+        ):
+            return meta_nonempty(self.frame._meta).iloc[0]
         # Avoid column selection for Series/Index
         return self.frame._meta
 
@@ -915,7 +946,11 @@ class Index(Elemwise):
 
     @property
     def _meta(self):
-        return self.frame._meta.index
+        meta = self.frame._meta
+        # Handle scalar results
+        if is_series_like(meta) or is_dataframe_like(meta):
+            return self.frame._meta.index
+        return meta
 
     def _task(self, index: int):
         return (
@@ -1414,4 +1449,21 @@ class Fused(Blockwise):
 
 
 from dask_expr.io import BlockwiseIO
-from dask_expr.reductions import All, Any, Count, Max, Mean, Min, Mode, Prod, Size, Sum
+from dask_expr.reductions import (
+    All,
+    Any,
+    Count,
+    IdxMax,
+    IdxMin,
+    Max,
+    Mean,
+    Min,
+    Mode,
+    NBytes,
+    NLargest,
+    NSmallest,
+    Prod,
+    Size,
+    Sum,
+    ValueCounts,
+)

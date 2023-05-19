@@ -81,6 +81,10 @@ class FrameBase(DaskMethodsMixin):
     def _len(self):
         return new_collection(Len(self.expr)).compute()
 
+    @property
+    def nbytes(self):
+        raise NotImplementedError("nbytes is not implemented on DataFrame")
+
     def __reduce__(self):
         return new_collection, (self._expr,)
 
@@ -107,6 +111,9 @@ class FrameBase(DaskMethodsMixin):
         return self.__dask_graph__()
 
     def __dask_postcompute__(self):
+        state = self.simplify()
+        if type(self) != type(state):
+            return state.__dask_postcompute__()
         return _concat, ()
 
     def __dask_postpersist__(self):
@@ -490,6 +497,10 @@ class Series(FrameBase):
     @property
     def name(self):
         return self.expr._meta.name
+
+    @property
+    def nbytes(self):
+        return new_collection(self.expr.nbytes)
 
     def __repr__(self):
         return f"<dask_expr.expr.Series: expr={self.expr}>"

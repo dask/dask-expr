@@ -85,6 +85,8 @@ def test_dask(pdf, df):
         M.prod,
         M.count,
         M.mean,
+        M.idxmin,
+        M.idxmax,
         pytest.param(
             lambda df: df.size,
             marks=pytest.mark.skip(reason="scalars don't work yet"),
@@ -94,6 +96,15 @@ def test_dask(pdf, df):
 def test_reductions(func, pdf, df):
     assert_eq(func(df), func(pdf))
     assert_eq(func(df.x), func(pdf.x))
+    # check_dtype False because sub-selection of columns that is pushed through
+    # is not reflected in the meta calculation
+    assert_eq(func(df)["x"], func(pdf)["x"], check_dtype=False)
+
+
+def test_nbytes(pdf, df):
+    with pytest.raises(NotImplementedError, match="nbytes is not implemented"):
+        df.nbytes
+    assert_eq(df.x.nbytes, pdf.x.nbytes)
 
 
 def test_mode():
@@ -101,6 +112,20 @@ def test_mode():
     df = from_pandas(pdf, npartitions=3)
 
     assert_eq(df.x.mode(), pdf.x.mode(), check_names=False)
+
+
+def test_value_counts(df, pdf):
+    with pytest.raises(NotImplementedError, match="value_counts not implemented"):
+        df.value_counts()
+    assert_eq(df.x.value_counts(), pdf.x.value_counts())
+
+
+@pytest.mark.parametrize("func", [M.nlargest, M.nsmallest])
+def test_nlargest_nsmallest(df, pdf, func):
+    assert_eq(func(df, n=5, columns="x"), func(pdf, n=5, columns="x"))
+    assert_eq(func(df.x, n=5), func(pdf.x, n=5))
+    with pytest.raises(TypeError, match="columns not supported for Series"):
+        func(df.x, n=5, columns="foo")
 
 
 @pytest.mark.parametrize(
