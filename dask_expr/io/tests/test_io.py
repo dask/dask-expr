@@ -207,10 +207,7 @@ def test_parquet_complex_filters(tmpdir):
 
 
 def test_parquet_lengths(tmpdir):
-    # NOTE: We should no longer need to set `index`
-    # or `calculate_divisions` to gather row-count
-    # statistics after dask#10290
-    df = read_parquet(_make_file(tmpdir), index="a", calculate_divisions=True)
+    df = read_parquet(_make_file(tmpdir))
     pdf = df.compute()
 
     s = (df["b"] + 1).astype("Int32")
