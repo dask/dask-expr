@@ -60,9 +60,6 @@ class Expr:
         except AttributeError:
             return 0
 
-    def _column_statistics(self, columns: list | None = None):
-        return None
-
     def __str__(self):
         s = ", ".join(
             str(param) + "=" + str(operand)
