@@ -243,9 +243,32 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
 
     @cached_property
     def _lengths(self):
+        """Return known partition lengths using parquet statistics"""
         if not self.filters:
             _update_length_statistics(self)
             return self._length_pq_stats
+
+    def _partitioning(self, columns: list):
+        """Return known partitioning details using parquet statistics"""
+        # Check if we can already use divisions
+        divisions_partitioning = super()._partitioning(columns)
+        if divisions_partitioning:
+            return divisions_partitioning
+        # TODO: Account for directory partitioning?
+
+        # Use parquet statistics to check if we are ordered
+        # by the first column in `columns`
+        _update_column_statistics(self, columns)
+        column = columns[0]
+        if column in self._min_pq_stats and column in self._max_pq_stats:
+            ordering = _known_ordering(
+                self._min_pq_stats[column],
+                self._max_pq_stats[column],
+            )
+            if ordering:
+                return {"columns": (column,), "how": ordering}
+
+        return {}
 
 
 #
@@ -441,6 +464,30 @@ class _DNF:
 #
 
 
+def _known_ordering(mins, maxes) -> tuple:
+    # Check for increasing order
+    divisions = [mins[0]]
+    for max_i, min_ip1 in zip(maxes[:-1], mins[1:]):
+        if max_i < min_ip1:
+            divisions.append(max_i)
+        else:
+            divisions = []
+            break
+    if divisions:
+        return "increasing", tuple(divisions + [maxes[-1]])
+
+    # Check for decreasing order
+    divisions = [maxes[0]]
+    for min_i, max_ip1 in zip(mins[:-1], maxes[1:]):
+        if min_i > max_ip1:
+            divisions.append(min_i)
+        else:
+            divisions = []
+            break
+    if divisions:
+        return "decreasing", tuple(divisions + [mins[-1]])
+
+
 def _update_length_statistics(expr: ReadParquet):
     """Ensure that partition-length statistics are up to date"""
 
@@ -455,7 +502,7 @@ def _update_length_statistics(expr: ReadParquet):
         else:
             # Need to go back and collect statistics
             expr._length_pq_stats = tuple(
-                stat["num-rows"] for stat in expr._collect_statistics()
+                stat["num-rows"] for stat in _collect_statistics(expr)
             )
 
 
@@ -507,7 +554,7 @@ def _update_column_statistics(expr: ReadParquet, columns: list | None = None):
             lengths,
             column_mins,
             column_maxes,
-        ) = _record_column_statistics(expr._collect_statistics(columns), columns)
+        ) = _record_column_statistics(_collect_statistics(expr, columns), columns)
         expr._length_pq_stats = lengths
         expr._min_pq_stats.update(column_mins)
         expr._max_pq_stats.update(column_maxes)
@@ -522,8 +569,9 @@ def _collect_statistics(
     if columns:
         if not isinstance(columns, list):
             raise ValueError(f"Expected columns to be a list, got {type(columns)}.")
-        elif not set(columns).issubset(set(expr.columns)):
-            raise ValueError(f"columns={columns} must be a subset of {expr.columns}")
+        allowed = {expr._meta.index.name} | set(expr.columns)
+        if not set(columns).issubset(allowed):
+            raise ValueError(f"columns={columns} must be a subset of {allowed}")
 
     # Collect statistics using layer information
     fs = expr._plan["func"].fs

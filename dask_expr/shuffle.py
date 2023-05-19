@@ -115,6 +115,14 @@ class Shuffle(Expr):
     def _divisions(self):
         return (None,) * (self.npartitions_out + 1)
 
+    def _partitioning(self, columns: list):
+        """Return known partitioning details using parquet statistics"""
+        by = self.partitioning_index
+        by = [by] if isinstance(by, (str, int)) else by
+        if columns == by[: len(columns)]:
+            return {"columns": tuple(columns), "how": ("hash", self.npartitions)}
+        return {}
+
 
 #
 # ShuffleBackend Implementations

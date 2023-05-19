@@ -595,6 +595,44 @@ class Expr:
         graphviz_to_file(g, filename, format)
         return g
 
+    def _partitioning(self, columns: list) -> dict:
+        """Known partitioning information
+
+        Return known-partitioning information for the specified
+        list of columns. This information should be formatted
+        as a dict containing "columns" and "how" keys, where
+        the `"columns"` value should be a tuple of column names,
+        and the `"how"` value should be a tuple that uniquely
+        identifies the partitioning.
+
+        If no partitioning information is known, an empty
+        dictionary will be returned.
+
+        Examples of `"how"`:
+
+          - Sorted data: `("increasing", <divisions>)`
+          - Reverse-sorted data: `("decreasing", <divisions>)`
+          - Shuffled data: `("hash", <npartitions>)`
+
+        Note that un-named index columns must be specified as
+        `"__index__"` (`None` is not supported).
+
+        Return
+        ------
+        partitioning: dict
+        """
+        assert isinstance(columns, list), "columns must be list"
+
+        # By default, we only know about partitioning from known divisions
+        index_name = self._meta.index.name or "__index__"
+        if self.known_divisions and columns[0] == index_name:
+            return {
+                "columns": (index_name,),
+                "how": self.divisions,
+            }
+
+        return {}
+
 
 class Literal(Expr):
     """Represent a literal (known) value as an `Expr`"""
