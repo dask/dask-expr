@@ -888,6 +888,9 @@ class Projection(Elemwise):
             base = "(" + base + ")"
         return f"{base}[{repr(self.columns)}]"
 
+    def _partitioning(self, columns: list) -> dict:
+        return self.frame._partitioning(columns)
+
     def _simplify_down(self):
         if isinstance(self.frame, Projection):
             # df[a][b]

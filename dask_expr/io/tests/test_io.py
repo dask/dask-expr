@@ -160,7 +160,7 @@ def test_io_culling(tmpdir, fmt):
     if fmt == "parquet":
         dd.from_pandas(pdf, 2).to_parquet(tmpdir)
         df = read_parquet(tmpdir)
-    elif fmt == "parquet":
+    elif fmt == "csv":
         dd.from_pandas(pdf, 2).to_csv(tmpdir)
         df = read_csv(tmpdir + "/*")
     else:
@@ -215,3 +215,20 @@ def test_parquet_lengths(tmpdir):
 
     s = (df["b"] + 1).astype("Int32")
     assert sum(s._lengths) == len(pdf)
+
+
+@pytest.mark.parametrize("order", ["increasing", "decreasing"])
+def test_parquet_ordered_partitioning_info(tmpdir, order):
+    pdf = pd.DataFrame(
+        {
+            "a": range(10, 0, -1) if order == "decreasing" else range(10),
+            "b": range(10),
+            "c": range(10),
+        }
+    )
+    dd.from_pandas(pdf, 2).to_parquet(tmpdir)
+    df = read_parquet(tmpdir)
+
+    _partitioning = df._partitioning(["a", "b"])
+    assert _partitioning["columns"] == ("a",)
+    assert _partitioning["how"][0] == order
