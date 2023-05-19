@@ -119,7 +119,7 @@ class Shuffle(Expr):
         """Return known partitioning details using parquet statistics"""
         by = self.partitioning_index
         by = [by] if isinstance(by, (str, int)) else by
-        if columns == by[: len(columns)]:
+        if columns[: len(by)] == by:
             return {"columns": tuple(columns), "how": ("hash", self.npartitions)}
         return {}
 

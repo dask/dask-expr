@@ -117,9 +117,15 @@ def test_shuffle_column_projection():
 
 
 def test_shuffle_partitioning_info():
-    pdf = pd.DataFrame({"x": list(range(20)) * 5, "y": range(100)})
+    pdf = pd.DataFrame({"x": list(range(20)) * 5, "y": range(100), "z": range(100)})
     df = from_pandas(pdf, npartitions=10)
-    df2 = df.shuffle("x")[["x"]]
+    df2 = df.shuffle(["x", "y"])[["x", "y"]]
 
-    assert df2._partitioning(["x"])["columns"] == ("x",)
-    assert df2._partitioning(["x"])["how"] == ("hash", df.npartitions)
+    # We should have ["x", "y"] partitioning info
+    assert df2._partitioning(["x", "y"])["columns"] == ("x", "y")
+    assert df2._partitioning(["x", "y"])["how"] == ("hash", df.npartitions)
+
+    # We should not have partitioning info for ["x"],
+    # because we are only guarenteed to have unique
+    # ["x", "y"] combinations in each partition
+    assert df2._partitioning(["x"]) == {}
