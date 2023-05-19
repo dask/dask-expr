@@ -7,6 +7,7 @@ from dask.dataframe.core import (
     idxmaxmin_chunk,
     idxmaxmin_combine,
     is_dataframe_like,
+    is_index_like,
     is_series_like,
     make_meta,
     meta_nonempty,
@@ -408,12 +409,6 @@ class Mode(ApplyConcatApply):
         return {"dropna": self.dropna}
 
 
-class MemoryUsage(Reduction):
-    _parameters = ["frame", "deep", "index"]
-    _defaults = {"deep": False, "index": True}
-    pass
-
-
 class ValueCounts(Reduction):
     _defaults = {
         "sort": None,
@@ -447,3 +442,26 @@ class ValueCounts(Reduction):
     def _simplify_up(self, parent):
         # We are already a Series
         return
+
+
+class MemoryUsage(Reduction):
+    _parameters = ["frame", "deep", "_index"]
+    _defaults = {"deep": False, "_index": True}
+    reduction_chunk = M.memory_usage
+    reduction_combine = staticmethod(
+        lambda x, is_dataframe: x.groupby(x.index).sum() if is_dataframe else x.sum()
+    )
+    reduction_aggregate = M.sum
+
+    def _index_kwargs(self):
+        if is_index_like(self.frame._meta):
+            return {}
+        return {"index": self._index}
+
+    @property
+    def chunk_kwargs(self):
+        return {"deep": self.deep, **self._index_kwargs()}
+
+    @property
+    def combine_kwargs(self):
+        return {"is_dataframe": is_dataframe_like(self.frame._meta)}

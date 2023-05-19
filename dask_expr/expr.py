@@ -407,7 +407,7 @@ class Expr:
             return MemoryUsage(self, deep=deep)
         if index is no_default:
             index = True
-        return MemoryUsage(self, deep=deep, index=index)
+        return MemoryUsage(self, deep=deep, _index=index)
 
     def min(self, skipna=True, numeric_only=False, min_count=0):
         return Min(self, skipna, numeric_only, min_count)
