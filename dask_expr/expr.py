@@ -404,6 +404,23 @@ class Expr:
     def count(self, numeric_only=False):
         return Count(self, numeric_only)
 
+    def unique(self):
+        # let pandas raise errors, e.g. not defined on DataFrame
+        if (
+            is_dataframe_like(self.frame)
+            or isinstance(self.frame, Expr)
+            and is_dataframe_like(self._meta)
+        ):
+            raise NotImplementedError("unique is not implemented on DataFrame")
+        return Unique(self)
+
+    def drop_duplicates(self, subset=None, ignore_index=False):
+        if subset is not None:
+            # Fail early if subset is not valid
+            meta_nonempty(self._meta).drop_duplicates(subset=subset)
+
+        return DropDuplicates(self, subset=subset, ignore_index=ignore_index)
+
     def astype(self, dtypes):
         return AsType(self, dtypes)
 
@@ -1382,6 +1399,7 @@ from dask_expr.reductions import (
     All,
     Any,
     Count,
+    DropDuplicates,
     IdxMax,
     IdxMin,
     Max,
@@ -1394,5 +1412,6 @@ from dask_expr.reductions import (
     Prod,
     Size,
     Sum,
+    Unique,
     ValueCounts,
 )
