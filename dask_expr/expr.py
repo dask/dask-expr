@@ -394,7 +394,7 @@ class Expr:
         return Mode(self, dropna=dropna)
 
     def value_counts(self, sort=None, ascending=False, dropna=True, normalize=False):
-        if is_dataframe_like(self.frame):
+        if is_dataframe_like(self._meta):
             raise NotImplementedError("value_counts not implemented for DataFrame")
         return ValueCounts(self, sort, ascending, dropna, normalize)
 
@@ -406,12 +406,7 @@ class Expr:
 
     def unique(self):
         # let pandas raise errors, e.g. not defined on DataFrame
-        if (
-            is_dataframe_like(self.frame)
-            or isinstance(self.frame, Expr)
-            and is_dataframe_like(self._meta)
-        ):
-            raise NotImplementedError("unique is not implemented on DataFrame")
+        self._meta.unique()
         return Unique(self)
 
     def drop_duplicates(self, subset=None, ignore_index=False):

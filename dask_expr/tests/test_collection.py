@@ -476,13 +476,8 @@ def test_drop_duplicates(df, pdf):
 
 def test_unique(df, pdf):
     with pytest.raises(
-        NotImplementedError, match="unique is not implemented on DataFrame"
+        AttributeError, match="'DataFrame' object has no attribute 'unique'"
     ):
-        df.unique()
-    with pytest.raises(
-        NotImplementedError, match="unique is not implemented on DataFrame"
-    ):
-        df = df.copy()  # intermediate op so that self.frame is not a pandas DataFrame
         df.unique()
 
     # pandas returns a numpy array while we return a Series/Index
