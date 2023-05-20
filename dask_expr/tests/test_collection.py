@@ -5,6 +5,7 @@ import dask
 import numpy as np
 import pandas as pd
 import pytest
+from dask.dataframe._compat import PANDAS_GT_210
 from dask.dataframe.utils import assert_eq
 from dask.utils import M
 
@@ -162,6 +163,14 @@ def test_and_or(func, pdf, df):
     [
         lambda df: df.astype(int),
         lambda df: df.apply(lambda row, x, y=10: row * x + y, x=2),
+        pytest.param(
+            lambda df: df.map(lambda x: x + 1),
+            marks=pytest.mark.skipif(
+                not PANDAS_GT_210, reason="Only available from 2.1"
+            ),
+        ),
+        lambda df: df.x.map(lambda x: x + 1),
+        lambda df: df.index.map(lambda x: x + 1),
         lambda df: df[df.x > 5],
         lambda df: df.assign(a=df.x + df.y, b=df.x - df.y),
         lambda df: df.isna(),
