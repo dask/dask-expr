@@ -369,6 +369,12 @@ class Mode(ApplyConcatApply):
 
 
 class ReductionConstantDim(Reduction):
+    """
+    Some reductions reduce the number of rows in your object but keep the original
+    dimension, e.g. a DataFrame stays a DataFrame instead of getting reduced to
+    a Series.
+    """
+
     @classmethod
     def chunk(cls, df, **kwargs):
         return cls.reduction_chunk(df, **kwargs)
