@@ -17,7 +17,13 @@ from tlz import first
 from dask_expr import expr
 from dask_expr.expr import no_default
 from dask_expr.merge import Merge
-from dask_expr.reductions import MemoryUsageFrame, MemoryUsageIndex
+from dask_expr.reductions import (
+    MemoryUsageFrame,
+    MemoryUsageIndex,
+    NLargest,
+    NSmallest,
+    ValueCounts,
+)
 from dask_expr.repartition import Repartition
 
 #
@@ -486,6 +492,12 @@ class DataFrame(FrameBase):
     def __repr__(self):
         return f"<dask_expr.expr.DataFrame: expr={self.expr}>"
 
+    def nlargest(self, n=5, columns=None):
+        return new_collection(NLargest(self.expr, n=n, _columns=columns))
+
+    def nsmallest(self, n=5, columns=None):
+        return new_collection(NSmallest(self.expr, n=n, _columns=columns))
+
     def memory_usage(self, deep=False, index=True):
         return new_collection(MemoryUsageFrame(self.expr, deep=deep, _index=index))
 
@@ -506,6 +518,17 @@ class Series(FrameBase):
 
     def __repr__(self):
         return f"<dask_expr.expr.Series: expr={self.expr}>"
+
+    def value_counts(self, sort=None, ascending=False, dropna=True, normalize=False):
+        return new_collection(
+            ValueCounts(self.expr, sort, ascending, dropna, normalize)
+        )
+
+    def nlargest(self, n=5):
+        return new_collection(NLargest(self.expr, n=n))
+
+    def nsmallest(self, n=5):
+        return new_collection(NSmallest(self.expr, n=n))
 
     def memory_usage(self, deep=False, index=True):
         return new_collection(MemoryUsageFrame(self.expr, deep=deep, _index=index))
