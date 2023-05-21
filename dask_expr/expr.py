@@ -790,7 +790,7 @@ class Round(Elemwise):
     operation = M.round
 
 
-class Abs(Blockwise):
+class Abs(Elemwise):
     _parameters = ["frame"]
     operation = M.abs
 
