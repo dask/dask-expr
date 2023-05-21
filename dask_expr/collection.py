@@ -24,8 +24,8 @@ from dask_expr.reductions import (
     MemoryUsageIndex,
     NLargest,
     NSmallest,
-    ValueCounts,
     Unique,
+    ValueCounts,
 )
 from dask_expr.repartition import Repartition
 
