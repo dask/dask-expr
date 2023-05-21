@@ -620,12 +620,14 @@ class Blockwise(Expr):
     """
 
     operation = None
+    _keyword_arguments = []
 
     @functools.cached_property
     def _meta(self):
-        return self.operation(
-            *[arg._meta if isinstance(arg, Expr) else arg for arg in self.operands]
+        args, kwargs = self._get_args_kwargs_from_operands(
+            lambda x: x._meta if isinstance(x, Expr) else x
         )
+        return self.operation(*args, **kwargs)
 
     @property
     def _kwargs(self):
@@ -679,11 +681,28 @@ class Blockwise(Expr):
         -------
         task: tuple
         """
-        args = tuple(self._blockwise_arg(op, index) for op in self.operands)
-        if self._kwargs:
-            return (apply, self.operation, args, self._kwargs)
+        args, kwargs = self._get_args_kwargs_from_operands(
+            lambda x: self._blockwise_arg(x, index)
+        )
+        if self._kwargs or kwargs:
+            return (
+                apply,
+                self.operation,
+                (tuple, list(args)),
+                {**self._kwargs, **kwargs},
+            )
         else:
             return (self.operation,) + args
+
+    def _get_args_kwargs_from_operands(self, op_func) -> tuple[tuple, dict]:
+        args, kwargs = [], {}
+        for i, op in enumerate(self.operands):
+            if self._parameters[i] in self._keyword_arguments:
+                kwargs.update({self._parameters[i]: op_func(op)})
+            else:
+                args.append(op_func(op))
+        kwargs = {key: val for key, val in kwargs.items() if val is not no_default}
+        return tuple(args), kwargs
 
 
 class MapPartitions(Blockwise):
@@ -748,6 +767,18 @@ class MapPartitions(Blockwise):
                 args,
                 self.kwargs,
             )
+
+
+class DropnaSeries(Blockwise):
+    _parameters = ["frame"]
+    operation = M.dropna
+
+
+class DropnaFrame(Blockwise):
+    _parameters = ["frame", "how", "subset", "thresh"]
+    _defaults = {"how": no_default, "subset": None, "thresh": no_default}
+    _keyword_arguments = ["how", "subset", "thresh"]
+    operation = M.dropna
 
 
 class Elemwise(Blockwise):
