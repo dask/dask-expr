@@ -17,6 +17,7 @@ from tlz import first
 from dask_expr import expr
 from dask_expr.expr import no_default
 from dask_expr.merge import Merge
+from dask_expr.reductions import MemoryUsageFrame, MemoryUsageIndex
 from dask_expr.repartition import Repartition
 
 #
@@ -479,8 +480,14 @@ class DataFrame(FrameBase):
                 # Fall back to `BaseFrame.__getattr__`
                 return super().__getattr__(key)
 
+    def map(self, func, na_action=None):
+        return new_collection(expr.Map(self.expr, arg=func, na_action=na_action))
+
     def __repr__(self):
         return f"<dask_expr.expr.DataFrame: expr={self.expr}>"
+
+    def memory_usage(self, deep=False, index=True):
+        return new_collection(MemoryUsageFrame(self.expr, deep=deep, _index=index))
 
 
 class Series(FrameBase):
@@ -494,8 +501,14 @@ class Series(FrameBase):
     def nbytes(self):
         return new_collection(self.expr.nbytes)
 
+    def map(self, arg, na_action=None):
+        return new_collection(expr.Map(self.expr, arg=arg, na_action=na_action))
+
     def __repr__(self):
         return f"<dask_expr.expr.Series: expr={self.expr}>"
+
+    def memory_usage(self, deep=False, index=True):
+        return new_collection(MemoryUsageFrame(self.expr, deep=deep, _index=index))
 
 
 class Index(Series):
@@ -503,6 +516,9 @@ class Index(Series):
 
     def __repr__(self):
         return f"<dask_expr.expr.Index: expr={self.expr}>"
+
+    def memory_usage(self, deep=False):
+        return new_collection(MemoryUsageIndex(self.expr, deep=deep))
 
 
 class Scalar(FrameBase):

@@ -419,8 +419,14 @@ class Expr:
     def astype(self, dtypes):
         return AsType(self, dtypes)
 
+    def to_timestamp(self, freq=None, how="start"):
+        return ToTimestamp(self, freq=freq, how=how)
+
     def isna(self):
         return IsNa(self)
+
+    def round(self, decimals=0):
+        return Round(self, decimals=decimals)
 
     def apply(self, function, *args, **kwargs):
         return Apply(self, function, args, kwargs)
@@ -780,6 +786,17 @@ class Elemwise(Blockwise):
     pass
 
 
+class ToTimestamp(Elemwise):
+    _parameters = ["frame", "freq", "how"]
+    _defaults = {"freq": None, "how": "start"}
+    operation = M.to_timestamp
+
+    def _divisions(self):
+        return tuple(
+            pd.Index(self.frame.divisions).to_timestamp(freq=self.freq, how=self.how)
+        )
+
+
 class AsType(Elemwise):
     """A good example of writing a trivial blockwise operation"""
 
@@ -790,6 +807,11 @@ class AsType(Elemwise):
 class IsNa(Elemwise):
     _parameters = ["frame"]
     operation = M.isna
+
+
+class Round(Elemwise):
+    _parameters = ["frame", "decimals"]
+    operation = M.round
 
 
 class Apply(Elemwise):
@@ -814,6 +836,23 @@ class Apply(Elemwise):
             + list(self.args),
             self.kwargs,
         )
+
+
+class Map(Elemwise):
+    _parameters = ["frame", "arg", "na_action"]
+    _defaults = {"na_action": None}
+    operation = M.map
+
+    @property
+    def _meta(self):
+        return self.frame._meta
+
+    def _divisions(self):
+        if is_index_like(self.frame._meta):
+            # Implement this consistently with dask.dataframe, e.g. add option to
+            # control monotonic map func
+            return (None,) * len(self.frame.divisions)
+        return super()._divisions()
 
 
 class Assign(Elemwise):

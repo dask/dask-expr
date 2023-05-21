@@ -6,6 +6,7 @@ import dask
 import numpy as np
 import pandas as pd
 import pytest
+from dask.dataframe._compat import PANDAS_GT_210
 from dask.dataframe.utils import assert_eq
 from dask.utils import M
 
@@ -121,6 +122,20 @@ def test_value_counts(df, pdf):
     assert_eq(df.x.value_counts(), pdf.x.value_counts())
 
 
+def test_memory_usage(pdf):
+    # Results are not equal with RangeIndex because pandas has one RangeIndex while
+    # we have one RangeIndex per partition
+    pdf.index = np.arange(len(pdf))
+    df = from_pandas(pdf)
+    assert_eq(df.memory_usage(), pdf.memory_usage())
+    assert_eq(df.memory_usage(index=False), pdf.memory_usage(index=False))
+    assert_eq(df.x.memory_usage(), pdf.x.memory_usage())
+    assert_eq(df.x.memory_usage(index=False), pdf.x.memory_usage(index=False))
+    assert_eq(df.index.memory_usage(), pdf.index.memory_usage())
+    with pytest.raises(TypeError, match="got an unexpected keyword"):
+        df.index.memory_usage(index=True)
+
+
 @pytest.mark.parametrize("func", [M.nlargest, M.nsmallest])
 def test_nlargest_nsmallest(df, pdf, func):
     assert_eq(func(df, n=5, columns="x"), func(pdf, n=5, columns="x"))
@@ -158,11 +173,27 @@ def test_and_or(func, pdf, df):
     assert_eq(func(pdf), func(df), check_names=False)
 
 
+@pytest.mark.parametrize("how", ["start", "end"])
+def test_to_timestamp(pdf, how):
+    pdf.index = pd.period_range("2019-12-31", freq="D", periods=len(pdf))
+    df = from_pandas(pdf)
+    assert_eq(df.to_timestamp(how=how), pdf.to_timestamp(how=how))
+    assert_eq(df.x.to_timestamp(how=how), pdf.x.to_timestamp(how=how))
+
+
 @pytest.mark.parametrize(
     "func",
     [
         lambda df: df.astype(int),
         lambda df: df.apply(lambda row, x, y=10: row * x + y, x=2),
+        pytest.param(
+            lambda df: df.map(lambda x: x + 1),
+            marks=pytest.mark.skipif(
+                not PANDAS_GT_210, reason="Only available from 2.1"
+            ),
+        ),
+        lambda df: df.x.map(lambda x: x + 1),
+        lambda df: df.index.map(lambda x: x + 1),
         lambda df: df[df.x > 5],
         lambda df: df.assign(a=df.x + df.y, b=df.x - df.y),
         lambda df: df.isna(),
@@ -171,6 +202,13 @@ def test_and_or(func, pdf, df):
 )
 def test_blockwise(func, pdf, df):
     assert_eq(func(pdf), func(df))
+
+
+def test_round(pdf):
+    pdf += 0.5555
+    df = from_pandas(pdf)
+    assert_eq(df.round(decimals=1), pdf.round(decimals=1))
+    assert_eq(df.x.round(decimals=1), pdf.x.round(decimals=1))
 
 
 def test_repr(df):
