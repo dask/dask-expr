@@ -506,6 +506,8 @@ class DataFrame(FrameBase):
 
     def drop_duplicates(self, subset=None, ignore_index=False):
         # Fail early if subset is not valid, e.g. missing columns
+        if not isinstance(subset, list) and not hasattr(subset, "dtype"):
+            subset = [subset]
         meta_nonempty(self._meta).drop_duplicates(subset=subset)
         return new_collection(
             DropDuplicates(self.expr, subset=subset, ignore_index=ignore_index)
