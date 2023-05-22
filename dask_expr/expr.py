@@ -624,14 +624,27 @@ class Blockwise(Expr):
 
     @functools.cached_property
     def _meta(self):
-        args, kwargs = self._get_args_kwargs_from_operands(
-            lambda x: x._meta if isinstance(x, Expr) else x
-        )
+        func = lambda x: x._meta if isinstance(x, Expr) else x
+        args = [func(op) for op in self._args]
+        kwargs = {key: func(op) for key, op in self._kwargs}
         return self.operation(*args, **kwargs)
 
-    @property
-    def _kwargs(self):
+    @functools.cached_property
+    def _kwargs(self) -> dict:
+        if self._keyword_only:
+            return {
+                p: self.operand(p) for p in self._parameters if p in self._keyword_only
+            }
         return {}
+
+    @functools.cached_property
+    def _args(self) -> list:
+        if self._keyword_only:
+            args = [
+                self.operand(p) for p in self._parameters if p not in self._keyword_only
+            ] + self.operands[len(self._parameters) :]
+            return args
+        return self.operands
 
     def _broadcast_dep(self, dep: Expr):
         # Checks if a dependency should be broadcasted to
@@ -681,10 +694,9 @@ class Blockwise(Expr):
         -------
         task: tuple
         """
-        args, kwargs = self._get_args_kwargs_from_operands(
-            lambda x: self._blockwise_arg(x, index)
-        )
-        if self._kwargs or kwargs:
+        args = [self._blockwise_arg(op, index) for op in self._args]
+        kwargs = {key: self._blockwise_arg(op, index) for key, op in self._kwargs}
+        if kwargs:
             return (
                 apply,
                 self.operation,
@@ -693,16 +705,6 @@ class Blockwise(Expr):
             )
         else:
             return (self.operation,) + args
-
-    def _get_args_kwargs_from_operands(self, op_func) -> tuple[tuple, dict]:
-        args, kwargs = [], {}
-        for i, op in enumerate(self.operands):
-            if self._parameters[i] in self._keyword_arguments:
-                kwargs.update({self._parameters[i]: op_func(op)})
-            else:
-                args.append(op_func(op))
-        kwargs = {key: val for key, val in kwargs.items() if val is not no_default}
-        return tuple(args), kwargs
 
 
 class MapPartitions(Blockwise):
