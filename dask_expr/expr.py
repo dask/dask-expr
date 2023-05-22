@@ -620,20 +620,22 @@ class Blockwise(Expr):
     """
 
     operation = None
-    _keyword_arguments = []
+    _keyword_only = []
 
     @functools.cached_property
     def _meta(self):
         func = lambda x: x._meta if isinstance(x, Expr) else x
         args = [func(op) for op in self._args]
-        kwargs = {key: func(op) for key, op in self._kwargs}
+        kwargs = {key: func(op) for key, op in self._kwargs.items()}
         return self.operation(*args, **kwargs)
 
     @functools.cached_property
     def _kwargs(self) -> dict:
         if self._keyword_only:
             return {
-                p: self.operand(p) for p in self._parameters if p in self._keyword_only
+                p: self.operand(p)
+                for p in self._parameters
+                if p in self._keyword_only and self.operand(p) is not no_default
             }
         return {}
 
@@ -695,7 +697,9 @@ class Blockwise(Expr):
         task: tuple
         """
         args = [self._blockwise_arg(op, index) for op in self._args]
-        kwargs = {key: self._blockwise_arg(op, index) for key, op in self._kwargs}
+        kwargs = {
+            key: self._blockwise_arg(op, index) for key, op in self._kwargs.items()
+        }
         if kwargs:
             return (
                 apply,
@@ -704,7 +708,7 @@ class Blockwise(Expr):
                 {**self._kwargs, **kwargs},
             )
         else:
-            return (self.operation,) + args
+            return (self.operation,) + tuple(args)
 
 
 class MapPartitions(Blockwise):
@@ -779,7 +783,7 @@ class DropnaSeries(Blockwise):
 class DropnaFrame(Blockwise):
     _parameters = ["frame", "how", "subset", "thresh"]
     _defaults = {"how": no_default, "subset": None, "thresh": no_default}
-    _keyword_arguments = ["how", "subset", "thresh"]
+    _keyword_only = ["how", "subset", "thresh"]
     operation = M.dropna
 
 
