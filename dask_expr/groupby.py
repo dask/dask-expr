@@ -285,9 +285,10 @@ class GroupBy:
         sort=None,
         observed=None,
         dropna=None,
+        slice=None,
     ):
         self.by = [by] if np.isscalar(by) else list(by)
-        self.obj = obj
+        self.obj = obj[["a", "bb"]]
         self.sort = sort
         self.observed = observed
         self.dropna = dropna

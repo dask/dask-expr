@@ -232,6 +232,17 @@ def test_columns_traverse_filters(pdf, df):
     assert str(result) == str(expected)
 
 
+@pytest.mark.parametrize("projection", ["y", ["y"], ["y", "x"]])
+@pytest.mark.parametrize("subset", ["x", ["x"]])
+def test_drop_duplicates_subset_optimizing(pdf, subset, projection):
+    pdf["z"] = 1
+    df = from_pandas(pdf)
+    result = optimize(df.drop_duplicates(subset=subset)[projection], fuse=False)
+    expected = df[["x", "y"]].drop_duplicates(subset=subset)[projection]
+
+    assert str(result) == str(expected)
+
+
 def test_broadcast(pdf, df):
     assert_eq(
         df + df.sum(),
