@@ -53,7 +53,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         "categories": None,
         "index": None,
         "storage_options": None,
-        "calculate_divisions": True,
+        "calculate_divisions": False,
         "ignore_metadata_file": False,
         "metadata_task_size": None,
         "split_row_groups": "infer",
