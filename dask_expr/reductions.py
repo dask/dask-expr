@@ -178,9 +178,11 @@ class DropDuplicates(Unique):
     def _simplify_up(self, parent):
         if self.subset is not None and isinstance(parent, Projection):
             columns = parent.operand("columns")
-            if isinstance(columns, str):
+            if not isinstance(columns, list) and not hasattr(columns, "dtype"):
                 columns = [columns]
-            subset = self.subset if isinstance(self.subset, list) else [self.subset]
+            subset = self.subset
+            if not isinstance(subset, list) and not hasattr(subset, "dtype"):
+                subset = [subset]
             columns = set(columns).union(subset)
             if columns == set(self.frame.columns):
                 # Don't add unnecessary Projections, protects against loops
