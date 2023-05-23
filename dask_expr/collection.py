@@ -10,6 +10,7 @@ from dask.dataframe.core import (
     is_index_like,
     is_series_like,
 )
+from dask.dataframe.dispatch import meta_nonempty
 from dask.utils import IndexCallable
 from fsspec.utils import stringify_path
 from tlz import first
@@ -17,7 +18,16 @@ from tlz import first
 from dask_expr import expr
 from dask_expr.expr import no_default
 from dask_expr.merge import Merge
-from dask_expr.reductions import Len
+from dask_expr.reductions import (
+    DropDuplicates,
+    Len,
+    MemoryUsageFrame,
+    MemoryUsageIndex,
+    NLargest,
+    NSmallest,
+    Unique,
+    ValueCounts,
+)
 from dask_expr.repartition import Repartition
 
 #
@@ -487,8 +497,36 @@ class DataFrame(FrameBase):
                 # Fall back to `BaseFrame.__getattr__`
                 return super().__getattr__(key)
 
+    def map(self, func, na_action=None):
+        return new_collection(expr.Map(self.expr, arg=func, na_action=na_action))
+
     def __repr__(self):
         return f"<dask_expr.expr.DataFrame: expr={self.expr}>"
+
+    def nlargest(self, n=5, columns=None):
+        return new_collection(NLargest(self.expr, n=n, _columns=columns))
+
+    def nsmallest(self, n=5, columns=None):
+        return new_collection(NSmallest(self.expr, n=n, _columns=columns))
+
+    def memory_usage(self, deep=False, index=True):
+        return new_collection(MemoryUsageFrame(self.expr, deep=deep, _index=index))
+
+    def drop_duplicates(self, subset=None, ignore_index=False):
+        # Fail early if subset is not valid, e.g. missing columns
+        meta_nonempty(self._meta).drop_duplicates(subset=subset)
+        return new_collection(
+            DropDuplicates(self.expr, subset=subset, ignore_index=ignore_index)
+        )
+
+    def dropna(self, how=no_default, subset=None, thresh=no_default):
+        if how is not no_default and thresh is not no_default:
+            raise TypeError(
+                "You cannot set both the how and thresh arguments at the same time."
+            )
+        return new_collection(
+            expr.DropnaFrame(self.expr, how=how, subset=subset, thresh=thresh)
+        )
 
 
 class Series(FrameBase):
@@ -502,8 +540,34 @@ class Series(FrameBase):
     def nbytes(self):
         return new_collection(self.expr.nbytes)
 
+    def map(self, arg, na_action=None):
+        return new_collection(expr.Map(self.expr, arg=arg, na_action=na_action))
+
     def __repr__(self):
         return f"<dask_expr.expr.Series: expr={self.expr}>"
+
+    def value_counts(self, sort=None, ascending=False, dropna=True, normalize=False):
+        return new_collection(
+            ValueCounts(self.expr, sort, ascending, dropna, normalize)
+        )
+
+    def nlargest(self, n=5):
+        return new_collection(NLargest(self.expr, n=n))
+
+    def nsmallest(self, n=5):
+        return new_collection(NSmallest(self.expr, n=n))
+
+    def memory_usage(self, deep=False, index=True):
+        return new_collection(MemoryUsageFrame(self.expr, deep=deep, _index=index))
+
+    def unique(self):
+        return new_collection(Unique(self.expr))
+
+    def drop_duplicates(self, ignore_index=False):
+        return new_collection(DropDuplicates(self.expr, ignore_index=ignore_index))
+
+    def dropna(self):
+        return new_collection(expr.DropnaSeries(self.expr))
 
 
 class Index(Series):
@@ -511,6 +575,9 @@ class Index(Series):
 
     def __repr__(self):
         return f"<dask_expr.expr.Index: expr={self.expr}>"
+
+    def memory_usage(self, deep=False):
+        return new_collection(MemoryUsageIndex(self.expr, deep=deep))
 
 
 class Scalar(FrameBase):

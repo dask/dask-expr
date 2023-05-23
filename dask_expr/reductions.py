@@ -118,6 +118,67 @@ class ApplyConcatApply(Expr):
         return (None, None)
 
 
+class Unique(ApplyConcatApply):
+    _parameters = ["frame"]
+    chunk = staticmethod(lambda x, **kwargs: methods.unique(x, **kwargs))
+    aggregate_func = methods.unique
+
+    @property
+    def _meta(self):
+        return self.chunk(
+            meta_nonempty(self.frame._meta), series_name=self.frame._meta.name
+        )
+
+    @property
+    def chunk_kwargs(self):
+        return {"series_name": self._meta.name}
+
+    @property
+    def aggregate_kwargs(self):
+        return self.chunk_kwargs
+
+    @classmethod
+    def combine(cls, inputs: list, **kwargs):
+        return _concat(inputs)
+
+    @classmethod
+    def aggregate(cls, inputs: list, **kwargs):
+        df = _concat(inputs)
+        return cls.aggregate_func(df, **kwargs)
+
+    def _simplify_up(self, parent):
+        return
+
+    def __dask_postcompute__(self):
+        return _concat, ()
+
+    def _divisions(self):
+        return [None, None]
+
+
+class DropDuplicates(Unique):
+    _parameters = ["frame", "subset", "ignore_index"]
+    _defaults = {"subset": None, "ignore_index": False}
+    chunk = M.drop_duplicates
+    aggregate_func = M.drop_duplicates
+
+    @property
+    def _meta(self):
+        return self.chunk(meta_nonempty(self.frame._meta), **self.chunk_kwargs)
+
+    def _subset_kwargs(self):
+        if is_series_like(self.frame._meta):
+            return {}
+        return {"subset": self.subset}
+
+    @property
+    def chunk_kwargs(self):
+        return {"ignore_index": self.ignore_index, **self._subset_kwargs()}
+
+    def _simplify_up(self, parent):
+        return
+
+
 class Reduction(ApplyConcatApply):
     """A common pattern of apply concat apply
 
@@ -268,46 +329,6 @@ class IdxMax(IdxMin):
     _fn = "idxmax"
 
 
-class NLargest(Reduction):
-    _defaults = {"n": 5, "_columns": None}
-    _parameters = ["frame", "n", "_columns"]
-    reduction_chunk = M.nlargest
-    reduction_aggregate = M.nlargest
-
-    @classmethod
-    def chunk(cls, df, **kwargs):
-        return cls.reduction_chunk(df, **kwargs)
-
-    @classmethod
-    def combine(cls, inputs: list, **kwargs):
-        func = cls.reduction_combine or cls.reduction_aggregate or cls.reduction_chunk
-        df = _concat(inputs)
-        return func(df, **kwargs)
-
-    def _columns_kwarg(self):
-        if self._columns is None:
-            return {}
-        return {"columns": self._columns}
-
-    @property
-    def chunk_kwargs(self):
-        return {"n": self.n, **self._columns_kwarg()}
-
-    @property
-    def combine_kwargs(self):
-        return self.chunk_kwargs
-
-    @property
-    def aggregate_kwargs(self):
-        return self.chunk_kwargs
-
-
-class NSmallest(NLargest):
-    _parameters = ["frame", "n", "_columns"]
-    reduction_chunk = M.nsmallest
-    reduction_aggregate = M.nsmallest
-
-
 class Len(Reduction):
     reduction_chunk = staticmethod(len)
     reduction_aggregate = sum
@@ -410,7 +431,55 @@ class Mode(ApplyConcatApply):
         return {"dropna": self.dropna}
 
 
-class ValueCounts(Reduction):
+class ReductionConstantDim(Reduction):
+    """
+    Some reductions reduce the number of rows in your object but keep the original
+    dimension, e.g. a DataFrame stays a DataFrame instead of getting reduced to
+    a Series.
+    """
+
+    @classmethod
+    def chunk(cls, df, **kwargs):
+        return cls.reduction_chunk(df, **kwargs)
+
+    @classmethod
+    def combine(cls, inputs: list, **kwargs):
+        func = cls.reduction_combine or cls.reduction_aggregate or cls.reduction_chunk
+        df = _concat(inputs)
+        return func(df, **kwargs)
+
+
+class NLargest(ReductionConstantDim):
+    _defaults = {"n": 5, "_columns": None}
+    _parameters = ["frame", "n", "_columns"]
+    reduction_chunk = M.nlargest
+    reduction_aggregate = M.nlargest
+
+    def _columns_kwarg(self):
+        if self._columns is None:
+            return {}
+        return {"columns": self._columns}
+
+    @property
+    def chunk_kwargs(self):
+        return {"n": self.n, **self._columns_kwarg()}
+
+    @property
+    def combine_kwargs(self):
+        return self.chunk_kwargs
+
+    @property
+    def aggregate_kwargs(self):
+        return self.chunk_kwargs
+
+
+class NSmallest(NLargest):
+    _parameters = ["frame", "n", "_columns"]
+    reduction_chunk = M.nsmallest
+    reduction_aggregate = M.nsmallest
+
+
+class ValueCounts(ReductionConstantDim):
     _defaults = {
         "sort": None,
         "ascending": False,
@@ -423,15 +492,6 @@ class ValueCounts(Reduction):
     reduction_aggregate = methods.value_counts_aggregate
     reduction_combine = methods.value_counts_combine
 
-    @classmethod
-    def chunk(cls, df, **kwargs):
-        return cls.reduction_chunk(df, **kwargs)
-
-    @classmethod
-    def combine(cls, inputs: list, **kwargs):
-        df = _concat(inputs)
-        return cls.reduction_combine(df, **kwargs)
-
     @property
     def chunk_kwargs(self):
         return {"sort": self.sort, "ascending": self.ascending, "dropna": self.dropna}
@@ -443,3 +503,36 @@ class ValueCounts(Reduction):
     def _simplify_up(self, parent):
         # We are already a Series
         return
+
+
+class MemoryUsageIndex(Reduction):
+    _parameters = ["frame", "deep"]
+    _defaults = {"deep": False}
+    reduction_chunk = M.memory_usage
+    reduction_combine = M.sum
+    reduction_aggregate = M.sum
+
+    @property
+    def chunk_kwargs(self):
+        return {"deep": self.deep}
+
+
+class MemoryUsageFrame(Reduction):
+    _parameters = ["frame", "deep", "_index"]
+    _defaults = {"deep": False, "_index": True}
+    reduction_chunk = M.memory_usage
+    reduction_aggregate = M.sum
+
+    @property
+    def chunk_kwargs(self):
+        return {"deep": self.deep, "index": self._index}
+
+    @property
+    def combine_kwargs(self):
+        return {"is_dataframe": is_dataframe_like(self.frame._meta)}
+
+    @staticmethod
+    def reduction_combine(x, is_dataframe):
+        if is_dataframe:
+            return x.groupby(x.index).sum()
+        return x.sum()

@@ -1,10 +1,12 @@
 import operator
 import pickle
+import re
 
 import dask
 import numpy as np
 import pandas as pd
 import pytest
+from dask.dataframe._compat import PANDAS_GT_210
 from dask.dataframe.utils import assert_eq
 from dask.utils import M
 
@@ -115,16 +117,40 @@ def test_mode():
 
 
 def test_value_counts(df, pdf):
-    with pytest.raises(NotImplementedError, match="value_counts not implemented"):
+    with pytest.raises(
+        AttributeError, match="'DataFrame' object has no attribute 'value_counts'"
+    ):
         df.value_counts()
     assert_eq(df.x.value_counts(), pdf.x.value_counts())
+
+
+def test_dropna(pdf):
+    pdf.loc[0, "y"] = np.nan
+    df = from_pandas(pdf)
+    assert_eq(df.dropna(), pdf.dropna())
+    assert_eq(df.dropna(how="all"), pdf.dropna(how="all"))
+    assert_eq(df.y.dropna(), pdf.y.dropna())
+
+
+def test_memory_usage(pdf):
+    # Results are not equal with RangeIndex because pandas has one RangeIndex while
+    # we have one RangeIndex per partition
+    pdf.index = np.arange(len(pdf))
+    df = from_pandas(pdf)
+    assert_eq(df.memory_usage(), pdf.memory_usage())
+    assert_eq(df.memory_usage(index=False), pdf.memory_usage(index=False))
+    assert_eq(df.x.memory_usage(), pdf.x.memory_usage())
+    assert_eq(df.x.memory_usage(index=False), pdf.x.memory_usage(index=False))
+    assert_eq(df.index.memory_usage(), pdf.index.memory_usage())
+    with pytest.raises(TypeError, match="got an unexpected keyword"):
+        df.index.memory_usage(index=True)
 
 
 @pytest.mark.parametrize("func", [M.nlargest, M.nsmallest])
 def test_nlargest_nsmallest(df, pdf, func):
     assert_eq(func(df, n=5, columns="x"), func(pdf, n=5, columns="x"))
     assert_eq(func(df.x, n=5), func(pdf.x, n=5))
-    with pytest.raises(TypeError, match="columns not supported for Series"):
+    with pytest.raises(TypeError, match="got an unexpected keyword argument"):
         func(df.x, n=5, columns="foo")
 
 
@@ -157,19 +183,44 @@ def test_and_or(func, pdf, df):
     assert_eq(func(pdf), func(df), check_names=False)
 
 
+@pytest.mark.parametrize("how", ["start", "end"])
+def test_to_timestamp(pdf, how):
+    pdf.index = pd.period_range("2019-12-31", freq="D", periods=len(pdf))
+    df = from_pandas(pdf)
+    assert_eq(df.to_timestamp(how=how), pdf.to_timestamp(how=how))
+    assert_eq(df.x.to_timestamp(how=how), pdf.x.to_timestamp(how=how))
+
+
 @pytest.mark.parametrize(
     "func",
     [
         lambda df: df.astype(int),
         lambda df: df.apply(lambda row, x, y=10: row * x + y, x=2),
+        pytest.param(
+            lambda df: df.map(lambda x: x + 1),
+            marks=pytest.mark.skipif(
+                not PANDAS_GT_210, reason="Only available from 2.1"
+            ),
+        ),
+        lambda df: df.x.map(lambda x: x + 1),
+        lambda df: df.index.map(lambda x: x + 1),
         lambda df: df[df.x > 5],
         lambda df: df.assign(a=df.x + df.y, b=df.x - df.y),
         lambda df: df.isna(),
         lambda df: df.x.isna(),
+        lambda df: df.abs(),
+        lambda df: df.x.abs(),
     ],
 )
 def test_blockwise(func, pdf, df):
     assert_eq(func(pdf), func(df))
+
+
+def test_round(pdf):
+    pdf += 0.5555
+    df = from_pandas(pdf)
+    assert_eq(df.round(decimals=1), pdf.round(decimals=1))
+    assert_eq(df.x.round(decimals=1), pdf.x.round(decimals=1))
 
 
 def test_repr(df):
@@ -471,3 +522,29 @@ def test_lengths(df, pdf):
     assert sum(df2._lengths) == len(pdf)
     assert df[df.x > 5]._lengths is None
     assert sum(df2.partitions[0]._lengths) == len(df2.partitions[0])
+
+
+def test_drop_duplicates(df, pdf):
+    assert_eq(df.drop_duplicates(), pdf.drop_duplicates())
+    assert_eq(
+        df.drop_duplicates(ignore_index=True), pdf.drop_duplicates(ignore_index=True)
+    )
+    assert_eq(df.drop_duplicates(subset=["x"]), pdf.drop_duplicates(subset=["x"]))
+    assert_eq(df.x.drop_duplicates(), pdf.x.drop_duplicates())
+
+    with pytest.raises(KeyError, match=re.escape("Index(['a'], dtype='object')")):
+        df.drop_duplicates(subset=["a"])
+
+    with pytest.raises(TypeError, match="got an unexpected keyword argument"):
+        df.x.drop_duplicates(subset=["a"])
+
+
+def test_unique(df, pdf):
+    with pytest.raises(
+        AttributeError, match="'DataFrame' object has no attribute 'unique'"
+    ):
+        df.unique()
+
+    # pandas returns a numpy array while we return a Series/Index
+    assert_eq(df.x.unique(), pd.Series(pdf.x.unique(), name="x"))
+    assert_eq(df.index.unique(), pd.Index(pdf.index.unique()))

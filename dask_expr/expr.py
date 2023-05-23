@@ -382,23 +382,8 @@ class Expr:
     def idxmax(self, skipna=True, numeric_only=False):
         return IdxMax(self, skipna=skipna, numeric_only=numeric_only)
 
-    def nlargest(self, n=5, columns=None):
-        if columns is not None and is_series_like(self._meta):
-            raise TypeError("columns not supported for Series")
-        return NLargest(self, n=n, _columns=columns)
-
-    def nsmallest(self, n=5, columns=None):
-        if columns is not None and is_series_like(self._meta):
-            raise TypeError("columns not supported for Series")
-        return NSmallest(self, n=n, _columns=columns)
-
     def mode(self, dropna=True):
         return Mode(self, dropna=dropna)
-
-    def value_counts(self, sort=None, ascending=False, dropna=True, normalize=False):
-        if is_dataframe_like(self.frame):
-            raise NotImplementedError("value_counts not implemented for DataFrame")
-        return ValueCounts(self, sort, ascending, dropna, normalize)
 
     def min(self, skipna=True, numeric_only=False, min_count=0):
         return Min(self, skipna, numeric_only, min_count)
@@ -406,11 +391,20 @@ class Expr:
     def count(self, numeric_only=False):
         return Count(self, numeric_only)
 
+    def abs(self):
+        return Abs(self)
+
     def astype(self, dtypes):
         return AsType(self, dtypes)
 
+    def to_timestamp(self, freq=None, how="start"):
+        return ToTimestamp(self, freq=freq, how=how)
+
     def isna(self):
         return IsNa(self)
+
+    def round(self, decimals=0):
+        return Round(self, decimals=decimals)
 
     def apply(self, function, *args, **kwargs):
         return Apply(self, function, args, kwargs)
@@ -686,16 +680,31 @@ class Blockwise(Expr):
     """
 
     operation = None
+    _keyword_only = []
 
     @functools.cached_property
     def _meta(self):
-        return self.operation(
-            *[arg._meta if isinstance(arg, Expr) else arg for arg in self.operands]
-        )
+        args = [op._meta if isinstance(op, Expr) else op for op in self._args]
+        return self.operation(*args, **self._kwargs)
 
-    @property
-    def _kwargs(self):
+    @functools.cached_property
+    def _kwargs(self) -> dict:
+        if self._keyword_only:
+            return {
+                p: self.operand(p)
+                for p in self._parameters
+                if p in self._keyword_only and self.operand(p) is not no_default
+            }
         return {}
+
+    @functools.cached_property
+    def _args(self) -> list:
+        if self._keyword_only:
+            args = [
+                self.operand(p) for p in self._parameters if p not in self._keyword_only
+            ] + self.operands[len(self._parameters) :]
+            return args
+        return self.operands
 
     def _broadcast_dep(self, dep: Expr):
         # Checks if a dependency should be broadcasted to
@@ -745,11 +754,11 @@ class Blockwise(Expr):
         -------
         task: tuple
         """
-        args = tuple(self._blockwise_arg(op, index) for op in self.operands)
+        args = [self._blockwise_arg(op, index) for op in self._args]
         if self._kwargs:
-            return (apply, self.operation, args, self._kwargs)
+            return apply, self.operation, args, self._kwargs
         else:
-            return (self.operation,) + args
+            return (self.operation,) + tuple(args)
 
 
 class MapPartitions(Blockwise):
@@ -816,6 +825,18 @@ class MapPartitions(Blockwise):
             )
 
 
+class DropnaSeries(Blockwise):
+    _parameters = ["frame"]
+    operation = M.dropna
+
+
+class DropnaFrame(Blockwise):
+    _parameters = ["frame", "how", "subset", "thresh"]
+    _defaults = {"how": no_default, "subset": None, "thresh": no_default}
+    _keyword_only = ["how", "subset", "thresh"]
+    operation = M.dropna
+
+
 class Elemwise(Blockwise):
     """
     This doesn't really do anything, but we anticipate that future
@@ -825,6 +846,17 @@ class Elemwise(Blockwise):
     @property
     def _lengths(self):
         return self.dependencies()[0]._lengths
+
+
+class ToTimestamp(Elemwise):
+    _parameters = ["frame", "freq", "how"]
+    _defaults = {"freq": None, "how": "start"}
+    operation = M.to_timestamp
+
+    def _divisions(self):
+        return tuple(
+            pd.Index(self.frame.divisions).to_timestamp(freq=self.freq, how=self.how)
+        )
 
 
 class AsType(Elemwise):
@@ -837,6 +869,16 @@ class AsType(Elemwise):
 class IsNa(Elemwise):
     _parameters = ["frame"]
     operation = M.isna
+
+
+class Round(Elemwise):
+    _parameters = ["frame", "decimals"]
+    operation = M.round
+
+
+class Abs(Elemwise):
+    _parameters = ["frame"]
+    operation = M.abs
 
 
 class Apply(Elemwise):
@@ -861,6 +903,23 @@ class Apply(Elemwise):
             + list(self.args),
             self.kwargs,
         )
+
+
+class Map(Elemwise):
+    _parameters = ["frame", "arg", "na_action"]
+    _defaults = {"na_action": None}
+    operation = M.map
+
+    @property
+    def _meta(self):
+        return self.frame._meta
+
+    def _divisions(self):
+        if is_index_like(self.frame._meta):
+            # Implement this consistently with dask.dataframe, e.g. add option to
+            # control monotonic map func
+            return (None,) * len(self.frame.divisions)
+        return super()._divisions()
 
 
 class Assign(Elemwise):
@@ -1457,10 +1516,7 @@ from dask_expr.reductions import (
     Min,
     Mode,
     NBytes,
-    NLargest,
-    NSmallest,
     Prod,
     Size,
     Sum,
-    ValueCounts,
 )
