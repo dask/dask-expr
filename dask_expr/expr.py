@@ -436,7 +436,7 @@ class Expr:
         try:
             return self._meta.columns
         except AttributeError:
-            return []
+            return pd.Index([])
 
     @property
     def dtypes(self):
