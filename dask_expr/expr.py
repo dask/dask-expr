@@ -624,10 +624,8 @@ class Blockwise(Expr):
 
     @functools.cached_property
     def _meta(self):
-        func = lambda x: x._meta if isinstance(x, Expr) else x
-        args = [func(op) for op in self._args]
-        kwargs = {key: func(op) for key, op in self._kwargs.items()}
-        return self.operation(*args, **kwargs)
+        args = [op._meta if isinstance(op, Expr) else op for op in self._args]
+        return self.operation(*args, **self._kwargs)
 
     @functools.cached_property
     def _kwargs(self) -> dict:
@@ -697,15 +695,12 @@ class Blockwise(Expr):
         task: tuple
         """
         args = [self._blockwise_arg(op, index) for op in self._args]
-        kwargs = {
-            key: self._blockwise_arg(op, index) for key, op in self._kwargs.items()
-        }
-        if kwargs:
+        if self._kwargs:
             return (
                 apply,
                 self.operation,
                 (tuple, list(args)),
-                {**self._kwargs, **kwargs},
+                self._kwargs,
             )
         else:
             return (self.operation,) + tuple(args)
