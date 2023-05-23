@@ -44,6 +44,7 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
 
     _parameters = ["frame", "npartitions", "sort", "_partitions"]
     _defaults = {"npartitions": 1, "sort": True, "_partitions": None}
+    _pd_length_stats = None
 
     @property
     def _meta(self):
@@ -69,12 +70,14 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
         return divisions, locations
 
     def _lengths(self, force: bool = False) -> tuple | None:
-        locations = self._locations()
-        return tuple(
-            offset - locations[i]
-            for i, offset in enumerate(locations[1:])
-            if not self._filtered or i in self._partitions
-        )
+        if self._pd_length_stats is None:
+            locations = self._locations()
+            self._pd_length_stats = tuple(
+                offset - locations[i]
+                for i, offset in enumerate(locations[1:])
+                if not self._filtered or i in self._partitions
+            )
+        return self._pd_length_stats
 
     def _divisions(self):
         return self._divisions_and_locations[0]
