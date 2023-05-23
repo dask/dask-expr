@@ -65,9 +65,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         "_partitions": None,
         "_series": False,
     }
-    _length_pq_stats = None
-    _min_pq_stats = None
-    _max_pq_stats = None
+    _pq_length_stats = None
 
     @property
     def engine(self):
@@ -245,30 +243,25 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
     def _lengths(self):
         """Return known partition lengths using parquet statistics"""
         if not self.filters:
-            _update_length_statistics(self)
-            return self._length_pq_stats
+            self._update_length_statistics()
+            return self._pq_length_stats
 
-    def _partitioning(self, columns: list):
-        """Return known partitioning details using parquet statistics"""
-        # Check if we can already use divisions
-        divisions_partitioning = super()._partitioning(columns)
-        if divisions_partitioning:
-            return divisions_partitioning
-        # TODO: Account for directory partitioning?
+    def _update_length_statistics(self):
+        """Ensure that partition-length statistics are up to date"""
 
-        # Use parquet statistics to check if we are ordered
-        # by the first column in `columns`
-        _update_column_statistics(self, columns)
-        column = columns[0]
-        if column in self._min_pq_stats and column in self._max_pq_stats:
-            ordering = _known_ordering(
-                self._min_pq_stats[column],
-                self._max_pq_stats[column],
-            )
-            if ordering:
-                return {"columns": (column,), "how": ordering}
-
-        return {}
+        if not self._pq_length_stats:
+            if self._plan["statistics"]:
+                # Already have statistics from original API call
+                self._pq_length_stats = tuple(
+                    stat["num-rows"]
+                    for i, stat in enumerate(self._plan["statistics"])
+                    if not self._filtered or i in self._partitions
+                )
+            else:
+                # Need to go back and collect statistics
+                self._pq_length_stats = tuple(
+                    stat["num-rows"] for stat in _collect_pq_statistics(self)
+                )
 
 
 #
@@ -464,103 +457,7 @@ class _DNF:
 #
 
 
-def _known_ordering(mins, maxes) -> tuple:
-    # Check for increasing order
-    divisions = [mins[0]]
-    for max_i, min_ip1 in zip(maxes[:-1], mins[1:]):
-        if max_i < min_ip1:
-            divisions.append(max_i)
-        else:
-            divisions = []
-            break
-    if divisions:
-        return "increasing", tuple(divisions + [maxes[-1]])
-
-    # Check for decreasing order
-    divisions = [maxes[0]]
-    for min_i, max_ip1 in zip(mins[:-1], maxes[1:]):
-        if min_i > max_ip1:
-            divisions.append(min_i)
-        else:
-            divisions = []
-            break
-    if divisions:
-        return "decreasing", tuple(divisions + [mins[-1]])
-
-
-def _update_length_statistics(expr: ReadParquet):
-    """Ensure that partition-length statistics are up to date"""
-
-    if not expr._length_pq_stats:
-        if expr._plan["statistics"]:
-            # Already have statistics from original API call
-            expr._length_pq_stats = tuple(
-                stat["num-rows"]
-                for i, stat in enumerate(expr._plan["statistics"])
-                if not expr._filtered or i in expr._partitions
-            )
-        else:
-            # Need to go back and collect statistics
-            expr._length_pq_stats = tuple(
-                stat["num-rows"] for stat in _collect_statistics(expr)
-            )
-
-
-def _update_column_statistics(expr: ReadParquet, columns: list | None = None):
-    """Ensure that min/max column statistics are up to date"""
-
-    def _record_column_statistics(all_stats, columns: list | None = None):
-        # Helper function to translate List[Dict] to Tuple or Dict
-        lengths = []
-        columns = columns or list(expr.columns)
-        column_mins = {}
-        column_maxes = {}
-        for stats in all_stats:
-            lengths.append(stats["num-rows"])
-            for col_stats in stats.get("columns", []):
-                name = col_stats.get("name")
-                if name in columns:
-                    # Min
-                    if name not in column_mins:
-                        column_mins[name] = []
-                    column_mins[name].append(col_stats.get("min"))
-                    # Max
-                    if name not in column_maxes:
-                        column_maxes[name] = []
-                    column_maxes[name].append(col_stats.get("max"))
-        return lengths, column_mins, column_maxes
-
-    # First, try to use the statistics we already have
-    expr._min_pq_stats = expr._min_pq_stats or {}
-    expr._max_pq_stats = expr._max_pq_stats or {}
-    if not expr._min_pq_stats and expr._plan["statistics"]:
-        stats = [
-            stat
-            for i, stat in enumerate(expr._plan["statistics"])
-            if not expr._filtered or i in expr._partitions
-        ]
-        lengths, column_mins, column_maxes = _record_column_statistics(stats)
-        if not expr._length_pq_stats:
-            expr._length_pq_stats = lengths
-        expr._min_pq_stats = column_mins
-        expr._max_pq_stats = column_maxes
-
-    # Find which column statistics are missing, and collect them
-    columns = [
-        col for col in (columns or list(expr.columns)) if col not in expr._min_pq_stats
-    ]
-    if columns:
-        (
-            lengths,
-            column_mins,
-            column_maxes,
-        ) = _record_column_statistics(_collect_statistics(expr, columns), columns)
-        expr._length_pq_stats = lengths
-        expr._min_pq_stats.update(column_mins)
-        expr._max_pq_stats.update(column_maxes)
-
-
-def _collect_statistics(
+def _collect_pq_statistics(
     expr: ReadParquet, columns: list | None = None
 ) -> list[dict] | None:
     """Collect Parquet statistic for dataset paths"""
