@@ -40,7 +40,6 @@ class Expr:
     associative = False
     _parameters = []
     _defaults = {}
-    _lengths = None
 
     def __init__(self, *args, **kwargs):
         operands = list(args)
@@ -59,6 +58,18 @@ class Expr:
             return meta.ndim
         except AttributeError:
             return 0
+
+    def _lengths(self, force: bool = False) -> tuple | None:
+        """Return a tuple of known partition lengths
+
+        Parameters
+        ----------
+        force:
+            Whether to attempt to collect missing length
+            statistics manually if they are missing.
+            Defaults to `False`.
+        """
+        return None
 
     def __str__(self):
         s = ", ".join(
@@ -805,9 +816,8 @@ class Elemwise(Blockwise):
     optimizations, like `len` will care about which operations preserve length
     """
 
-    @property
-    def _lengths(self):
-        return self.dependencies()[0]._lengths
+    def _lengths(self, force: bool = False) -> tuple | None:
+        return self.dependencies()[0]._lengths(force=force)
 
 
 class ToTimestamp(Elemwise):
@@ -1165,9 +1175,8 @@ class Partitions(Expr):
     def _node_label_args(self):
         return [self.frame, self.partitions]
 
-    @property
-    def _lengths(self):
-        lengths = self.frame._lengths
+    def _lengths(self, force: bool = False) -> tuple | None:
+        lengths = self.frame._lengths(force=force)
         if lengths:
             return tuple(lengths[i] for i in self.partitions)
 

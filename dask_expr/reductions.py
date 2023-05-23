@@ -334,8 +334,9 @@ class Len(Reduction):
     reduction_aggregate = sum
 
     def _simplify_down(self):
-        if self.frame._lengths:
-            return Literal(sum(self.frame._lengths))
+        _lengths = self.frame._lengths(force=True)
+        if _lengths:
+            return Literal(sum(_lengths))
         elif isinstance(self.frame, Elemwise):
             child = max(self.frame.dependencies(), key=lambda expr: expr.npartitions)
             return Len(child)

@@ -68,8 +68,7 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
             divisions = (None,) * len(locations)
         return divisions, locations
 
-    @functools.cached_property
-    def _lengths(self):
+    def _lengths(self, force: bool = False) -> tuple | None:
         locations = self._locations()
         return tuple(
             offset - locations[i]

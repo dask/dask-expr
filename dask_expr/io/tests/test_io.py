@@ -211,4 +211,4 @@ def test_parquet_lengths(tmpdir):
     pdf = df.compute()
 
     s = (df["b"] + 1).astype("Int32")
-    assert sum(s._lengths) == len(pdf)
+    assert sum(s._lengths(force=True)) == len(pdf)

@@ -239,11 +239,11 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             return (operator.getitem, tsk, self.columns[0])
         return tsk
 
-    @cached_property
-    def _lengths(self):
+    def _lengths(self, force: bool = False) -> tuple | None:
         """Return known partition lengths using parquet statistics"""
         if not self.filters:
-            self._update_length_statistics()
+            if force:
+                self._update_length_statistics()
             return self._pq_length_stats
 
     def _update_length_statistics(self):
