@@ -236,6 +236,12 @@ def test_repr(df):
     assert "sum(skipna=False)" in s
 
 
+def test_rename_traverse_filter(df):
+    result = optimize(df.rename(columns={"x": "xx"})[["xx"]], fuse=False)
+    expected = df[["x"]].rename(columns={"x": "xx"})
+    assert str(result) == str(expected)
+
+
 def test_columns_traverse_filters(pdf, df):
     result = optimize(df[df.x > 5].y, fuse=False)
     expected = df.y[df.x > 5]

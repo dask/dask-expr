@@ -787,15 +787,17 @@ class RenameFrame(Blockwise):
     operation = M.rename
 
     def _simplify_up(self, parent):
-        if isinstance(parent, Projection) and isinstance(self.columns, Mapping):
-            reverse_mapping = {val: key for key, val in self.columns.items()}
+        if isinstance(parent, Projection) and isinstance(
+            self.operand("columns"), Mapping
+        ):
+            reverse_mapping = {val: key for key, val in self.operand("columns").items()}
             if not isinstance(parent.columns, pd.Index):
                 # Fill this out when Series.rename is implemented
                 return
             else:
                 columns = [
                     reverse_mapping[col] if col in reverse_mapping else col
-                    for col in self.columns
+                    for col in parent.columns
                 ]
             return type(self)(self.frame[columns], *self.operands[1:])
 
