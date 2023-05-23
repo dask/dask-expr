@@ -696,12 +696,7 @@ class Blockwise(Expr):
         """
         args = [self._blockwise_arg(op, index) for op in self._args]
         if self._kwargs:
-            return (
-                apply,
-                self.operation,
-                (tuple, list(args)),
-                self._kwargs,
-            )
+            return apply, self.operation, args, self._kwargs
         else:
             return (self.operation,) + tuple(args)
 
