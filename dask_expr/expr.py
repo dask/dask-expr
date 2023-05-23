@@ -772,7 +772,7 @@ class MapPartitions(Blockwise):
             )
 
 
-class Clip(Blockwise):
+class Clip(Elemwise):
     _parameters = ["frame", "lower", "upper"]
     _defaults = {"lower": None, "upper": None}
     operation = M.clip
