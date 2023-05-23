@@ -255,12 +255,12 @@ def test_clip_traverse_filters(df):
     result = optimize(df.clip(lower=10).y, fuse=False)
     expected = df.y.clip(lower=10)
 
-    assert str(result) == str(expected)
+    assert result._name == expected._name
 
     result = optimize(df.clip(lower=10)[["x", "y"]], fuse=False)
     expected = df.clip(lower=10)[["x", "y"]]
 
-    assert str(result) == str(expected)
+    assert result._name == expected._name
 
 
 def test_broadcast(pdf, df):
