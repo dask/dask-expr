@@ -772,19 +772,6 @@ class MapPartitions(Blockwise):
             )
 
 
-class Clip(Elemwise):
-    _parameters = ["frame", "lower", "upper"]
-    _defaults = {"lower": None, "upper": None}
-    operation = M.clip
-
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
-            if self.frame.columns.equals(parent.columns):
-                # Don't introduce unnecessary projections
-                return
-            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
-
-
 class DropnaSeries(Blockwise):
     _parameters = ["frame"]
     operation = M.dropna
@@ -825,6 +812,19 @@ class Elemwise(Blockwise):
     """
 
     pass
+
+
+class Clip(Elemwise):
+    _parameters = ["frame", "lower", "upper"]
+    _defaults = {"lower": None, "upper": None}
+    operation = M.clip
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            if self.frame.columns.equals(parent.columns):
+                # Don't introduce unnecessary projections
+                return
+            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
 
 
 class ToTimestamp(Elemwise):
