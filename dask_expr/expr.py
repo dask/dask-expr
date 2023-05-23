@@ -982,6 +982,7 @@ class BlockwiseTail(Tail, Blockwise):
     def _task(self, index: int):
         return (M.tail, (self.frame._name, index), self.n)
 
+
 class Binop(Elemwise):
     _parameters = ["left", "right"]
 
