@@ -176,7 +176,7 @@ class DropDuplicates(Unique):
         return {"ignore_index": self.ignore_index, **self._subset_kwargs()}
 
     def _simplify_up(self, parent):
-        if self.subset is not None and isinstance(parent, Projection):
+        if self.subset is not None:
             columns = parent.columns
             if not isinstance(columns, list) and not hasattr(columns, "dtype"):
                 columns = [columns]
@@ -187,7 +187,7 @@ class DropDuplicates(Unique):
 
             return type(parent)(
                 type(self)(self.frame[sorted(columns)], *self.operands[1:]),
-                parent.operand("columns"),
+                parent.columns,
             )
 
 

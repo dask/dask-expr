@@ -433,7 +433,10 @@ class Expr:
 
     @property
     def columns(self):
-        return self._meta.columns
+        try:
+            return self._meta.columns
+        except AttributeError:
+            return []
 
     @property
     def dtypes(self):
