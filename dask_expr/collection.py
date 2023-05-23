@@ -634,7 +634,7 @@ def read_parquet(
     index=None,
     storage_options=None,
     dtype_backend=None,
-    calculate_divisions=True,
+    calculate_divisions=False,
     ignore_metadata_file=False,
     metadata_task_size=None,
     split_row_groups="infer",
