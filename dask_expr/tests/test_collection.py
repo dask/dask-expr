@@ -210,6 +210,9 @@ def test_to_timestamp(pdf, how):
         lambda df: df.x.isna(),
         lambda df: df.abs(),
         lambda df: df.x.abs(),
+        lambda df: df.rename(columns={"x": "xx"}),
+        lambda df: df.rename(columns={"x": "xx"}).xx,
+        lambda df: df.rename(columns={"x": "xx"})[["xx"]],
     ],
 )
 def test_blockwise(func, pdf, df):
