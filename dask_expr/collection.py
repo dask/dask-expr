@@ -16,7 +16,7 @@ from fsspec.utils import stringify_path
 from tlz import first
 
 from dask_expr import expr
-from dask_expr.expr import no_default
+from dask_expr.expr import RenameFrame, no_default
 from dask_expr.merge import Merge
 from dask_expr.reductions import (
     DropDuplicates,
@@ -165,6 +165,12 @@ class FrameBase(DaskMethodsMixin):
 
     def head(self, n=5, compute=True):
         out = new_collection(expr.Head(self.expr, n=n))
+        if compute:
+            out = out.compute()
+        return out
+
+    def tail(self, n=5, compute=True):
+        out = new_collection(expr.Tail(self.expr, n=n))
         if compute:
             out = out.compute()
         return out
@@ -514,6 +520,12 @@ class DataFrame(FrameBase):
 
     def drop_duplicates(self, subset=None, ignore_index=False):
         # Fail early if subset is not valid, e.g. missing columns
+        if (
+            subset is not None
+            and not isinstance(subset, list)
+            and not hasattr(subset, "dtype")
+        ):
+            subset = [subset]
         meta_nonempty(self._meta).drop_duplicates(subset=subset)
         return new_collection(
             DropDuplicates(self.expr, subset=subset, ignore_index=ignore_index)
@@ -527,6 +539,9 @@ class DataFrame(FrameBase):
         return new_collection(
             expr.DropnaFrame(self.expr, how=how, subset=subset, thresh=thresh)
         )
+
+    def rename(self, columns):
+        return new_collection(RenameFrame(self.expr, columns=columns))
 
 
 class Series(FrameBase):
@@ -568,6 +583,11 @@ class Series(FrameBase):
 
     def dropna(self):
         return new_collection(expr.DropnaSeries(self.expr))
+
+    def between(self, left, right, inclusive="both"):
+        return new_collection(
+            expr.Between(self.expr, left=left, right=right, inclusive=inclusive)
+        )
 
 
 class Index(Series):
