@@ -5,6 +5,7 @@ import numbers
 import operator
 import os
 from collections import defaultdict
+from collections.abc import Mapping
 
 import dask
 import pandas as pd
@@ -395,6 +396,12 @@ class Expr:
     def astype(self, dtypes):
         return AsType(self, dtypes)
 
+    def clip(self, lower=None, upper=None):
+        return Clip(self, lower=lower, upper=upper)
+
+    def combine_first(self, other):
+        return CombineFirst(self, other=other)
+
     def to_timestamp(self, freq=None, how="start"):
         return ToTimestamp(self, freq=freq, how=how)
 
@@ -406,6 +413,9 @@ class Expr:
 
     def apply(self, function, *args, **kwargs):
         return Apply(self, function, args, kwargs)
+
+    def replace(self, to_replace=None, value=no_default, regex=False):
+        return Replace(self, to_replace=to_replace, value=value, regex=regex)
 
     @functools.cached_property
     def divisions(self):
@@ -626,16 +636,31 @@ class Blockwise(Expr):
     """
 
     operation = None
+    _keyword_only = []
 
     @functools.cached_property
     def _meta(self):
-        return self.operation(
-            *[arg._meta if isinstance(arg, Expr) else arg for arg in self.operands]
-        )
+        args = [op._meta if isinstance(op, Expr) else op for op in self._args]
+        return self.operation(*args, **self._kwargs)
 
-    @property
-    def _kwargs(self):
+    @functools.cached_property
+    def _kwargs(self) -> dict:
+        if self._keyword_only:
+            return {
+                p: self.operand(p)
+                for p in self._parameters
+                if p in self._keyword_only and self.operand(p) is not no_default
+            }
         return {}
+
+    @functools.cached_property
+    def _args(self) -> list:
+        if self._keyword_only:
+            args = [
+                self.operand(p) for p in self._parameters if p not in self._keyword_only
+            ] + self.operands[len(self._parameters) :]
+            return args
+        return self.operands
 
     def _broadcast_dep(self, dep: Expr):
         # Checks if a dependency should be broadcasted to
@@ -685,11 +710,11 @@ class Blockwise(Expr):
         -------
         task: tuple
         """
-        args = tuple(self._blockwise_arg(op, index) for op in self.operands)
+        args = [self._blockwise_arg(op, index) for op in self._args]
         if self._kwargs:
-            return (apply, self.operation, args, self._kwargs)
+            return apply, self.operation, args, self._kwargs
         else:
-            return (self.operation,) + args
+            return (self.operation,) + tuple(args)
 
 
 class MapPartitions(Blockwise):
@@ -756,6 +781,51 @@ class MapPartitions(Blockwise):
             )
 
 
+class DropnaSeries(Blockwise):
+    _parameters = ["frame"]
+    operation = M.dropna
+
+
+class DropnaFrame(Blockwise):
+    _parameters = ["frame", "how", "subset", "thresh"]
+    _defaults = {"how": no_default, "subset": None, "thresh": no_default}
+    _keyword_only = ["how", "subset", "thresh"]
+    operation = M.dropna
+
+
+class Replace(Blockwise):
+    _parameters = ["frame", "to_replace", "value", "regex"]
+    _defaults = {"to_replace": None, "value": no_default, "regex": False}
+    _keyword_only = ["value", "regex"]
+    operation = M.replace
+
+
+class CombineFirst(Blockwise):
+    _parameters = ["frame", "other"]
+    operation = M.combine_first
+
+
+class RenameFrame(Blockwise):
+    _parameters = ["frame", "columns"]
+    _keyword_only = ["columns"]
+    operation = M.rename
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection) and isinstance(
+            self.operand("columns"), Mapping
+        ):
+            reverse_mapping = {val: key for key, val in self.operand("columns").items()}
+            if not isinstance(parent.columns, pd.Index):
+                # Fill this out when Series.rename is implemented
+                return
+            else:
+                columns = [
+                    reverse_mapping[col] if col in reverse_mapping else col
+                    for col in parent.columns
+                ]
+            return type(self)(self.frame[columns], *self.operands[1:])
+
+
 class Elemwise(Blockwise):
     """
     This doesn't really do anything, but we anticipate that future
@@ -763,6 +833,25 @@ class Elemwise(Blockwise):
     """
 
     pass
+
+
+class Clip(Elemwise):
+    _parameters = ["frame", "lower", "upper"]
+    _defaults = {"lower": None, "upper": None}
+    operation = M.clip
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            if self.frame.columns.equals(parent.columns):
+                # Don't introduce unnecessary projections
+                return
+            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+
+
+class Between(Elemwise):
+    _parameters = ["frame", "left", "right", "inclusive"]
+    _defaults = {"inclusive": "both"}
+    operation = M.between
 
 
 class ToTimestamp(Elemwise):
@@ -963,7 +1052,7 @@ class Head(Expr):
 class BlockwiseHead(Head, Blockwise):
     """Take the first `n` rows of every partition
 
-    Typically used after `Partition(..., [0])` to take
+    Typically used after `Partitions(..., [0])` to take
     the first `n` rows of an entire collection.
     """
 
@@ -972,6 +1061,50 @@ class BlockwiseHead(Head, Blockwise):
 
     def _task(self, index: int):
         return (M.head, (self.frame._name, index), self.n)
+
+
+class Tail(Expr):
+    """Take the last `n` rows of the last partition"""
+
+    _parameters = ["frame", "n"]
+    _defaults = {"n": 5}
+
+    @property
+    def _meta(self):
+        return self.frame._meta
+
+    def _divisions(self):
+        return self.frame.divisions[-2:]
+
+    def _task(self, index: int):
+        raise NotImplementedError()
+
+    def _simplify_down(self):
+        if isinstance(self.frame, Elemwise):
+            operands = [
+                Tail(op, self.n) if isinstance(op, Expr) else op
+                for op in self.frame.operands
+            ]
+            return type(self.frame)(*operands)
+        if not isinstance(self, BlockwiseTail):
+            # Lower to Blockwise
+            return BlockwiseTail(Partitions(self.frame, [-1]), self.n)
+        if isinstance(self.frame, Tail):
+            return Tail(self.frame.frame, min(self.n, self.frame.n))
+
+
+class BlockwiseTail(Tail, Blockwise):
+    """Take the last `n` rows of every partition
+
+    Typically used after `Partitions(..., [-1])` to take
+    the last `n` rows of an entire collection.
+    """
+
+    def _divisions(self):
+        return self.frame.divisions
+
+    def _task(self, index: int):
+        return (M.tail, (self.frame._name, index), self.n)
 
 
 class Binop(Elemwise):

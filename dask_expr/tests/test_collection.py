@@ -124,6 +124,14 @@ def test_value_counts(df, pdf):
     assert_eq(df.x.value_counts(), pdf.x.value_counts())
 
 
+def test_dropna(pdf):
+    pdf.loc[0, "y"] = np.nan
+    df = from_pandas(pdf)
+    assert_eq(df.dropna(), pdf.dropna())
+    assert_eq(df.dropna(how="all"), pdf.dropna(how="all"))
+    assert_eq(df.y.dropna(), pdf.y.dropna())
+
+
 def test_memory_usage(pdf):
     # Results are not equal with RangeIndex because pandas has one RangeIndex while
     # we have one RangeIndex per partition
@@ -194,14 +202,24 @@ def test_to_timestamp(pdf, how):
                 not PANDAS_GT_210, reason="Only available from 2.1"
             ),
         ),
+        lambda df: df.clip(lower=10, upper=50),
+        lambda df: df.x.clip(lower=10, upper=50),
+        lambda df: df.x.between(left=10, right=50),
         lambda df: df.x.map(lambda x: x + 1),
         lambda df: df.index.map(lambda x: x + 1),
         lambda df: df[df.x > 5],
         lambda df: df.assign(a=df.x + df.y, b=df.x - df.y),
+        lambda df: df.replace(to_replace=1, value=1000),
+        lambda df: df.x.replace(to_replace=1, value=1000),
         lambda df: df.isna(),
         lambda df: df.x.isna(),
         lambda df: df.abs(),
         lambda df: df.x.abs(),
+        lambda df: df.rename(columns={"x": "xx"}),
+        lambda df: df.rename(columns={"x": "xx"}).xx,
+        lambda df: df.rename(columns={"x": "xx"})[["xx"]],
+        lambda df: df.combine_first(df),
+        lambda df: df.x.combine_first(df.y),
     ],
 )
 def test_blockwise(func, pdf, df):
@@ -225,11 +243,29 @@ def test_repr(df):
     assert "sum(skipna=False)" in s
 
 
+def test_rename_traverse_filter(df):
+    result = optimize(df.rename(columns={"x": "xx"})[["xx"]], fuse=False)
+    expected = df[["x"]].rename(columns={"x": "xx"})
+    assert str(result) == str(expected)
+
+
 def test_columns_traverse_filters(pdf, df):
     result = optimize(df[df.x > 5].y, fuse=False)
     expected = df.y[df.x > 5]
 
     assert str(result) == str(expected)
+
+
+def test_clip_traverse_filters(df):
+    result = optimize(df.clip(lower=10).y, fuse=False)
+    expected = df.y.clip(lower=10)
+
+    assert result._name == expected._name
+
+    result = optimize(df.clip(lower=10)[["x", "y"]], fuse=False)
+    expected = df.clip(lower=10)[["x", "y"]]
+
+    assert result._name == expected._name
 
 
 @pytest.mark.parametrize("projection", ["zz", ["zz"], ["zz", "x"], "zz"])
@@ -290,6 +326,29 @@ def test_head_down(df):
 def test_head_head(df):
     a = df.head(compute=False).head(compute=False)
     b = df.head(compute=False)
+
+    assert a.optimize()._name == b.optimize()._name
+
+
+def test_tail(pdf, df):
+    assert_eq(df.tail(compute=False), pdf.tail())
+    assert_eq(df.tail(compute=False, n=7), pdf.tail(n=7))
+
+    assert df.tail(compute=False).npartitions == 1
+
+
+def test_tail_down(df):
+    result = (df.x + df.y + 1).tail(compute=False)
+    optimized = optimize(result)
+
+    assert_eq(result, optimized)
+
+    assert not isinstance(optimized.expr, expr.Tail)
+
+
+def test_tail_tail(df):
+    a = df.tail(compute=False).tail(compute=False)
+    b = df.tail(compute=False)
 
     assert a.optimize()._name == b.optimize()._name
 
