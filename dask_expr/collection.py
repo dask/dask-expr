@@ -529,6 +529,17 @@ class DataFrame(FrameBase):
     def rename(self, columns):
         return new_collection(RenameFrame(self.expr, columns=columns))
 
+    def combine(self, other, func, fill_value=None, overwrite=True):
+        return new_collection(
+            expr.Combine(
+                self.expr,
+                other=other.expr,
+                func=func,
+                fill_value=fill_value,
+                overwrite=overwrite,
+            )
+        )
+
 
 class Series(FrameBase):
     """Series-like Expr Collection"""
@@ -573,6 +584,11 @@ class Series(FrameBase):
     def between(self, left, right, inclusive="both"):
         return new_collection(
             expr.Between(self.expr, left=left, right=right, inclusive=inclusive)
+        )
+
+    def combine(self, other, func, fill_value=None):
+        return new_collection(
+            expr.Combine(self.expr, other=other.expr, func=func, fill_value=fill_value)
         )
 
 

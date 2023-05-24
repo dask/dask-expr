@@ -778,6 +778,19 @@ class MapPartitions(Blockwise):
             )
 
 
+class Combine(Blockwise):
+    _parameters = ["frame", "other", "func", "fill_value", "overwrite"]
+    _defaults = {"fill_value": None, "overwrite": no_default}
+    _keyword_only = ["fill_value", "overwrite"]
+    operation = M.combine
+
+    @functools.cached_property
+    def _meta(self):
+        args = [op._meta if isinstance(op, Expr) else op for op in self._args]
+        args[0] = meta_nonempty(self.frame._meta)
+        return self.operation(*args, **self._kwargs)
+
+
 class DropnaSeries(Blockwise):
     _parameters = ["frame"]
     operation = M.dropna
