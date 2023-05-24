@@ -336,7 +336,9 @@ class FrameBase(DaskMethodsMixin):
 
         return new_collection(Repartition(self.expr, npartitions, divisions, force))
 
-    def to_dask_dataframe(self, optimize_expr: bool = True, **optimize_kwargs):
+    def to_dask_dataframe(
+        self, optimize_expr: bool = True, **optimize_kwargs
+    ) -> _Frame:
         """Convert to a Dask Dataframe collection
 
         Parameters
@@ -647,7 +649,7 @@ def from_graph(*args, **kwargs):
     return new_collection(FromGraph(*args, **kwargs))
 
 
-def from_dask_dataframe(ddf: _Frame, optimize_graph: bool = True):
+def from_dask_dataframe(ddf: _Frame, optimize_graph: bool = True) -> FrameBase:
     """Create a dask-expr collection from a dask-dataframe collection
 
     Parameters
