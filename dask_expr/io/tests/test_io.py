@@ -5,7 +5,8 @@ import pandas as pd
 import pytest
 from dask.dataframe.utils import assert_eq
 
-from dask_expr import from_pandas, optimize, read_csv, read_parquet
+from dask_expr import from_dask_dataframe, from_pandas, optimize, read_csv, read_parquet
+from dask_expr.expr import Expr
 from dask_expr.io import ReadParquet
 
 
@@ -204,3 +205,20 @@ def test_parquet_complex_filters(tmpdir):
 
     assert_eq(got, expect)
     assert_eq(got.optimize(), expect)
+
+
+@pytest.mark.parametrize("optimize_graph", [True, False])
+def test_from_dask_dataframe(optimize_graph):
+    ddf = dd.from_dict({"a": range(100)}, npartitions=10)
+    df = from_dask_dataframe(ddf, optimize_graph=optimize_graph)
+    assert isinstance(df.expr, Expr)
+    assert_eq(df, ddf)
+
+
+@pytest.mark.parametrize("optimize_expr", [True, False])
+def test_to_dask_dataframe(optimize_expr):
+    pdf = pd.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
+    df = from_pandas(pdf, npartitions=2)
+    ddf = df.to_dask_dataframe(optimize_expr=optimize_expr)
+    assert isinstance(ddf, dd.DataFrame)
+    assert_eq(df, ddf)
