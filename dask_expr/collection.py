@@ -339,7 +339,7 @@ class FrameBase(DaskMethodsMixin):
     def to_dask_dataframe(
         self, optimize_expr: bool = True, **optimize_kwargs
     ) -> _Frame:
-        """Convert to a Dask Dataframe collection
+        """Convert to a dask-dataframe collection
 
         Parameters
         ----------
@@ -655,7 +655,7 @@ def from_dask_dataframe(ddf: _Frame, optimize_graph: bool = True) -> FrameBase:
     Parameters
     ----------
     optimize_graph
-        Whether to optimize `ddf`'s graph before conversion.
+        Whether to optimize the graph before conversion.
     """
     graph = ddf.dask
     if optimize_graph:
