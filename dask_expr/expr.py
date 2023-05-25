@@ -1218,7 +1218,7 @@ class Or(Binop):
 
 class XOr(Binop):
     operation = operator.xor
-    _operator_repr = "|"
+    _operator_repr = "^"
 
 
 class Partitions(Expr):

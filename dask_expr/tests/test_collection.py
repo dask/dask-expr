@@ -179,7 +179,7 @@ def test_conditionals(func, pdf, df):
         lambda df: df.x.__rand__(df.y),
         lambda df: df.x | df.y,
         lambda df: df.x.__ror__(df.y),
-        lambda df: df.x.__xor__(df.y),
+        lambda df: df.x ^ df.y,
         lambda df: df.x.__rxor__(df.y),
     ],
 )
