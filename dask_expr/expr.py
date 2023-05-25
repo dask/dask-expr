@@ -5,7 +5,7 @@ import numbers
 import operator
 import os
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Mapping, Set
 
 import dask
 import pandas as pd
@@ -622,6 +622,36 @@ class Expr:
         g = self._to_graphviz(**kwargs)
         graphviz_to_file(g, filename, format)
         return g
+
+    def find_subtype(self, subtype: type) -> Set[Expr]:
+        """Search the expression graph for a specific `Expr` subtype
+
+        Parameters
+        ----------
+        subtype
+            The `Expr` subtype to search for.
+
+        Returns
+        -------
+        nodes: set
+            Set of `subtype` instances.
+        """
+
+        assert issubclass(subtype, Expr), "`subtype` must be `Expr` subclass"
+        stack = [self]
+        seen, nodes = set(), set()
+        while stack:
+            node = stack.pop()
+            if node._name in seen:
+                continue
+            seen.add(node._name)
+
+            if isinstance(node, subtype):
+                nodes.add(node)
+
+            for dep in node.dependencies():
+                stack.append(dep)
+        return nodes
 
 
 class Blockwise(Expr):
