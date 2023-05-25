@@ -28,6 +28,49 @@ def _list_columns(columns):
     return columns
 
 
+class ToParquet(Expr):
+    _parameters = [
+        "frame",
+        "path",
+        "compression",
+        "write_index",
+        "append",
+        "overwrite",
+        "ignore_divisions",
+        "partition_on",
+        "storage_options",
+        "custom_metadata",
+        "write_metadata_file",
+        "compute",
+        "compute_kwargs",
+        "schema",
+        "name_function",
+        "filesystem",
+        "kwargs",
+    ]
+    _defaults = {
+        "compression": "snappy",
+        "write_index": True,
+        "append": False,
+        "overwrite": False,
+        "ignore_divisions": False,
+        "partition_on": None,
+        "storage_options": None,
+        "custom_metadata": None,
+        "write_metadata_file": None,
+        "compute": True,
+        "compute_kwargs": None,
+        "schema": "infer",
+        "name_function": None,
+        "filesystem": None,
+        "kwargs": None,
+    }
+
+    @property
+    def engine(self):
+        return get_engine("pyarrow")
+
+
 class ReadParquet(PartitionsFiltered, BlockwiseIO):
     """Read a parquet dataset"""
 
