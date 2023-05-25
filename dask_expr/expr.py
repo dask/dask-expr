@@ -283,6 +283,14 @@ class Expr:
     def index(self):
         return Index(self)
 
+    def reset_index(self, drop=False):
+        if is_dataframe_like(self._meta) or is_series_like(self._meta):
+            return ResetIndex(self, drop)
+        raise TypeError(
+            f"`reset_index` requires dataframe-like or series-like data."
+            f" Got: {type(self._meta)}."
+        )
+
     @property
     def size(self):
         return Size(self)
@@ -1017,6 +1025,18 @@ class Index(Elemwise):
             (self.frame._name, index),
             "index",
         )
+
+
+class ResetIndex(Elemwise):
+    """Reset the index of a Series or DataFrame"""
+
+    _parameters = ["frame", "drop"]
+    _defaults = {"drop": False}
+    _keyword_only = ["drop"]
+    operation = M.reset_index
+
+    def _divisions(self):
+        return (None,) * (self.frame.npartitions + 1)
 
 
 class Head(Expr):
