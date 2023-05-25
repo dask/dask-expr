@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import itertools
 import operator
+import warnings
 from functools import cached_property
 
 from dask.dataframe.io.parquet.core import (
@@ -11,6 +12,7 @@ from dask.dataframe.io.parquet.core import (
     set_index_columns,
 )
 from dask.dataframe.io.parquet.utils import _split_user_options
+from dask.dataframe.io.utils import _is_local_fs
 from dask.utils import natural_sort_key
 
 from dask_expr.expr import EQ, GE, GT, LE, LT, NE, And, Expr, Filter, Or, Projection
@@ -69,6 +71,84 @@ class ToParquet(Expr):
     @property
     def engine(self):
         return get_engine("pyarrow")
+
+    @property
+    def path(self):
+        return self._filesystem_info["path"]
+
+    @property
+    def fs(self):
+        return self._filesystem_info["fs"]
+
+    @cached_property
+    def _filesystem_info(self):
+        fs, _paths, _, _ = self.engine.extract_filesystem(
+            self.operand("path"),
+            filesystem=self.operand("filesystem"),
+            dataset_options={},
+            open_file_options={},
+            storage_options=self.operand("storage_options"),
+        )
+        assert len(_paths) == 1, "only one path"
+        path = _paths[0]
+
+        if self.operand("overwrite"):
+            if self.operand("append"):
+                raise ValueError("Cannot use both `overwrite=True` and `append=True`!")
+
+            if fs.exists(path) and fs.isdir(path):
+                # TODO: Need utility to search for specific Expr types
+                # # Check for any previous parquet layers reading from a file in the
+                # # output directory, since deleting those files now would result in
+                # # errors or incorrect results.
+                # for layer_name, layer in df.dask.layers.items():
+                #     if layer_name.startswith("read-parquet-") and isinstance(
+                #         layer, DataFrameIOLayer
+                #     ):
+                #         path_with_slash = path.rstrip("/") + "/"  # ensure trailing slash
+                #         for input in layer.inputs:
+                #             # Note that `input` may be either `dict` or `List[dict]`
+                #             for piece_dict in input if isinstance(input, list) else [input]:
+                #                 if piece_dict["piece"][0].startswith(path_with_slash):
+                #                     raise ValueError(
+                #                         "Reading and writing to the same parquet file within "
+                #                         "the same task graph is not supported."
+                #                     )
+
+                # Don't remove the directory if it's the current working directory
+                if _is_local_fs(fs):
+                    working_dir = fs.expand_path(".")[0]
+                    if path.rstrip("/") == working_dir.rstrip("/"):
+                        raise ValueError(
+                            "Cannot clear the contents of the current working directory!"
+                        )
+
+                # It's safe to clear the output directory
+                fs.rm(path, recursive=True)
+
+        return {"fs": fs, "path": path}
+
+    def division_info(self):
+        # Save divisions and corresponding index name. This is necessary,
+        # because we may be resetting the index to write the file
+        df = self.frame
+        division_info = {"divisions": df.divisions, "name": df.index.name}
+        if division_info["name"] is None:
+            # As of 0.24.2, pandas will rename an index with name=None
+            # when df.reset_index() is called.  The default name is "index",
+            # but dask will always change the name to the NONE_LABEL constant
+            if NONE_LABEL not in df.columns:
+                division_info["name"] = NONE_LABEL
+            elif self.operand("write_index"):
+                raise ValueError(
+                    "Index must have a name if __null_dask_index__ is a column."
+                )
+            else:
+                warnings.warn(
+                    "If read back by Dask, column named __null_dask_index__ "
+                    "will be set to the index (and renamed to None)."
+                )
+        return division_info
 
 
 class ReadParquet(PartitionsFiltered, BlockwiseIO):
