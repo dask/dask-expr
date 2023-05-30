@@ -6,9 +6,11 @@ import numpy as np
 from dask.base import DaskMethodsMixin, named_schedulers
 from dask.dataframe.core import (
     _concat,
+    _Frame,
     is_dataframe_like,
     is_index_like,
     is_series_like,
+    new_dd_object,
 )
 from dask.dataframe.dispatch import meta_nonempty
 from dask.utils import IndexCallable
@@ -342,6 +344,19 @@ class FrameBase(DaskMethodsMixin):
 
         return new_collection(Repartition(self.expr, npartitions, divisions, force))
 
+    def to_dask_dataframe(self, optimize: bool = True, **optimize_kwargs) -> _Frame:
+        """Convert to a dask-dataframe collection
+
+        Parameters
+        ----------
+        optimize
+            Whether to optimize the underlying `Expr` object before conversion.
+        **optimize_kwargs
+            Key-word arguments to pass through to `optimize`.
+        """
+        df = self.optimize(**optimize_kwargs) if optimize else self
+        return new_dd_object(df.dask, df._name, df._meta, df.divisions)
+
 
 # Add operator attributes
 for op in [
@@ -364,7 +379,11 @@ for op in [
     "__eq__",
     "__ne__",
     "__and__",
+    "__rand__",
     "__or__",
+    "__ror__",
+    "__xor__",
+    "__rxor__",
 ]:
     setattr(FrameBase, op, functools.partialmethod(_wrap_expr_op, op=op))
 
@@ -638,6 +657,20 @@ def from_graph(*args, **kwargs):
     from dask_expr.io.io import FromGraph
 
     return new_collection(FromGraph(*args, **kwargs))
+
+
+def from_dask_dataframe(ddf: _Frame, optimize: bool = True) -> FrameBase:
+    """Create a dask-expr collection from a dask-dataframe collection
+
+    Parameters
+    ----------
+    optimize
+        Whether to optimize the graph before conversion.
+    """
+    graph = ddf.dask
+    if optimize:
+        graph = ddf.__dask_optimize__(graph, ddf.__dask_keys__())
+    return from_graph(graph, ddf._meta, ddf.divisions, ddf._name)
 
 
 def read_csv(*args, **kwargs):

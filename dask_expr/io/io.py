@@ -34,7 +34,7 @@ class FromGraph(IO):
         return self.operand("_name")
 
     def _layer(self):
-        return self.operand("layer")
+        return dict(self.operand("layer"))
 
 
 class BlockwiseIO(Blockwise, IO):
