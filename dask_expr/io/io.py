@@ -5,7 +5,7 @@ import math
 
 from dask.dataframe.io.io import sorted_division_locations
 
-from dask_expr.expr import Blockwise, Expr, PartitionsFiltered
+from dask_expr.expr import Blockwise, Expr, Lengths, Literal, PartitionsFiltered
 
 
 class IO(Expr):
@@ -71,7 +71,7 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
             divisions = (None,) * len(locations)
         return divisions, locations
 
-    def _lengths(self, force: bool = False) -> tuple | None:
+    def _get_lengths(self) -> tuple | None:
         if self._pd_length_stats is None:
             locations = self._locations()
             self._pd_length_stats = tuple(
@@ -80,6 +80,12 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
                 if not self._filtered or i in self._partitions
             )
         return self._pd_length_stats
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Lengths):
+            _lengths = self._get_lengths()
+            if _lengths:
+                return Literal(_lengths)
 
     def _divisions(self):
         return self._divisions_and_locations[0]

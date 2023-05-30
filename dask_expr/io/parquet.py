@@ -19,7 +19,21 @@ from dask.dataframe.io.utils import _is_local_fs
 from dask.delayed import delayed
 from dask.utils import natural_sort_key
 
-from dask_expr.expr import EQ, GE, GT, LE, LT, NE, And, Expr, Filter, Or, Projection
+from dask_expr.expr import (
+    EQ,
+    GE,
+    GT,
+    LE,
+    LT,
+    NE,
+    And,
+    Expr,
+    Filter,
+    Lengths,
+    Literal,
+    Or,
+    Projection,
+)
 from dask_expr.io import BlockwiseIO, PartitionsFiltered
 
 NONE_LABEL = "__null_dask_index__"
@@ -101,6 +115,11 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
                 kwargs = dict(zip(self._parameters, self.operands))
                 kwargs["filters"] = filters.combine(kwargs["filters"]).to_list_tuple()
                 return ReadParquet(**kwargs)
+
+        if isinstance(parent, Lengths):
+            _lengths = self._get_lengths()
+            if _lengths:
+                return Literal(_lengths)
 
     @cached_property
     def _dataset_info(self):
@@ -239,12 +258,15 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             return (operator.getitem, tsk, self.columns[0])
         return tsk
 
-    def _lengths(self, force: bool = False) -> tuple | None:
+    def _get_lengths(self) -> tuple | None:
         """Return known partition lengths using parquet statistics"""
         if not self.filters:
-            if force:
-                self._update_length_statistics()
-            return self._pq_length_stats
+            self._update_length_statistics()
+            return tuple(
+                length
+                for i, length in enumerate(self._pq_length_stats)
+                if not self._filtered or i in self._partitions
+            )
 
     def _update_length_statistics(self):
         """Ensure that partition-length statistics are up to date"""

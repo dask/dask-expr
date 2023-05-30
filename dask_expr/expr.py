@@ -60,18 +60,6 @@ class Expr:
         except AttributeError:
             return 0
 
-    def _lengths(self, force: bool = False) -> tuple | None:
-        """Return a tuple of known partition lengths
-
-        Parameters
-        ----------
-        force:
-            Whether to attempt to collect missing length
-            statistics manually if they are missing.
-            Defaults to `False`.
-        """
-        return None
-
     def __str__(self):
         s = ", ".join(
             str(param) + "=" + str(operand)
@@ -874,8 +862,7 @@ class Elemwise(Blockwise):
     optimizations, like `len` will care about which operations preserve length
     """
 
-    def _lengths(self, force: bool = False) -> tuple | None:
-        return self.dependencies()[0]._lengths(force=force)
+    pass
 
 
 class Clip(Elemwise):
@@ -1060,6 +1047,32 @@ class Index(Elemwise):
             (self.frame._name, index),
             "index",
         )
+
+
+class Lengths(Expr):
+    """Returns a tuple of partition lengths"""
+
+    _parameters = ["frame"]
+
+    @property
+    def _meta(self):
+        return tuple()
+
+    def _divisions(self):
+        return (None, None)
+
+    def _simplify_down(self):
+        if isinstance(self.frame, Elemwise):
+            return Lengths(self.frame.operands[0])
+
+    def _layer(self):
+        name = "part-" + self._name
+        dsk = {
+            (name, i): (len, (self.frame._name, i))
+            for i in range(self.frame.npartitions)
+        }
+        dsk[(self._name, 0)] = (tuple, list(dsk.keys()))
+        return dsk
 
 
 class Head(Expr):
@@ -1300,11 +1313,6 @@ class Partitions(Expr):
 
     def _node_label_args(self):
         return [self.frame, self.partitions]
-
-    def _lengths(self, force: bool = False) -> tuple | None:
-        lengths = self.frame._lengths(force=force)
-        if lengths:
-            return tuple(lengths[i] for i in self.partitions)
 
 
 class PartitionsFiltered(Expr):

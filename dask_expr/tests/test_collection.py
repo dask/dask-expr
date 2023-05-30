@@ -594,15 +594,10 @@ def test_len(df, pdf):
     df2 = df[["x"]] + 1
     assert len(df2) == len(pdf)
 
+    assert len(df[df.x > 5]) == len(pdf[pdf.x > 5])
+
     first = df2.partitions[0].compute()
     assert len(df2.partitions[0]) == len(first)
-
-
-def test_lengths(df, pdf):
-    df2 = df[["x"]] + 1
-    assert sum(df2._lengths()) == len(pdf)
-    assert df[df.x > 5]._lengths() is None
-    assert sum(df2.partitions[0]._lengths()) == len(df2.partitions[0])
 
 
 def test_drop_duplicates(df, pdf):

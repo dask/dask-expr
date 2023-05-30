@@ -207,12 +207,14 @@ def test_parquet_complex_filters(tmpdir):
     assert_eq(got.optimize(), expect)
 
 
-def test_parquet_lengths(tmpdir):
+def test_parquet_len(tmpdir):
     df = read_parquet(_make_file(tmpdir))
     pdf = df.compute()
 
+    assert len(df[df.a > 5]) == len(pdf[pdf.a > 5])
+
     s = (df["b"] + 1).astype("Int32")
-    assert sum(s._lengths(force=True)) == len(pdf)
+    assert len(s) == len(pdf)
 
 
 @pytest.mark.parametrize("optimize", [True, False])
