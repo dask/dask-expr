@@ -346,16 +346,28 @@ class Expr:
         return GE(other, self)
 
     def __eq__(self, other):
-        return EQ(other, self)
+        return EQ(self, other)
 
     def __ne__(self, other):
-        return NE(other, self)
+        return NE(self, other)
 
     def __and__(self, other):
+        return And(self, other)
+
+    def __rand__(self, other):
         return And(other, self)
 
     def __or__(self, other):
+        return Or(self, other)
+
+    def __ror__(self, other):
         return Or(other, self)
+
+    def __xor__(self, other):
+        return XOr(self, other)
+
+    def __rxor__(self, other):
+        return XOr(other, self)
 
     def sum(self, skipna=True, numeric_only=False, min_count=0):
         return Sum(self, skipna, numeric_only, min_count)
@@ -1049,6 +1061,18 @@ class Index(Elemwise):
         )
 
 
+class ResetIndex(Elemwise):
+    """Reset the index of a Series or DataFrame"""
+
+    _parameters = ["frame", "drop"]
+    _defaults = {"drop": False}
+    _keyword_only = ["drop"]
+    operation = M.reset_index
+
+    def _divisions(self):
+        return (None,) * (self.frame.npartitions + 1)
+
+
 class Head(Expr):
     """Take the first `n` rows of the first partition"""
 
@@ -1235,6 +1259,11 @@ class And(Binop):
 class Or(Binop):
     operation = operator.or_
     _operator_repr = "|"
+
+
+class XOr(Binop):
+    operation = operator.xor
+    _operator_repr = "^"
 
 
 class Partitions(Expr):

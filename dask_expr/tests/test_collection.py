@@ -175,6 +175,25 @@ def test_conditionals(func, pdf, df):
 @pytest.mark.parametrize(
     "func",
     [
+        lambda df: df.x & df.y,
+        lambda df: df.x.__rand__(df.y),
+        lambda df: df.x | df.y,
+        lambda df: df.x.__ror__(df.y),
+        lambda df: df.x ^ df.y,
+        lambda df: df.x.__rxor__(df.y),
+    ],
+)
+def test_boolean_operators(func):
+    pdf = pd.DataFrame(
+        {"x": [True, False, True, False], "y": [True, False, False, False]}
+    )
+    df = from_pandas(pdf)
+    assert_eq(func(pdf), func(df))
+
+
+@pytest.mark.parametrize(
+    "func",
+    [
         lambda df: df[(df.x > 10) | (df.x < 5)],
         lambda df: df[(df.x > 7) & (df.x < 10)],
     ],
@@ -305,6 +324,14 @@ def test_persist(pdf, df):
 def test_index(pdf, df):
     assert_eq(df.index, pdf.index)
     assert_eq(df.x.index, pdf.x.index)
+
+
+@pytest.mark.parametrize("drop", [True, False])
+def test_reset_index(pdf, df, drop):
+    assert_eq(df.reset_index(drop=drop), pdf.reset_index(drop=drop), check_index=False)
+    assert_eq(
+        df.x.reset_index(drop=drop), pdf.x.reset_index(drop=drop), check_index=False
+    )
 
 
 def test_head(pdf, df):
