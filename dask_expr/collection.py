@@ -22,6 +22,7 @@ from dask_expr.expr import RenameFrame, no_default
 from dask_expr.merge import Merge
 from dask_expr.reductions import (
     DropDuplicates,
+    Len,
     MemoryUsageFrame,
     MemoryUsageIndex,
     NLargest,
@@ -88,9 +89,9 @@ class FrameBase(DaskMethodsMixin):
     def __len__(self):
         return self._len
 
-    @functools.cached_property
+    @property
     def _len(self):
-        return sum(new_collection(expr.Lengths(self.expr)).compute())
+        return new_collection(Len(self.expr)).compute()
 
     @property
     def nbytes(self):

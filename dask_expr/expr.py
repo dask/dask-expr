@@ -1063,7 +1063,8 @@ class Lengths(Expr):
 
     def _simplify_down(self):
         if isinstance(self.frame, Elemwise):
-            return Lengths(self.frame.operands[0])
+            child = max(self.frame.dependencies(), key=lambda expr: expr.npartitions)
+            return Lengths(child)
 
     def _layer(self):
         name = "part-" + self._name
