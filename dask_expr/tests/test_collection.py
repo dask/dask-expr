@@ -627,12 +627,12 @@ def test_unique(df, pdf):
 def test_find_operations(df):
     df2 = df[df["x"] > 1][["y"]] + 1
 
-    filters = df2.find_operations(expr.Filter)
+    filters = list(df2.find_operations(expr.Filter))
     assert len(filters) == 1
 
-    projections = df2.find_operations(expr.Projection)
+    projections = list(df2.find_operations(expr.Projection))
     assert len(projections) == 2
 
-    adds = df2.find_operations(expr.Add)
+    adds = list(df2.find_operations(expr.Add))
     assert len(adds) == 1
     assert next(iter(adds))._name == df2._name
