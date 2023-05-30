@@ -624,15 +624,15 @@ def test_unique(df, pdf):
     assert_eq(df.index.unique(), pd.Index(pdf.index.unique()))
 
 
-def test_find_subtype(df):
+def test_find_operations(df):
     df2 = df[df["x"] > 1][["y"]] + 1
 
-    filters = df2.find_subtype(expr.Filter)
+    filters = df2.find_operations(expr.Filter)
     assert len(filters) == 1
 
-    projections = df2.find_subtype(expr.Projection)
+    projections = df2.find_operations(expr.Projection)
     assert len(projections) == 2
 
-    adds = df2.find_subtype(expr.Add)
+    adds = df2.find_operations(expr.Add)
     assert len(adds) == 1
     assert next(iter(adds))._name == df2._name
