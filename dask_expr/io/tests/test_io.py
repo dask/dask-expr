@@ -6,8 +6,9 @@ import pytest
 from dask.dataframe.utils import assert_eq
 
 from dask_expr import from_dask_dataframe, from_pandas, optimize, read_csv, read_parquet
-from dask_expr.expr import Expr
+from dask_expr.expr import Expr, Literal
 from dask_expr.io import ReadParquet
+from dask_expr.reductions import Len
 
 
 def _make_file(dir, format="parquet", df=None):
@@ -215,6 +216,9 @@ def test_parquet_len(tmpdir):
 
     s = (df["b"] + 1).astype("Int32")
     assert len(s) == len(pdf)
+
+    expr = Len(s.expr)
+    assert isinstance(expr.optimize(), Literal)
 
 
 @pytest.mark.parametrize("optimize", [True, False])

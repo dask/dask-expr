@@ -12,6 +12,7 @@ from dask.utils import M
 
 from dask_expr import expr, from_pandas, optimize
 from dask_expr.datasets import timeseries
+from dask_expr.reductions import Len
 
 
 @pytest.fixture
@@ -606,6 +607,8 @@ def test_len(df, pdf):
 
     first = df2.partitions[0].compute()
     assert len(df2.partitions[0]) == len(first)
+
+    assert isinstance(Len(df2.expr).optimize(), expr.Literal)
 
 
 def test_drop_duplicates(df, pdf):
