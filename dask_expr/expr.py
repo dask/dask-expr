@@ -1075,6 +1075,18 @@ class Lengths(Expr):
         return dsk
 
 
+class ResetIndex(Elemwise):
+    """Reset the index of a Series or DataFrame"""
+
+    _parameters = ["frame", "drop"]
+    _defaults = {"drop": False}
+    _keyword_only = ["drop"]
+    operation = M.reset_index
+
+    def _divisions(self):
+        return (None,) * (self.frame.npartitions + 1)
+
+
 class Head(Expr):
     """Take the first `n` rows of the first partition"""
 
