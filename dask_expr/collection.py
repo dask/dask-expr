@@ -87,10 +87,6 @@ class FrameBase(DaskMethodsMixin):
         return new_collection(self.expr.size)
 
     def __len__(self):
-        return self._len
-
-    @property
-    def _len(self):
         return new_collection(Len(self.expr)).compute()
 
     @property
