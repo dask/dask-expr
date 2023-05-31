@@ -114,3 +114,12 @@ def test_shuffle_column_projection():
     df2 = df.shuffle("x")[["x"]].simplify()
 
     assert "y" not in df2.expr.operands[0].columns
+
+
+def test_shuffle_reductions():
+    pdf = pd.DataFrame({"x": list(range(20)) * 5, "y": range(100)})
+    df = from_pandas(pdf, npartitions=10)
+
+    assert df.shuffle("x").sum().optimize()._name == df.sum()._name  # This passes
+
+    assert df.shuffle("x").y.sum().optimize()._name == df.y.sum()._name  # This fails
