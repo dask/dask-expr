@@ -35,6 +35,7 @@ from dask_expr.expr import (
     Projection,
 )
 from dask_expr.io import BlockwiseIO, PartitionsFiltered
+from dask_expr.reductions import Len
 
 NONE_LABEL = "__null_dask_index__"
 
@@ -120,6 +121,11 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             _lengths = self._get_lengths()
             if _lengths:
                 return Literal(_lengths)
+
+        if isinstance(parent, Len):
+            _lengths = self._get_lengths()
+            if _lengths:
+                return Literal(sum(_lengths))
 
     @cached_property
     def _dataset_info(self):

@@ -6,6 +6,7 @@ import math
 from dask.dataframe.io.io import sorted_division_locations
 
 from dask_expr.expr import Blockwise, Expr, Lengths, Literal, PartitionsFiltered
+from dask_expr.reductions import Len
 
 
 class IO(Expr):
@@ -86,6 +87,11 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
             _lengths = self._get_lengths()
             if _lengths:
                 return Literal(_lengths)
+
+        if isinstance(parent, Len):
+            _lengths = self._get_lengths()
+            if _lengths:
+                return Literal(sum(_lengths))
 
     def _divisions(self):
         return self._divisions_and_locations[0]

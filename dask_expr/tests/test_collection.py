@@ -609,6 +609,7 @@ def test_len(df, pdf):
     assert len(df2.partitions[0]) == len(first)
 
     assert isinstance(Len(df2.expr).optimize(), expr.Literal)
+    assert isinstance(expr.Lengths(df2.expr).optimize(), expr.Literal)
 
 
 def test_drop_duplicates(df, pdf):
