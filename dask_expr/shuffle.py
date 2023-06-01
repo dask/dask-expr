@@ -18,7 +18,25 @@ from dask.dataframe.shuffle import (
 from dask.utils import digit, get_default_shuffle_algorithm, insert
 
 from dask_expr.expr import Blockwise, Expr, PartitionsFiltered, Projection
-from dask_expr.reductions import Reduction
+from dask_expr.reductions import (
+    All,
+    Any,
+    Count,
+    Len,
+    Max,
+    Mean,
+    MemoryUsage,
+    Min,
+    Mode,
+    NBytes,
+    NLargest,
+    NSmallest,
+    Prod,
+    Size,
+    Sum,
+    Unique,
+    ValueCounts,
+)
 from dask_expr.repartition import Repartition
 
 
@@ -103,7 +121,28 @@ class Shuffle(Expr):
                     parent.operand("columns")
                 ]
 
-        if isinstance(parent, Reduction) and "idx" not in type(parent).__name__:
+        if isinstance(
+            parent,
+            (
+                Unique,
+                Sum,
+                Prod,
+                Max,
+                Any,
+                All,
+                Min,
+                Len,
+                Size,
+                NBytes,
+                Mean,
+                Count,
+                Mode,
+                NLargest,
+                NSmallest,
+                ValueCounts,
+                MemoryUsage,
+            ),
+        ):
             return type(parent)(self.frame, *parent.operands[1:])
 
     def _layer(self):
