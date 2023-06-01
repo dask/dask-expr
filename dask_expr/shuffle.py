@@ -22,6 +22,7 @@ from dask_expr.reductions import (
     All,
     Any,
     Count,
+    DropDuplicates,
     Len,
     Max,
     Mean,
@@ -125,6 +126,7 @@ class Shuffle(Expr):
             parent,
             (
                 Unique,
+                DropDuplicates,
                 Sum,
                 Prod,
                 Max,
