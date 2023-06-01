@@ -39,6 +39,8 @@ from dask_expr.reductions import Len
 
 NONE_LABEL = "__null_dask_index__"
 
+_cached_dataset_info = {}
+
 
 class ReadParquet(PartitionsFiltered, BlockwiseIO):
     """Read a parquet dataset"""
@@ -170,8 +172,9 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             # Not using blocksize - Set to `None`
             blocksize = None
 
-        dataset_info = self.engine._collect_dataset_info(
-            paths,
+        # Collect general dataset info
+        args = (
+            tuple(paths),
             fs,
             self.categories,
             index,
@@ -183,12 +186,19 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             self.ignore_metadata_file,
             self.metadata_task_size,
             self.parquet_file_extension,
-            {
-                "read": read_options,
-                "dataset": dataset_options,
-                **other_options,
-            },
         )
+        if args not in _cached_dataset_info:
+            # TODO: Limit the size of _cached_dataset_info?
+            _cached_dataset_info[args] = self.engine._collect_dataset_info(
+                paths,
+                *args[1:],
+                {
+                    "read": read_options,
+                    "dataset": dataset_options,
+                    **other_options,
+                },
+            )
+        dataset_info = _cached_dataset_info[args].copy()
 
         # Infer meta, accounting for index and columns arguments.
         meta = self.engine._create_dd_meta(dataset_info)
