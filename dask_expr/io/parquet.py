@@ -7,6 +7,7 @@ from functools import cached_property
 
 import dask
 import pyarrow.parquet as pq
+from dask.base import tokenize
 from dask.dataframe.io.parquet.core import (
     ParquetFunctionWrapper,
     aggregate_row_groups,
@@ -174,7 +175,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
 
         # Collect general dataset info
         args = (
-            tuple(paths),
+            paths,
             fs,
             self.categories,
             index,
@@ -186,19 +187,20 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             self.ignore_metadata_file,
             self.metadata_task_size,
             self.parquet_file_extension,
+            {
+                "read": read_options,
+                "dataset": dataset_options,
+                **other_options,
+            },
         )
-        if args not in _cached_dataset_info:
-            # TODO: Limit the size of _cached_dataset_info?
-            _cached_dataset_info[args] = self.engine._collect_dataset_info(
-                paths,
-                *args[1:],
-                {
-                    "read": read_options,
-                    "dataset": dataset_options,
-                    **other_options,
-                },
+        dataset_token = tokenize(*args)
+        if dataset_token not in _cached_dataset_info:
+            # TODO: Allow _cached_dataset_info to contain >1 item?
+            _cached_dataset_info.clear()
+            _cached_dataset_info[dataset_token] = self.engine._collect_dataset_info(
+                *args
             )
-        dataset_info = _cached_dataset_info[args].copy()
+        dataset_info = _cached_dataset_info[dataset_token].copy()
 
         # Infer meta, accounting for index and columns arguments.
         meta = self.engine._create_dd_meta(dataset_info)
