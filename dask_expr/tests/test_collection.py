@@ -524,12 +524,12 @@ def test_serialization(pdf, df):
 def test_size_optimized(df):
     expr = (df.x + 1).apply(lambda x: x).size
     out = optimize(expr)
-    expected = optimize(df.x.size)
+    expected = optimize(df.index.size)
     assert out._name == expected._name
 
     expr = (df + 1).apply(lambda x: x).size
     out = optimize(expr)
-    expected = optimize(df.size)
+    expected = optimize(df.index.size)
     assert out._name == expected._name
 
 
