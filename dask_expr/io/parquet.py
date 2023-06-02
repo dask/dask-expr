@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import itertools
 import operator
+import pickle
 from collections import defaultdict
 from functools import cached_property
 
@@ -226,10 +227,11 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             return meta[column]
         return meta
 
-    @property
+    @cached_property
     def _plan(self):
         dataset_info = self._dataset_info
-        dataset_token = tokenize(dataset_info)
+        # Need to serialize dataset_info for deterministic tokenize result
+        dataset_token = tokenize(pickle.dumps(dataset_info))
         if dataset_token not in _cached_plan:
             parts, stats, common_kwargs = self.engine._construct_collection_plan(
                 dataset_info
