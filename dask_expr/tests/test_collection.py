@@ -133,14 +133,17 @@ def test_dropna(pdf):
     assert_eq(df.y.dropna(), pdf.y.dropna())
 
 
-@pytest.mark.parametrize("kwargs", [
-    dict(value=123),
-    dict(value=123, limit=1),
-    dict(value=None, method="ffill"),
-    dict(value=None, method="bfill"),
-    dict(method="ffill", limit=1),
-    dict(method="bfill", limit=1),
-])
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        dict(value=123),
+        dict(value=123, limit=1),
+        dict(value=None, method="ffill"),
+        dict(value=None, method="bfill"),
+        dict(method="ffill", limit=1),
+        dict(method="bfill", limit=1),
+    ],
+)
 def test_fillna(pdf, kwargs):
     pdf.loc[0, "y"] = np.nan
     df = from_pandas(pdf)
