@@ -853,6 +853,13 @@ class DropnaFrame(Blockwise):
     operation = M.dropna
 
 
+class Fillna(Blockwise):
+    _parameters = ["frame", "value", "method", "limit", "axis"]
+    _defaults = {"value": None, "method": None, "limit": None, "axis": None}
+    _keyword_only = ["method", "limit", "axis"]
+    operation = M.fillna
+
+
 class Replace(Blockwise):
     _parameters = ["frame", "to_replace", "value", "regex"]
     _defaults = {"to_replace": None, "value": no_default, "regex": False}

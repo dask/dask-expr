@@ -133,6 +133,21 @@ def test_dropna(pdf):
     assert_eq(df.y.dropna(), pdf.y.dropna())
 
 
+@pytest.mark.parametrize("kwargs", [
+    dict(value=123),
+    dict(value=123, limit=1),
+    dict(value=None, method="ffill"),
+    dict(value=None, method="bfill"),
+    dict(method="ffill", limit=1),
+    dict(method="bfill", limit=1),
+])
+def test_fillna(pdf, kwargs):
+    pdf.loc[0, "y"] = np.nan
+    df = from_pandas(pdf)
+    assert_eq(df.fillna(**kwargs), pdf.fillna(**kwargs))
+    assert_eq(df.y.fillna(**kwargs), pdf.y.fillna(**kwargs))
+
+
 def test_memory_usage(pdf):
     # Results are not equal with RangeIndex because pandas has one RangeIndex while
     # we have one RangeIndex per partition

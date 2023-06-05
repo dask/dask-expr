@@ -570,6 +570,11 @@ class DataFrame(FrameBase):
             expr.DropnaFrame(self.expr, how=how, subset=subset, thresh=thresh)
         )
 
+    def fillna(self, value=None, method=None, limit=None, axis=None):
+        return new_collection(
+            expr.Fillna(self.expr, value=value, method=method, limit=limit, axis=axis)
+        )
+
     def rename(self, columns):
         return new_collection(RenameFrame(self.expr, columns=columns))
 
@@ -619,6 +624,11 @@ class Series(FrameBase):
 
     def dropna(self):
         return new_collection(expr.DropnaSeries(self.expr))
+
+    def fillna(self, value=None, method=None, limit=None, axis=None):
+        return new_collection(
+            expr.Fillna(self.expr, value=value, method=method, limit=limit, axis=axis)
+        )
 
     def between(self, left, right, inclusive="both"):
         return new_collection(
