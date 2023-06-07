@@ -6,9 +6,11 @@ import numpy as np
 from dask.base import DaskMethodsMixin, named_schedulers
 from dask.dataframe.core import (
     _concat,
+    _Frame,
     is_dataframe_like,
     is_index_like,
     is_series_like,
+    new_dd_object,
 )
 from dask.dataframe.dispatch import meta_nonempty
 from dask.utils import IndexCallable
@@ -20,6 +22,7 @@ from dask_expr.expr import RenameFrame, no_default
 from dask_expr.merge import Merge
 from dask_expr.reductions import (
     DropDuplicates,
+    Len,
     MemoryUsageFrame,
     MemoryUsageIndex,
     NLargest,
@@ -82,6 +85,9 @@ class FrameBase(DaskMethodsMixin):
     @property
     def size(self):
         return new_collection(self.expr.size)
+
+    def __len__(self):
+        return new_collection(Len(self.expr)).compute()
 
     @property
     def nbytes(self):
@@ -154,6 +160,9 @@ class FrameBase(DaskMethodsMixin):
     @property
     def index(self):
         return new_collection(self.expr.index)
+
+    def reset_index(self, drop=False):
+        return new_collection(expr.ResetIndex(self.expr, drop))
 
     def head(self, n=5, compute=True):
         out = new_collection(expr.Head(self.expr, n=n))
@@ -238,10 +247,15 @@ class FrameBase(DaskMethodsMixin):
             )
         )
 
-    def groupby(self, *args, **kwargs):
+    def groupby(self, by, **kwargs):
         from dask_expr.groupby import GroupBy
 
-        return GroupBy(self, *args, **kwargs)
+        if isinstance(by, FrameBase):
+            raise ValueError(
+                f"`by` must be a column name or list of columns, got {by}."
+            )
+
+        return GroupBy(self, by, **kwargs)
 
     def map_partitions(
         self,
@@ -334,6 +348,19 @@ class FrameBase(DaskMethodsMixin):
 
         return new_collection(Repartition(self.expr, npartitions, divisions, force))
 
+    def to_dask_dataframe(self, optimize: bool = True, **optimize_kwargs) -> _Frame:
+        """Convert to a dask-dataframe collection
+
+        Parameters
+        ----------
+        optimize
+            Whether to optimize the underlying `Expr` object before conversion.
+        **optimize_kwargs
+            Key-word arguments to pass through to `optimize`.
+        """
+        df = self.optimize(**optimize_kwargs) if optimize else self
+        return new_dd_object(df.dask, df._name, df._meta, df.divisions)
+
 
 # Add operator attributes
 for op in [
@@ -356,7 +383,11 @@ for op in [
     "__eq__",
     "__ne__",
     "__and__",
+    "__rand__",
     "__or__",
+    "__ror__",
+    "__xor__",
+    "__rxor__",
 ]:
     setattr(FrameBase, op, functools.partialmethod(_wrap_expr_op, op=op))
 
@@ -495,6 +526,13 @@ class DataFrame(FrameBase):
                 # Fall back to `BaseFrame.__getattr__`
                 return super().__getattr__(key)
 
+    def __dir__(self):
+        o = set(dir(type(self)))
+        o.update(self.__dict__)
+        o.update(set(dir(expr.Expr)))
+        o.update(c for c in self.columns if (isinstance(c, str) and c.isidentifier()))
+        return list(o)
+
     def map(self, func, na_action=None):
         return new_collection(expr.Map(self.expr, arg=func, na_action=na_action))
 
@@ -538,6 +576,12 @@ class DataFrame(FrameBase):
 
 class Series(FrameBase):
     """Series-like Expr Collection"""
+
+    def __dir__(self):
+        o = set(dir(type(self)))
+        o.update(self.__dict__)
+        o.update(set(dir(expr.Expr)))
+        return list(o)
 
     @property
     def name(self):
@@ -591,6 +635,12 @@ class Index(Series):
     def memory_usage(self, deep=False):
         return new_collection(MemoryUsageIndex(self.expr, deep=deep))
 
+    def __dir__(self):
+        o = set(dir(type(self)))
+        o.update(self.__dict__)
+        o.update(set(dir(expr.Expr)))
+        return list(o)
+
 
 class Scalar(FrameBase):
     """Scalar Expr Collection"""
@@ -630,6 +680,20 @@ def from_graph(*args, **kwargs):
     from dask_expr.io.io import FromGraph
 
     return new_collection(FromGraph(*args, **kwargs))
+
+
+def from_dask_dataframe(ddf: _Frame, optimize: bool = True) -> FrameBase:
+    """Create a dask-expr collection from a dask-dataframe collection
+
+    Parameters
+    ----------
+    optimize
+        Whether to optimize the graph before conversion.
+    """
+    graph = ddf.dask
+    if optimize:
+        graph = ddf.__dask_optimize__(graph, ddf.__dask_keys__())
+    return from_graph(graph, ddf._meta, ddf.divisions, ddf._name)
 
 
 def read_csv(*args, **kwargs):

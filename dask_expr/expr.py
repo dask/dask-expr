@@ -5,7 +5,7 @@ import numbers
 import operator
 import os
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
 
 import dask
 import pandas as pd
@@ -20,6 +20,7 @@ from dask.dataframe.core import (
     is_dataframe_like,
     is_index_like,
     is_series_like,
+    make_meta,
 )
 from dask.dataframe.dispatch import meta_nonempty
 from dask.utils import M, apply, funcname, import_required, is_arraylike
@@ -346,16 +347,28 @@ class Expr:
         return GE(other, self)
 
     def __eq__(self, other):
-        return EQ(other, self)
+        return EQ(self, other)
 
     def __ne__(self, other):
-        return NE(other, self)
+        return NE(self, other)
 
     def __and__(self, other):
+        return And(self, other)
+
+    def __rand__(self, other):
         return And(other, self)
 
     def __or__(self, other):
+        return Or(self, other)
+
+    def __ror__(self, other):
         return Or(other, self)
+
+    def __xor__(self, other):
+        return XOr(self, other)
+
+    def __rxor__(self, other):
+        return XOr(other, self)
 
     def sum(self, skipna=True, numeric_only=False, min_count=0):
         return Sum(self, skipna, numeric_only, min_count)
@@ -622,6 +635,53 @@ class Expr:
         g = self._to_graphviz(**kwargs)
         graphviz_to_file(g, filename, format)
         return g
+
+    def find_operations(self, operation: type) -> Generator[Expr]:
+        """Search the expression graph for a specific operation type
+
+        Parameters
+        ----------
+        operation
+            The operation type to search for.
+
+        Returns
+        -------
+        nodes
+            Generator of `operation` instances. Ordering corresponds
+            to a depth-first search of the expression graph.
+        """
+
+        assert issubclass(operation, Expr), "`operation` must be `Expr` subclass"
+        stack = [self]
+        seen = set()
+        while stack:
+            node = stack.pop()
+            if node._name in seen:
+                continue
+            seen.add(node._name)
+
+            for dep in node.dependencies():
+                stack.append(dep)
+
+            if isinstance(node, operation):
+                yield node
+
+
+class Literal(Expr):
+    """Represent a literal (known) value as an `Expr`"""
+
+    _parameters = ["value"]
+
+    def _divisions(self):
+        return (None, None)
+
+    @property
+    def _meta(self):
+        return make_meta(self.value)
+
+    def _task(self, index: int):
+        assert index == 0
+        return self.value
 
 
 class Blockwise(Expr):
@@ -982,6 +1042,9 @@ class Projection(Elemwise):
         return f"{base}[{repr(self.columns)}]"
 
     def _simplify_down(self):
+        if str(self.frame.columns) == str(self.columns):
+            # TODO: we should get more precise around Expr.columns types
+            return self.frame
         if isinstance(self.frame, Projection):
             # df[a][b]
             a = self.frame.operand("columns")
@@ -1017,6 +1080,45 @@ class Index(Elemwise):
             (self.frame._name, index),
             "index",
         )
+
+
+class Lengths(Expr):
+    """Returns a tuple of partition lengths"""
+
+    _parameters = ["frame"]
+
+    @property
+    def _meta(self):
+        return tuple()
+
+    def _divisions(self):
+        return (None, None)
+
+    def _simplify_down(self):
+        if isinstance(self.frame, Elemwise):
+            child = max(self.frame.dependencies(), key=lambda expr: expr.npartitions)
+            return Lengths(child)
+
+    def _layer(self):
+        name = "part-" + self._name
+        dsk = {
+            (name, i): (len, (self.frame._name, i))
+            for i in range(self.frame.npartitions)
+        }
+        dsk[(self._name, 0)] = (tuple, list(dsk.keys()))
+        return dsk
+
+
+class ResetIndex(Elemwise):
+    """Reset the index of a Series or DataFrame"""
+
+    _parameters = ["frame", "drop"]
+    _defaults = {"drop": False}
+    _keyword_only = ["drop"]
+    operation = M.reset_index
+
+    def _divisions(self):
+        return (None,) * (self.frame.npartitions + 1)
 
 
 class Head(Expr):
@@ -1205,6 +1307,11 @@ class And(Binop):
 class Or(Binop):
     operation = operator.or_
     _operator_repr = "|"
+
+
+class XOr(Binop):
+    operation = operator.xor
+    _operator_repr = "^"
 
 
 class Partitions(Expr):

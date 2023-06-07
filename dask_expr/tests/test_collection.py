@@ -12,6 +12,7 @@ from dask.utils import M
 
 from dask_expr import expr, from_pandas, optimize
 from dask_expr.datasets import timeseries
+from dask_expr.reductions import Len
 
 
 @pytest.fixture
@@ -175,6 +176,25 @@ def test_conditionals(func, pdf, df):
 @pytest.mark.parametrize(
     "func",
     [
+        lambda df: df.x & df.y,
+        lambda df: df.x.__rand__(df.y),
+        lambda df: df.x | df.y,
+        lambda df: df.x.__ror__(df.y),
+        lambda df: df.x ^ df.y,
+        lambda df: df.x.__rxor__(df.y),
+    ],
+)
+def test_boolean_operators(func):
+    pdf = pd.DataFrame(
+        {"x": [True, False, True, False], "y": [True, False, False, False]}
+    )
+    df = from_pandas(pdf)
+    assert_eq(func(pdf), func(df))
+
+
+@pytest.mark.parametrize(
+    "func",
+    [
         lambda df: df[(df.x > 10) | (df.x < 5)],
         lambda df: df[(df.x > 7) & (df.x < 10)],
     ],
@@ -263,7 +283,7 @@ def test_clip_traverse_filters(df):
     assert result._name == expected._name
 
     result = optimize(df.clip(lower=10)[["x", "y"]], fuse=False)
-    expected = df.clip(lower=10)[["x", "y"]]
+    expected = df.clip(lower=10)
 
     assert result._name == expected._name
 
@@ -305,6 +325,14 @@ def test_persist(pdf, df):
 def test_index(pdf, df):
     assert_eq(df.index, pdf.index)
     assert_eq(df.x.index, pdf.x.index)
+
+
+@pytest.mark.parametrize("drop", [True, False])
+def test_reset_index(pdf, df, drop):
+    assert_eq(df.reset_index(drop=drop), pdf.reset_index(drop=drop), check_index=False)
+    assert_eq(
+        df.x.reset_index(drop=drop), pdf.x.reset_index(drop=drop), check_index=False
+    )
 
 
 def test_head(pdf, df):
@@ -357,6 +385,20 @@ def test_projection_stacking(df):
     result = df[["x", "y"]]["x"]
     optimized = optimize(result, fuse=False)
     expected = df["x"]
+
+    assert optimized._name == expected._name
+
+
+def test_remove_unnecessary_projections(df):
+    result = (df + 1)[df.columns]
+    optimized = optimize(result, fuse=False)
+    expected = df + 1
+
+    assert optimized._name == expected._name
+
+    result = (df.x + 1)["x"]
+    optimized = optimize(result, fuse=False)
+    expected = df.x + 1
 
     assert optimized._name == expected._name
 
@@ -571,6 +613,19 @@ def test_repartition_divisions(df, opt):
             assert part.max() < df2.divisions[p + 1]
 
 
+def test_len(df, pdf):
+    df2 = df[["x"]] + 1
+    assert len(df2) == len(pdf)
+
+    assert len(df[df.x > 5]) == len(pdf[pdf.x > 5])
+
+    first = df2.partitions[0].compute()
+    assert len(df2.partitions[0]) == len(first)
+
+    assert isinstance(Len(df2.expr).optimize(), expr.Literal)
+    assert isinstance(expr.Lengths(df2.expr).optimize(), expr.Literal)
+
+
 def test_drop_duplicates(df, pdf):
     assert_eq(df.drop_duplicates(), pdf.drop_duplicates())
     assert_eq(
@@ -595,3 +650,24 @@ def test_unique(df, pdf):
     # pandas returns a numpy array while we return a Series/Index
     assert_eq(df.x.unique(), pd.Series(pdf.x.unique(), name="x"))
     assert_eq(df.index.unique(), pd.Index(pdf.index.unique()))
+
+
+def test_find_operations(df):
+    df2 = df[df["x"] > 1][["y"]] + 1
+
+    filters = list(df2.find_operations(expr.Filter))
+    assert len(filters) == 1
+
+    projections = list(df2.find_operations(expr.Projection))
+    assert len(projections) == 2
+
+    adds = list(df2.find_operations(expr.Add))
+    assert len(adds) == 1
+    assert next(iter(adds))._name == df2._name
+
+
+def test_dir(df):
+    assert all(c in dir(df) for c in df.columns)
+    assert "sum" in dir(df)
+    assert "sum" in dir(df.x)
+    assert "sum" in dir(df.index)

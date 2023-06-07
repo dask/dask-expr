@@ -3,31 +3,64 @@ from __future__ import annotations
 import itertools
 import operator
 import warnings
+from collections import defaultdict
 from functools import cached_property
 
+import dask
+import pyarrow as pa
+import pyarrow.dataset as pa_ds
+import pyarrow.parquet as pq
+from dask.base import normalize_token, tokenize
 from dask.dataframe.io.parquet.core import (
     ParquetFunctionWrapper,
+    aggregate_row_groups,
     get_engine,
-    process_statistics,
     set_index_columns,
+    sorted_columns,
 )
 from dask.dataframe.io.parquet.utils import _split_user_options
 from dask.dataframe.io.utils import _is_local_fs
+from dask.delayed import delayed
 from dask.utils import natural_sort_key
 
-from dask_expr.expr import EQ, GE, GT, LE, LT, NE, And, Expr, Filter, Or, Projection
+from dask_expr.expr import (
+    EQ,
+    GE,
+    GT,
+    LE,
+    LT,
+    NE,
+    And,
+    Expr,
+    Filter,
+    Lengths,
+    Literal,
+    Or,
+    Projection,
+)
 from dask_expr.io import BlockwiseIO, PartitionsFiltered
+from dask_expr.reductions import Len
 
 NONE_LABEL = "__null_dask_index__"
 
+# TODO: Allow _cached_dataset_info/_plan to contain >1 item?
+_cached_dataset_info = {}
+_cached_plan = {}
 
-def _list_columns(columns):
-    # Simple utility to convert columns to list
-    if isinstance(columns, (str, int)):
-        columns = [columns]
-    elif isinstance(columns, tuple):
-        columns = list(columns)
-    return columns
+
+@normalize_token.register(pa_ds.Dataset)
+def normalize_pa_ds(ds):
+    return (ds.files, ds.schema)
+
+
+@normalize_token.register(pa_ds.FileFormat)
+def normalize_pa_file_format(file_format):
+    return str(file_format)
+
+
+@normalize_token.register(pa.Schema)
+def normalize_pa_schema(schema):
+    return schema.to_string()
 
 
 class ToParquet(Expr):
@@ -191,6 +224,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         "_partitions": None,
         "_series": False,
     }
+    _pq_length_stats = None
 
     @property
     def engine(self):
@@ -226,6 +260,16 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
                 kwargs = dict(zip(self._parameters, self.operands))
                 kwargs["filters"] = filters.combine(kwargs["filters"]).to_list_tuple()
                 return ReadParquet(**kwargs)
+
+        if isinstance(parent, Lengths):
+            _lengths = self._get_lengths()
+            if _lengths:
+                return Literal(_lengths)
+
+        if isinstance(parent, Len):
+            _lengths = self._get_lengths()
+            if _lengths:
+                return Literal(sum(_lengths))
 
     @cached_property
     def _dataset_info(self):
@@ -270,7 +314,8 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             # Not using blocksize - Set to `None`
             blocksize = None
 
-        dataset_info = self.engine._collect_dataset_info(
+        # Collect general dataset info
+        args = (
             paths,
             fs,
             self.categories,
@@ -289,9 +334,17 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
                 **other_options,
             },
         )
+        dataset_token = tokenize(*args)
+        if dataset_token not in _cached_dataset_info:
+            _cached_dataset_info.clear()
+            _cached_dataset_info[dataset_token] = self.engine._collect_dataset_info(
+                *args
+            )
+        dataset_info = _cached_dataset_info[dataset_token].copy()
 
         # Infer meta, accounting for index and columns arguments.
         meta = self.engine._create_dd_meta(dataset_info)
+        index = dataset_info["index"]
         index = [index] if isinstance(index, str) else index
         meta, index, columns = set_index_columns(
             meta, index, self.operand("columns"), auto_index_allowed
@@ -315,50 +368,48 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
     @cached_property
     def _plan(self):
         dataset_info = self._dataset_info
-        parts, stats, common_kwargs = self.engine._construct_collection_plan(
-            dataset_info
-        )
-
-        # Parse dataset statistics from metadata (if available)
-        parts, divisions, _ = process_statistics(
-            parts,
-            stats,
-            dataset_info["filters"],
-            dataset_info["index"],
-            (
-                dataset_info["blocksize"]
-                if dataset_info["split_row_groups"] is True
-                else None
-            ),
-            dataset_info["split_row_groups"],
-            dataset_info["fs"],
-            dataset_info["aggregation_depth"],
-        )
-
-        meta = dataset_info["meta"]
-        if len(divisions) < 2:
-            # empty dataframe - just use meta
-            divisions = (None, None)
-            io_func = lambda x: x
-            parts = [meta]
-        else:
-            # Use IO function wrapper
-            io_func = ParquetFunctionWrapper(
-                self.engine,
-                dataset_info["fs"],
-                meta,
-                dataset_info["columns"],
-                dataset_info["index"],
-                dataset_info["kwargs"]["dtype_backend"],
-                {},  # All kwargs should now be in `common_kwargs`
-                common_kwargs,
+        dataset_token = tokenize(dataset_info)
+        if dataset_token not in _cached_plan:
+            parts, stats, common_kwargs = self.engine._construct_collection_plan(
+                dataset_info
             )
 
-        return {
-            "func": io_func,
-            "parts": parts,
-            "divisions": divisions,
-        }
+            # Make sure parts and stats are aligned
+            parts, stats = _align_statistics(parts, stats)
+
+            # Use statistics to aggregate partitions
+            parts, stats = _aggregate_row_groups(parts, stats, dataset_info)
+
+            # Use statistics to calculate divisions
+            divisions = _calculate_divisions(stats, dataset_info, len(parts))
+
+            meta = dataset_info["meta"]
+            if len(divisions) < 2:
+                # empty dataframe - just use meta
+                divisions = (None, None)
+                io_func = lambda x: x
+                parts = [meta]
+            else:
+                # Use IO function wrapper
+                io_func = ParquetFunctionWrapper(
+                    self.engine,
+                    dataset_info["fs"],
+                    meta,
+                    dataset_info["columns"],
+                    dataset_info["index"],
+                    dataset_info["kwargs"]["dtype_backend"],
+                    {},  # All kwargs should now be in `common_kwargs`
+                    common_kwargs,
+                )
+
+            _cached_plan.clear()
+            _cached_plan[dataset_token] = {
+                "func": io_func,
+                "parts": parts,
+                "statistics": stats,
+                "divisions": divisions,
+            }
+        return _cached_plan[dataset_token]
 
     def _divisions(self):
         return self._plan["divisions"]
@@ -369,9 +420,104 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             return (operator.getitem, tsk, self.columns[0])
         return tsk
 
+    def _get_lengths(self) -> tuple | None:
+        """Return known partition lengths using parquet statistics"""
+        if not self.filters:
+            self._update_length_statistics()
+            return tuple(
+                length
+                for i, length in enumerate(self._pq_length_stats)
+                if not self._filtered or i in self._partitions
+            )
+
+    def _update_length_statistics(self):
+        """Ensure that partition-length statistics are up to date"""
+
+        if not self._pq_length_stats:
+            if self._plan["statistics"]:
+                # Already have statistics from original API call
+                self._pq_length_stats = tuple(
+                    stat["num-rows"]
+                    for i, stat in enumerate(self._plan["statistics"])
+                    if not self._filtered or i in self._partitions
+                )
+            else:
+                # Need to go back and collect statistics
+                self._pq_length_stats = tuple(
+                    stat["num-rows"] for stat in _collect_pq_statistics(self)
+                )
+
 
 #
-# Filters
+# Helper functions
+#
+
+
+def _list_columns(columns):
+    # Simple utility to convert columns to list
+    if isinstance(columns, (str, int)):
+        columns = [columns]
+    elif isinstance(columns, tuple):
+        columns = list(columns)
+    return columns
+
+
+def _align_statistics(parts, statistics):
+    # Make sure parts and statistics are aligned
+    # (if statistics is not empty)
+    if statistics and len(parts) != len(statistics):
+        statistics = []
+    if statistics:
+        result = list(
+            zip(
+                *[
+                    (part, stats)
+                    for part, stats in zip(parts, statistics)
+                    if stats["num-rows"] > 0
+                ]
+            )
+        )
+        parts, statistics = result or [[], []]
+    return parts, statistics
+
+
+def _aggregate_row_groups(parts, statistics, dataset_info):
+    # Aggregate parts/statistics if we are splitting by row-group
+    blocksize = (
+        dataset_info["blocksize"] if dataset_info["split_row_groups"] is True else None
+    )
+    split_row_groups = dataset_info["split_row_groups"]
+    fs = dataset_info["fs"]
+    aggregation_depth = dataset_info["aggregation_depth"]
+
+    if statistics:
+        if blocksize or (split_row_groups and int(split_row_groups) > 1):
+            parts, statistics = aggregate_row_groups(
+                parts, statistics, blocksize, split_row_groups, fs, aggregation_depth
+            )
+    return parts, statistics
+
+
+def _calculate_divisions(statistics, dataset_info, npartitions):
+    # Use statistics to define divisions
+    divisions = None
+    if statistics:
+        calculate_divisions = dataset_info["kwargs"].get("calculate_divisions", None)
+        index = dataset_info["index"]
+        process_columns = index if index and len(index) == 1 else None
+        if (calculate_divisions is not False) and process_columns:
+            for sorted_column_info in sorted_columns(
+                statistics, columns=process_columns
+            ):
+                if sorted_column_info["name"] in index:
+                    divisions = sorted_column_info["divisions"]
+                    break
+
+    return divisions or (None,) * (npartitions + 1)
+
+
+#
+# Filtering logic
 #
 
 
@@ -488,3 +634,123 @@ class _DNF:
                     _filters = cls._Or([left, right])
 
         return _DNF(_filters)
+
+
+#
+# Parquet-statistics handling
+#
+
+
+def _collect_pq_statistics(
+    expr: ReadParquet, columns: list | None = None
+) -> list[dict] | None:
+    """Collect Parquet statistic for dataset paths"""
+
+    # Be strict about columns argument
+    if columns:
+        if not isinstance(columns, list):
+            raise ValueError(f"Expected columns to be a list, got {type(columns)}.")
+        allowed = {expr._meta.index.name} | set(expr.columns)
+        if not set(columns).issubset(allowed):
+            raise ValueError(f"columns={columns} must be a subset of {allowed}")
+
+    # Collect statistics using layer information
+    fs = expr._plan["func"].fs
+    parts = [
+        part
+        for i, part in enumerate(expr._plan["parts"])
+        if not expr._filtered or i in expr._partitions
+    ]
+
+    # Execute with delayed for large and remote datasets
+    parallel = int(False if _is_local_fs(fs) else 16)
+    if parallel:
+        # Group parts corresponding to the same file.
+        # A single task should always parse statistics
+        # for all these parts at once (since they will
+        # all be in the same footer)
+        groups = defaultdict(list)
+        for part in parts:
+            for p in [part] if isinstance(part, dict) else part:
+                path = p.get("piece")[0]
+                groups[path].append(p)
+        group_keys = list(groups.keys())
+
+        # Compute and return flattened result
+        func = delayed(_read_partition_stats_group)
+        result = dask.compute(
+            [
+                func(
+                    list(
+                        itertools.chain(
+                            *[groups[k] for k in group_keys[i : i + parallel]]
+                        )
+                    ),
+                    fs,
+                    columns=columns,
+                )
+                for i in range(0, len(group_keys), parallel)
+            ]
+        )[0]
+        return list(itertools.chain(*result))
+    else:
+        # Serial computation on client
+        return _read_partition_stats_group(parts, fs, columns=columns)
+
+
+def _read_partition_stats_group(parts, fs, columns=None):
+    """Parse the statistics for a group of files"""
+
+    def _read_partition_stats(part, fs, columns=None):
+        # Helper function to read Parquet-metadata
+        # statistics for a single partition
+
+        if not isinstance(part, list):
+            part = [part]
+
+        column_stats = {}
+        num_rows = 0
+        columns = columns or []
+        for p in part:
+            piece = p["piece"]
+            path = piece[0]
+            row_groups = None if piece[1] == [None] else piece[1]
+            with fs.open(path, default_cache="none") as f:
+                md = pq.ParquetFile(f).metadata
+            if row_groups is None:
+                row_groups = list(range(md.num_row_groups))
+            for rg in row_groups:
+                row_group = md.row_group(rg)
+                num_rows += row_group.num_rows
+                for i in range(row_group.num_columns):
+                    col = row_group.column(i)
+                    name = col.path_in_schema
+                    if name in columns:
+                        if col.statistics and col.statistics.has_min_max:
+                            if name in column_stats:
+                                column_stats[name]["min"] = min(
+                                    column_stats[name]["min"], col.statistics.min
+                                )
+                                column_stats[name]["max"] = max(
+                                    column_stats[name]["max"], col.statistics.max
+                                )
+                            else:
+                                column_stats[name] = {
+                                    "min": col.statistics.min,
+                                    "max": col.statistics.max,
+                                }
+
+        # Convert dict-of-dict to list-of-dict to be consistent
+        # with current `dd.read_parquet` convention (for now)
+        column_stats_list = [
+            {
+                "name": name,
+                "min": column_stats[name]["min"],
+                "max": column_stats[name]["max"],
+            }
+            for name in column_stats.keys()
+        ]
+        return {"num-rows": num_rows, "columns": column_stats_list}
+
+    # Helper function used by _extract_statistics
+    return [_read_partition_stats(part, fs, columns=columns) for part in parts]
