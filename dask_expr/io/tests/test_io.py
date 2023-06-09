@@ -236,3 +236,13 @@ def test_to_dask_dataframe(optimize):
     ddf = df.to_dask_dataframe(optimize=optimize)
     assert isinstance(ddf, dd.DataFrame)
     assert_eq(df, ddf)
+
+
+@pytest.mark.parametrize("write_metadata_file", [True, False])
+def test_to_parquet(tmpdir, write_metadata_file):
+    pdf = pd.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
+    df = from_pandas(pdf, npartitions=2)
+    df.to_parquet(tmpdir, write_metadata_file=write_metadata_file)
+
+    df2 = read_parquet(tmpdir, calculate_divisions=True)
+    assert_eq(df, df2)
