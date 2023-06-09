@@ -212,22 +212,17 @@ def to_parquet(
             raise ValueError("Cannot use both `overwrite=True` and `append=True`!")
 
         if fs.exists(path) and fs.isdir(path):
-            # # Check for any previous parquet layers reading from a file in the
-            # # output directory, since deleting those files now would result in
-            # # errors or incorrect results.
-            # for layer_name, layer in df.dask.layers.items():
-            #     if layer_name.startswith("read-parquet-") and isinstance(
-            #         layer, DataFrameIOLayer
-            #     ):
-            #         path_with_slash = path.rstrip("/") + "/"  # ensure trailing slash
-            #         for input in layer.inputs:
-            #             # Note that `input` may be either `dict` or `List[dict]`
-            #             for piece_dict in input if isinstance(input, list) else [input]:
-            #                 if piece_dict["piece"][0].startswith(path_with_slash):
-            #                     raise ValueError(
-            #                         "Reading and writing to the same parquet file within "
-            #                         "the same task graph is not supported."
-            #                     )
+            # Check for any previous parquet ops reading from a file in the
+            # output directory, since deleting those files now would result in
+            # errors or incorrect results.
+            for read_op in df.expr.find_operations(ReadParquet):
+                read_path_with_slash = str(read_op.path).rstrip("/") + "/"
+                write_path_with_slash = path.rstrip("/") + "/"
+                if read_path_with_slash.startswith(write_path_with_slash):
+                    raise ValueError(
+                        "Cannot overwrite a path that you are reading "
+                        "from in the same task graph."
+                    )
 
             # Don't remove the directory if it's the current working directory
             if _is_local_fs(fs):
@@ -239,6 +234,11 @@ def to_parquet(
 
             # It's safe to clear the output directory
             fs.rm(path, recursive=True)
+
+        # Clear read_parquet caches in case we are
+        # also reading from the overwritten path
+        _cached_dataset_info.clear()
+        _cached_plan.clear()
 
     # Always skip divisions checks if divisions are unknown
     if not df.known_divisions:

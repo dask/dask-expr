@@ -242,7 +242,19 @@ def test_to_dask_dataframe(optimize):
 def test_to_parquet(tmpdir, write_metadata_file):
     pdf = pd.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
     df = from_pandas(pdf, npartitions=2)
-    df.to_parquet(tmpdir, write_metadata_file=write_metadata_file)
 
+    # Check basic parquet round trip
+    df.to_parquet(tmpdir, write_metadata_file=write_metadata_file)
     df2 = read_parquet(tmpdir, calculate_divisions=True)
     assert_eq(df, df2)
+
+    # Check overwrite behavior
+    df["new"] = df["x"] + 1
+    df.to_parquet(tmpdir, overwrite=True, write_metadata_file=write_metadata_file)
+    df2 = read_parquet(tmpdir, calculate_divisions=True)
+    assert_eq(df, df2)
+
+    # Check that we cannot overwrite a path we are
+    # reading from in the same graph
+    with pytest.raises(ValueError, match="Cannot overwrite"):
+        df2.to_parquet(tmpdir, overwrite=True)
