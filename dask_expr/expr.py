@@ -988,6 +988,15 @@ class Map(Elemwise):
         return super()._divisions()
 
 
+class ExplodeSeries(Elemwise):
+    _parameters = ["frame"]
+    operation = M.explode
+
+
+class ExplodeFrame(ExplodeSeries):
+    _parameters = ["frame", "column"]
+
+
 class Assign(Elemwise):
     """Column Assignment"""
 
