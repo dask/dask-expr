@@ -896,10 +896,11 @@ class Sample(Blockwise):
         return self.operation(*args)
 
     def _task(self, index: int):
-        args = (
-            [self._blockwise_arg(self.frame, index)]
-            + [self.state_data[index], self.frac, self.replace]
-        )
+        args = [self._blockwise_arg(self.frame, index)] + [
+            self.state_data[index],
+            self.frac,
+            self.replace,
+        ]
         return (self.operation,) + tuple(args)
 
 
