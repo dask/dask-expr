@@ -346,11 +346,17 @@ class Len(Reduction):
     reduction_aggregate = sum
 
     def _simplify_down(self):
-        if isinstance(self.frame, Elemwise) and not (
-            isinstance(self.frame, Index) and not isinstance(self.frame.frame, Elemwise)
-        ):
+        from dask_expr.io.io import IO
+
+        if isinstance(self.frame, Index) and isinstance(self.frame.frame, Elemwise):
+            return Len(self.frame.frame)
+
+        if isinstance(self.frame, Elemwise) and not isinstance(self.frame, Index):
             child = max(self.frame.dependencies(), key=lambda expr: expr.npartitions)
             return Len(child)
+
+        if isinstance(self.frame, IO):  # let the child handle it.
+            return self
 
         if len(self.frame.columns):
             return Len(self.frame.index)
