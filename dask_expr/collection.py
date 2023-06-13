@@ -18,7 +18,7 @@ from fsspec.utils import stringify_path
 from tlz import first
 
 from dask_expr import expr
-from dask_expr.expr import ExplodeFrame, ExplodeSeries, RenameFrame, no_default
+from dask_expr.expr import no_default
 from dask_expr.merge import Merge
 from dask_expr.reductions import (
     DropDuplicates,
@@ -571,10 +571,10 @@ class DataFrame(FrameBase):
         )
 
     def rename(self, columns):
-        return new_collection(RenameFrame(self.expr, columns=columns))
+        return new_collection(expr.RenameFrame(self.expr, columns=columns))
 
     def explode(self, column):
-        return new_collection(ExplodeFrame(self.expr, column=column))
+        return new_collection(expr.ExplodeFrame(self.expr, column=column))
 
 
 class Series(FrameBase):
@@ -629,7 +629,7 @@ class Series(FrameBase):
         )
 
     def explode(self):
-        return new_collection(ExplodeSeries(self.expr))
+        return new_collection(expr.ExplodeSeries(self.expr))
 
 
 class Index(Series):
