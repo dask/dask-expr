@@ -60,6 +60,12 @@ def _wrap_expr_op(self, other, op=None):
     return new_collection(getattr(self.expr, op)(other))
 
 
+def _wrap_unary_expr_op(self, op=None):
+    # Wrap expr operator
+    assert op is not None
+    return new_collection(getattr(self.expr, op)())
+
+
 #
 # Collection classes
 #
@@ -390,8 +396,16 @@ for op in [
     "__ror__",
     "__xor__",
     "__rxor__",
+    "__invert__",
 ]:
     setattr(FrameBase, op, functools.partialmethod(_wrap_expr_op, op=op))
+
+for op in [
+    "__invert__",
+    "__neg__",
+    "__pos__",
+]:
+    setattr(FrameBase, op, functools.partialmethod(_wrap_unary_expr_op, op=op))
 
 
 class DataFrame(FrameBase):
