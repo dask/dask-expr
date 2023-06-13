@@ -1006,7 +1006,7 @@ class Map(Elemwise):
         return super()._divisions()
 
 
-class ExplodeSeries(Elemwise):
+class ExplodeSeries(Blockwise):
     _parameters = ["frame"]
     operation = M.explode
 
