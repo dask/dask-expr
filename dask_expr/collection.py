@@ -396,7 +396,6 @@ for op in [
     "__ror__",
     "__xor__",
     "__rxor__",
-    "__invert__",
 ]:
     setattr(FrameBase, op, functools.partialmethod(_wrap_expr_op, op=op))
 
