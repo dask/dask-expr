@@ -348,16 +348,20 @@ class Len(Reduction):
     def _simplify_down(self):
         from dask_expr.io.io import IO
 
+        # We introduce Index nodes sometimes.  We special case around them.
         if isinstance(self.frame, Index) and isinstance(self.frame.frame, Elemwise):
             return Len(self.frame.frame)
 
+        # Pass through Elemwises, unless we just introduced an Index
         if isinstance(self.frame, Elemwise) and not isinstance(self.frame, Index):
             child = max(self.frame.dependencies(), key=lambda expr: expr.npartitions)
             return Len(child)
 
-        if isinstance(self.frame, IO):  # let the child handle it.
+        # Let the child handle it.  They often know best
+        if isinstance(self.frame, IO):
             return self
 
+        # Drop all of the columns, just pass through the index
         if len(self.frame.columns):
             return Len(self.frame.index)
 
