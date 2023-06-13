@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import functools
+import warnings
+from numbers import Number
 
 import numpy as np
 from dask.base import DaskMethodsMixin, named_schedulers
@@ -13,7 +15,7 @@ from dask.dataframe.core import (
     new_dd_object,
 )
 from dask.dataframe.dispatch import meta_nonempty
-from dask.utils import IndexCallable
+from dask.utils import IndexCallable, random_state_data
 from fsspec.utils import stringify_path
 from tlz import first
 
@@ -570,11 +572,39 @@ class DataFrame(FrameBase):
             expr.DropnaFrame(self.expr, how=how, subset=subset, thresh=thresh)
         )
 
+    def sample(self, n=None, frac=None, replace=False, random_state=None):
+        if n is not None:
+            msg = (
+                "sample does not support the number of sampled items "
+                "parameter, 'n'. Please use the 'frac' parameter instead."
+            )
+            if isinstance(n, Number) and 0 <= n <= 1:
+                warnings.warn(msg)
+                frac = n
+            else:
+                raise ValueError(msg)
+
+        if frac is None:
+            raise ValueError("frac must not be None")
+
+        if random_state is None:
+            random_state = np.random.RandomState()
+
+        state_data = random_state_data(self.npartitions, random_state)
+        return new_collection(
+            expr.Sample(self.expr, state_data=state_data, frac=frac, replace=replace)
+        )
+
     def rename(self, columns):
         return new_collection(expr.RenameFrame(self.expr, columns=columns))
 
     def explode(self, column):
         return new_collection(expr.ExplodeFrame(self.expr, column=column))
+
+    def to_parquet(self, path, **kwargs):
+        from dask_expr.io.parquet import to_parquet
+
+        return to_parquet(self, path, **kwargs)
 
 
 class Series(FrameBase):

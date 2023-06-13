@@ -2,7 +2,7 @@ import functools
 
 import numpy as np
 from dask import is_dask_collection
-from dask.dataframe.core import _concat, is_dataframe_like, is_series_like, no_default
+from dask.dataframe.core import _concat, is_dataframe_like, is_series_like
 from dask.dataframe.groupby import (
     _agg_finalize,
     _apply_chunk,
@@ -225,12 +225,24 @@ class Sum(SingleAggregation):
     groupby_chunk = M.sum
 
 
+class Prod(SingleAggregation):
+    groupby_chunk = M.prod
+
+
 class Min(SingleAggregation):
     groupby_chunk = M.min
 
 
 class Max(SingleAggregation):
     groupby_chunk = M.max
+
+
+class First(SingleAggregation):
+    groupby_chunk = M.first
+
+
+class Last(SingleAggregation):
+    groupby_chunk = M.last
 
 
 class Count(SingleAggregation):
@@ -320,7 +332,7 @@ class GroupBy:
             raise NotImplementedError("sort=True not yet supported.")
 
     def _numeric_only_kwargs(self, numeric_only):
-        kwargs = {} if numeric_only is no_default else {"numeric_only": numeric_only}
+        kwargs = {"numeric_only": numeric_only}
         return {"chunk_kwargs": kwargs, "aggregate_kwargs": kwargs}
 
     def _single_agg(
@@ -360,21 +372,33 @@ class GroupBy:
     def count(self, **kwargs):
         return self._single_agg(Count, **kwargs)
 
-    def sum(self, numeric_only=no_default, **kwargs):
+    def sum(self, numeric_only=False, **kwargs):
         numeric_kwargs = self._numeric_only_kwargs(numeric_only)
         return self._single_agg(Sum, **kwargs, **numeric_kwargs)
 
-    def mean(self, numeric_only=no_default, **kwargs):
+    def prod(self, numeric_only=False, **kwargs):
+        numeric_kwargs = self._numeric_only_kwargs(numeric_only)
+        return self._single_agg(Prod, **kwargs, **numeric_kwargs)
+
+    def mean(self, numeric_only=False, **kwargs):
         numeric_kwargs = self._numeric_only_kwargs(numeric_only)
         return self._single_agg(Mean, **kwargs, **numeric_kwargs)
 
-    def min(self, numeric_only=no_default, **kwargs):
+    def min(self, numeric_only=False, **kwargs):
         numeric_kwargs = self._numeric_only_kwargs(numeric_only)
         return self._single_agg(Min, **kwargs, **numeric_kwargs)
 
-    def max(self, numeric_only=no_default, **kwargs):
+    def max(self, numeric_only=False, **kwargs):
         numeric_kwargs = self._numeric_only_kwargs(numeric_only)
         return self._single_agg(Max, **kwargs, **numeric_kwargs)
+
+    def first(self, numeric_only=False, **kwargs):
+        numeric_kwargs = self._numeric_only_kwargs(numeric_only)
+        return self._single_agg(First, **kwargs, **numeric_kwargs)
+
+    def last(self, numeric_only=False, **kwargs):
+        numeric_kwargs = self._numeric_only_kwargs(numeric_only)
+        return self._single_agg(Last, **kwargs, **numeric_kwargs)
 
     def aggregate(self, arg=None, split_every=8, split_out=1):
         if arg is None:
