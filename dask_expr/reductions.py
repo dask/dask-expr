@@ -1,3 +1,5 @@
+import functools
+
 import pandas as pd
 import toolz
 from dask.dataframe import methods
@@ -98,7 +100,7 @@ class ApplyConcatApply(Expr):
 
         return d
 
-    @property
+    @functools.cached_property
     def _meta(self):
         meta = meta_nonempty(self.frame._meta)
         meta = self.chunk(meta, **self.chunk_kwargs)
