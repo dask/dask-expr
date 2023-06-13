@@ -1017,11 +1017,20 @@ class Assign(Elemwise):
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
-            if self.key not in parent.columns:
-                return self.frame[parent.columns]
+            columns = (
+                parent.columns
+                if isinstance(parent.columns, pd.Index)
+                else [parent.columns]
+            )
+            columns = set(columns) - {self.key}
+            if columns == set(self.frame.columns):
+                # Protect against pushing the same projection twice
+                return
 
-            columns = list(set(parent.columns) - {self.key})
-            return type(self)(self.frame[columns], *self.operands[1:])
+            return type(parent)(
+                type(self)(self.frame[sorted(columns)], *self.operands[1:]),
+                *parent.operands[1:],
+            )
 
 
 class Filter(Blockwise):

@@ -683,19 +683,19 @@ def test_sample(df):
     assert_eq(result, expected)
 
 
-def test_assign_simplify_key_not_used(pdf):
-    df = from_pandas(pdf)
-    df2 = from_pandas(pdf)
-    df["new"] = df.x > 1
-    result = optimize(df.x)
-    expected = optimize(df2.x)
-    assert result._name == expected._name
-
-
 def test_assign_simplify(pdf):
     df = from_pandas(pdf)
     df2 = from_pandas(pdf)
     df["new"] = df.x > 1
-    result = optimize(df[["x", "new"]])
-    expected = optimize(df2[["x"]].assign(new=df.x > 1))
+    result = optimize(df[["x", "new"]], fuse=False)
+    expected = optimize(df2[["x"]].assign(new=df2.x > 1), fuse=False)
+    assert result._name == expected._name
+
+
+def test_assign_simplify_series(pdf):
+    df = from_pandas(pdf)
+    df2 = from_pandas(pdf)
+    df["new"] = df.x > 1
+    result = optimize(df.new, fuse=False)
+    expected = optimize(df2[[]].assign(new=df2.x > 1).new, fuse=False)
     assert result._name == expected._name
