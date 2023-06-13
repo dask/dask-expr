@@ -787,6 +787,7 @@ class MapPartitions(Blockwise):
         "clear_divisions",
         "kwargs",
     ]
+    _defaults = {"kwargs": None}
 
     def __str__(self):
         return f"MapPartitions({funcname(self.func)})"
@@ -823,8 +824,9 @@ class MapPartitions(Blockwise):
 
     def _task(self, index: int):
         args = [self._blockwise_arg(op, index) for op in self.args]
+        kwargs = self.kwargs if self.kwargs is not None else {}
         if self.enforce_metadata:
-            kwargs = self.kwargs.copy()
+            kwargs = kwargs.copy()
             kwargs.update(
                 {
                     "_func": self.func,
@@ -837,7 +839,7 @@ class MapPartitions(Blockwise):
                 apply,
                 self.func,
                 args,
-                self.kwargs,
+                kwargs,
             )
 
 
