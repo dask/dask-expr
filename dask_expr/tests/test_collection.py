@@ -681,3 +681,21 @@ def test_sample(df):
     result = df.sample(frac=0.5, random_state=1234)
     expected = df.sample(frac=0.5, random_state=1234)
     assert_eq(result, expected)
+
+
+def test_assign_simplify_key_not_used(pdf):
+    df = from_pandas(pdf)
+    df2 = from_pandas(pdf)
+    df["new"] = df.x > 1
+    result = optimize(df.x)
+    expected = optimize(df2.x)
+    assert result._name == expected._name
+
+
+def test_assign_simplify(pdf):
+    df = from_pandas(pdf)
+    df2 = from_pandas(pdf)
+    df["new"] = df.x > 1
+    result = optimize(df[["x", "new"]])
+    expected = optimize(df2[["x"]].assign(new=df.x > 1))
+    assert result._name == expected._name
