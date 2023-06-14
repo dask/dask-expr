@@ -21,13 +21,24 @@ def test_groupby_unsupported_by(pdf, df):
     assert_eq(df.groupby(df.x).sum(), pdf.groupby(pdf.x).sum())
 
 
-@pytest.mark.parametrize("api", ["sum", "mean", "min", "max"])
+@pytest.mark.parametrize(
+    "api", ["sum", "mean", "min", "max", "prod", "first", "last", "var", "std"]
+)
 @pytest.mark.parametrize("numeric_only", [True, False])
 def test_groupby_numeric(pdf, df, api, numeric_only):
+    if not numeric_only and api in {"var", "std"}:
+        pytest.xfail("not implemented")
     g = df.groupby("x")
     agg = getattr(g, api)(numeric_only=numeric_only)
 
     expect = getattr(pdf.groupby("x"), api)(numeric_only=numeric_only)
+    assert_eq(agg, expect)
+
+
+def test_groupby_size(pdf, df):
+    g = df.groupby("x")
+    agg = g.size()
+    expect = pdf.groupby("x").size()
     assert_eq(agg, expect)
 
 

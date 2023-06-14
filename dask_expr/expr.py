@@ -370,6 +370,15 @@ class Expr:
     def __rxor__(self, other):
         return XOr(other, self)
 
+    def __invert__(self):
+        return Invert(self)
+
+    def __neg__(self):
+        return Neg(self)
+
+    def __pos__(self):
+        return Pos(self)
+
     def sum(self, skipna=True, numeric_only=False, min_count=0):
         return Sum(self, skipna, numeric_only, min_count)
 
@@ -787,6 +796,7 @@ class MapPartitions(Blockwise):
         "clear_divisions",
         "kwargs",
     ]
+    _defaults = {"kwargs": None}
 
     def __str__(self):
         return f"MapPartitions({funcname(self.func)})"
@@ -823,8 +833,9 @@ class MapPartitions(Blockwise):
 
     def _task(self, index: int):
         args = [self._blockwise_arg(op, index) for op in self.args]
+        kwargs = self.kwargs if self.kwargs is not None else {}
         if self.enforce_metadata:
-            kwargs = self.kwargs.copy()
+            kwargs = kwargs.copy()
             kwargs.update(
                 {
                     "_func": self.func,
@@ -837,7 +848,7 @@ class MapPartitions(Blockwise):
                 apply,
                 self.func,
                 args,
-                self.kwargs,
+                kwargs,
             )
 
 
@@ -891,6 +902,38 @@ class RenameFrame(Blockwise):
                     for col in parent.columns
                 ]
             return type(self)(self.frame[columns], *self.operands[1:])
+
+
+class Sample(Blockwise):
+    _parameters = ["frame", "state_data", "frac", "replace"]
+    operation = staticmethod(methods.sample)
+
+    @functools.cached_property
+    def _meta(self):
+        args = [self.operands[0]._meta] + [self.operands[1][0]] + self.operands[2:]
+        return self.operation(*args)
+
+    def _task(self, index: int):
+        args = [self._blockwise_arg(self.frame, index)] + [
+            self.state_data[index],
+            self.frac,
+            self.replace,
+        ]
+        return (self.operation,) + tuple(args)
+
+
+class ToFrame(Blockwise):
+    _parameters = ["frame", "name"]
+    _defaults = {"name": no_default}
+    _keyword_only = ["name"]
+    operation = M.to_frame
+
+
+class ToFrameIndex(Blockwise):
+    _parameters = ["frame", "index", "name"]
+    _defaults = {"name": no_default, "index": True}
+    _keyword_only = ["name", "index"]
+    operation = M.to_frame
 
 
 class Elemwise(Blockwise):
@@ -993,6 +1036,15 @@ class Map(Elemwise):
             # control monotonic map func
             return (None,) * len(self.frame.divisions)
         return super()._divisions()
+
+
+class ExplodeSeries(Blockwise):
+    _parameters = ["frame"]
+    operation = M.explode
+
+
+class ExplodeFrame(ExplodeSeries):
+    _parameters = ["frame", "column"]
 
 
 class Assign(Elemwise):
@@ -1319,6 +1371,41 @@ class Or(Binop):
 class XOr(Binop):
     operation = operator.xor
     _operator_repr = "^"
+
+
+class Unaryop(Elemwise):
+    _parameters = ["frame"]
+
+    def __str__(self):
+        return f"{self._operator_repr} {self.frame}"
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            if isinstance(self.frame, Expr):
+                frame = self.frame[
+                    parent.operand("columns")
+                ]  # TODO: filter just the correct columns
+            else:
+                frame = self.frame
+            return type(self)(frame)
+
+    def _node_label_args(self):
+        return [self.frame]
+
+
+class Invert(Unaryop):
+    operation = operator.inv
+    _operator_repr = "~"
+
+
+class Neg(Unaryop):
+    operation = operator.neg
+    _operator_repr = "-"
+
+
+class Pos(Unaryop):
+    operation = operator.pos
+    _operator_repr = "+"
 
 
 class Partitions(Expr):

@@ -2,7 +2,7 @@ import functools
 
 import numpy as np
 from dask import is_dask_collection
-from dask.dataframe.core import _concat, is_dataframe_like, is_series_like, no_default
+from dask.dataframe.core import _concat, is_dataframe_like, is_series_like
 from dask.dataframe.groupby import (
     _agg_finalize,
     _apply_chunk,
@@ -11,11 +11,15 @@ from dask.dataframe.groupby import (
     _groupby_aggregate,
     _groupby_apply_funcs,
     _normalize_spec,
+    _var_agg,
+    _var_chunk,
+    _var_combine,
 )
 from dask.utils import M, is_index_like
 
 from dask_expr.collection import DataFrame, new_collection
-from dask_expr.reductions import ApplyConcatApply
+from dask_expr.expr import MapPartitions
+from dask_expr.reductions import ApplyConcatApply, Reduction
 
 
 def _as_dict(key, value):
@@ -225,6 +229,10 @@ class Sum(SingleAggregation):
     groupby_chunk = M.sum
 
 
+class Prod(SingleAggregation):
+    groupby_chunk = M.prod
+
+
 class Min(SingleAggregation):
     groupby_chunk = M.min
 
@@ -233,9 +241,70 @@ class Max(SingleAggregation):
     groupby_chunk = M.max
 
 
+class First(SingleAggregation):
+    groupby_chunk = M.first
+
+
+class Last(SingleAggregation):
+    groupby_chunk = M.last
+
+
 class Count(SingleAggregation):
     groupby_chunk = M.count
     groupby_aggregate = M.sum
+
+
+class Size(SingleAggregation):
+    groupby_chunk = M.size
+    groupby_aggregate = M.sum
+
+
+class Var(Reduction):
+    _parameters = ["frame", "by", "ddof", "numeric_only"]
+    reduction_aggregate = _var_agg
+    reduction_combine = _var_combine
+
+    def chunk(self, frame, **kwargs):
+        return _var_chunk(frame, *self.by, **kwargs)
+
+    @functools.cached_property
+    def levels(self):
+        return _determine_levels(self.by)
+
+    @functools.cached_property
+    def aggregate_kwargs(self):
+        return {
+            "ddof": self.ddof,
+            "levels": self.levels,
+            "numeric_only": self.numeric_only,
+        }
+
+    @functools.cached_property
+    def chunk_kwargs(self):
+        return {"numeric_only": self.numeric_only}
+
+    @functools.cached_property
+    def combine_kwargs(self):
+        return {"levels": self.levels}
+
+
+class Std(SingleAggregation):
+    _parameters = ["frame", "by", "ddof", "numeric_only"]
+
+    @functools.cached_property
+    def _meta(self):
+        return self.simplify()._meta
+
+    def _simplify_down(self):
+        v = Var(*self.operands)
+        return MapPartitions(
+            v,
+            func=np.sqrt,
+            meta=v._meta,
+            enforce_metadata=True,
+            transform_divisions=True,
+            clear_divisions=True,
+        )
 
 
 class Mean(SingleAggregation):
@@ -320,7 +389,7 @@ class GroupBy:
             raise NotImplementedError("sort=True not yet supported.")
 
     def _numeric_only_kwargs(self, numeric_only):
-        kwargs = {} if numeric_only is no_default else {"numeric_only": numeric_only}
+        kwargs = {"numeric_only": numeric_only}
         return {"chunk_kwargs": kwargs, "aggregate_kwargs": kwargs}
 
     def _single_agg(
@@ -339,6 +408,19 @@ class GroupBy:
                 _slice=self._slice,
             )
         )
+
+    def _aca_agg(self, expr_cls, split_out=1, **kwargs):
+        if split_out > 1:
+            raise NotImplementedError("split_out>1 not yet supported")
+        x = new_collection(
+            expr_cls(
+                self.obj.expr,
+                by=self.by,
+                **kwargs,
+                # TODO: Add observed and dropna when supported in dask/dask
+            )
+        )
+        return x
 
     def __getattr__(self, key):
         try:
@@ -360,21 +442,46 @@ class GroupBy:
     def count(self, **kwargs):
         return self._single_agg(Count, **kwargs)
 
-    def sum(self, numeric_only=no_default, **kwargs):
+    def sum(self, numeric_only=False, **kwargs):
         numeric_kwargs = self._numeric_only_kwargs(numeric_only)
         return self._single_agg(Sum, **kwargs, **numeric_kwargs)
 
-    def mean(self, numeric_only=no_default, **kwargs):
+    def prod(self, numeric_only=False, **kwargs):
+        numeric_kwargs = self._numeric_only_kwargs(numeric_only)
+        return self._single_agg(Prod, **kwargs, **numeric_kwargs)
+
+    def mean(self, numeric_only=False, **kwargs):
         numeric_kwargs = self._numeric_only_kwargs(numeric_only)
         return self._single_agg(Mean, **kwargs, **numeric_kwargs)
 
-    def min(self, numeric_only=no_default, **kwargs):
+    def min(self, numeric_only=False, **kwargs):
         numeric_kwargs = self._numeric_only_kwargs(numeric_only)
         return self._single_agg(Min, **kwargs, **numeric_kwargs)
 
-    def max(self, numeric_only=no_default, **kwargs):
+    def max(self, numeric_only=False, **kwargs):
         numeric_kwargs = self._numeric_only_kwargs(numeric_only)
         return self._single_agg(Max, **kwargs, **numeric_kwargs)
+
+    def first(self, numeric_only=False, **kwargs):
+        numeric_kwargs = self._numeric_only_kwargs(numeric_only)
+        return self._single_agg(First, **kwargs, **numeric_kwargs)
+
+    def last(self, numeric_only=False, **kwargs):
+        numeric_kwargs = self._numeric_only_kwargs(numeric_only)
+        return self._single_agg(Last, **kwargs, **numeric_kwargs)
+
+    def size(self, **kwargs):
+        return self._single_agg(Size, **kwargs)
+
+    def var(self, ddof=1, numeric_only=True):
+        if not numeric_only:
+            raise NotImplementedError("numeric_only=False is not implemented")
+        return self._aca_agg(Var, ddof=ddof, numeric_only=numeric_only)
+
+    def std(self, ddof=1, numeric_only=True):
+        if not numeric_only:
+            raise NotImplementedError("numeric_only=False is not implemented")
+        return self._aca_agg(Std, ddof=ddof, numeric_only=numeric_only)
 
     def aggregate(self, arg=None, split_every=8, split_out=1):
         if arg is None:

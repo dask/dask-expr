@@ -46,6 +46,13 @@ def test_setitem(pdf, df):
     assert_eq(df, pdf)
 
 
+def test_explode():
+    pdf = pd.DataFrame({"a": [[1, 2], [3, 4]]})
+    df = from_pandas(pdf)
+    assert_eq(pdf.explode(column="a"), df.explode(column="a"))
+    assert_eq(pdf.a.explode(), df.a.explode())
+
+
 def test_meta_divisions_name():
     a = pd.DataFrame({"x": [1, 2, 3, 4], "y": [1.0, 2.0, 3.0, 4.0]})
     df = 2 * from_pandas(a, npartitions=2)
@@ -213,6 +220,25 @@ def test_boolean_operators(func):
 @pytest.mark.parametrize(
     "func",
     [
+        lambda df: ~df,
+        lambda df: ~df.x,
+        lambda df: -df.z,
+        lambda df: +df.z,
+        lambda df: -df,
+        lambda df: +df,
+    ],
+)
+def test_unary_operators(func):
+    pdf = pd.DataFrame(
+        {"x": [True, False, True, False], "y": [True, False, False, False], "z": 1}
+    )
+    df = from_pandas(pdf)
+    assert_eq(func(pdf), func(df))
+
+
+@pytest.mark.parametrize(
+    "func",
+    [
         lambda df: df[(df.x > 10) | (df.x < 5)],
         lambda df: df[(df.x > 7) & (df.x < 10)],
     ],
@@ -258,6 +284,8 @@ def test_to_timestamp(pdf, how):
         lambda df: df.rename(columns={"x": "xx"})[["xx"]],
         lambda df: df.combine_first(df),
         lambda df: df.x.combine_first(df.y),
+        lambda df: df.x.to_frame(),
+        lambda df: df.x.index.to_frame(),
     ],
 )
 def test_blockwise(func, pdf, df):
@@ -689,3 +717,13 @@ def test_dir(df):
     assert "sum" in dir(df)
     assert "sum" in dir(df.x)
     assert "sum" in dir(df.index)
+
+
+def test_sample(df):
+    result = df.sample(frac=0.5)
+
+    assert_eq(result, result)
+
+    result = df.sample(frac=0.5, random_state=1234)
+    expected = df.sample(frac=0.5, random_state=1234)
+    assert_eq(result, expected)

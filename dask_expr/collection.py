@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import functools
+import warnings
+from numbers import Number
 
 import numpy as np
 from dask.base import DaskMethodsMixin, named_schedulers
@@ -13,12 +15,12 @@ from dask.dataframe.core import (
     new_dd_object,
 )
 from dask.dataframe.dispatch import meta_nonempty
-from dask.utils import IndexCallable
+from dask.utils import IndexCallable, random_state_data
 from fsspec.utils import stringify_path
 from tlz import first
 
 from dask_expr import expr
-from dask_expr.expr import RenameFrame, no_default
+from dask_expr.expr import no_default
 from dask_expr.merge import Merge
 from dask_expr.reductions import (
     DropDuplicates,
@@ -56,6 +58,12 @@ def _wrap_expr_op(self, other, op=None):
     if isinstance(other, FrameBase):
         other = other.expr
     return new_collection(getattr(self.expr, op)(other))
+
+
+def _wrap_unary_expr_op(self, op=None):
+    # Wrap expr operator
+    assert op is not None
+    return new_collection(getattr(self.expr, op)())
 
 
 #
@@ -391,6 +399,13 @@ for op in [
 ]:
     setattr(FrameBase, op, functools.partialmethod(_wrap_expr_op, op=op))
 
+for op in [
+    "__invert__",
+    "__neg__",
+    "__pos__",
+]:
+    setattr(FrameBase, op, functools.partialmethod(_wrap_unary_expr_op, op=op))
+
 
 class DataFrame(FrameBase):
     """DataFrame-like Expr Collection"""
@@ -570,13 +585,44 @@ class DataFrame(FrameBase):
             expr.DropnaFrame(self.expr, how=how, subset=subset, thresh=thresh)
         )
 
+    def sample(self, n=None, frac=None, replace=False, random_state=None):
+        if n is not None:
+            msg = (
+                "sample does not support the number of sampled items "
+                "parameter, 'n'. Please use the 'frac' parameter instead."
+            )
+            if isinstance(n, Number) and 0 <= n <= 1:
+                warnings.warn(msg)
+                frac = n
+            else:
+                raise ValueError(msg)
+
+        if frac is None:
+            raise ValueError("frac must not be None")
+
+        if random_state is None:
+            random_state = np.random.RandomState()
+
+        state_data = random_state_data(self.npartitions, random_state)
+        return new_collection(
+            expr.Sample(self.expr, state_data=state_data, frac=frac, replace=replace)
+        )
+
     def fillna(self, value=None, method=None, limit=None, axis=None):
         return new_collection(
             expr.Fillna(self.expr, value=value, method=method, limit=limit, axis=axis)
         )
 
     def rename(self, columns):
-        return new_collection(RenameFrame(self.expr, columns=columns))
+        return new_collection(expr.RenameFrame(self.expr, columns=columns))
+
+    def explode(self, column):
+        return new_collection(expr.ExplodeFrame(self.expr, column=column))
+
+    def to_parquet(self, path, **kwargs):
+        from dask_expr.io.parquet import to_parquet
+
+        return to_parquet(self, path, **kwargs)
 
 
 class Series(FrameBase):
@@ -601,6 +647,9 @@ class Series(FrameBase):
 
     def __repr__(self):
         return f"<dask_expr.expr.Series: expr={self.expr}>"
+
+    def to_frame(self, name=no_default):
+        return new_collection(expr.ToFrame(self.expr, name=name))
 
     def value_counts(self, sort=None, ascending=False, dropna=True, normalize=False):
         return new_collection(
@@ -635,12 +684,20 @@ class Series(FrameBase):
             expr.Between(self.expr, left=left, right=right, inclusive=inclusive)
         )
 
+    def explode(self):
+        return new_collection(expr.ExplodeSeries(self.expr))
+
 
 class Index(Series):
     """Index-like Expr Collection"""
 
     def __repr__(self):
         return f"<dask_expr.expr.Index: expr={self.expr}>"
+
+    def to_frame(self, index=True, name=no_default):
+        if not index:
+            raise NotImplementedError
+        return new_collection(expr.ToFrameIndex(self.expr, index=index, name=name))
 
     def memory_usage(self, deep=False):
         return new_collection(MemoryUsageIndex(self.expr, deep=deep))
