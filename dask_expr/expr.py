@@ -875,7 +875,7 @@ class RenameFrame(Blockwise):
             self.operand("columns"), Mapping
         ):
             reverse_mapping = {val: key for key, val in self.operand("columns").items()}
-            if not isinstance(parent.columns, pd.Index):
+            if is_series_like(parent._meta):
                 # Fill this out when Series.rename is implemented
                 return
             else:
@@ -1035,8 +1035,10 @@ class Projection(Elemwise):
     def columns(self):
         if isinstance(self.operand("columns"), list):
             return pd.Index(self.operand("columns"))
-        else:
+        elif isinstance(self.operand("columns"), pd.Index):
             return self.operand("columns")
+        else:
+            return pd.Index([self.operand("columns")])
 
     @property
     def _meta(self):
@@ -1057,10 +1059,12 @@ class Projection(Elemwise):
         base = str(self.frame)
         if " " in base:
             base = "(" + base + ")"
-        return f"{base}[{repr(self.columns)}]"
+        return f"{base}[{repr(self.operand('columns'))}]"
 
     def _simplify_down(self):
-        if str(self.frame.columns) == str(self.columns):
+        if str(self.frame.columns) == str(self.columns) and type(self._meta) == type(
+            self.frame._meta
+        ):
             # TODO: we should get more precise around Expr.columns types
             return self.frame
         if isinstance(self.frame, Projection):
