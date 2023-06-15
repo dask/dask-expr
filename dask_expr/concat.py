@@ -71,15 +71,16 @@ class Concat(Expr):
                     cast_dfs.append(df)
             else:
                 cast_dfs.append(df)
-        x = StackPartition(
+
+        return StackPartition(
             cast_dfs,
             join=self.join,
             ignore_order=self.ignore_order,
             _kwargs=self._kwargs,
         )
-        return x
 
     def _simplify_up(self, parent):
+        # TODO: implement passing projections through
         return
 
 
@@ -114,4 +115,7 @@ class StackPartition(Concat):
         return dsk
 
     def _simplify_down(self):
+        return
+
+    def _simplify_up(self, parent):
         return

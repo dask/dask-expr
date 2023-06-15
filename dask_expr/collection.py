@@ -815,8 +815,10 @@ def concat(
     **kwargs,
 ):
     if axis == 1:
+        # TODO: implement
         raise NotImplementedError
     if ignore_unknown_divisions:
+        # TODO: implement
         raise NotImplementedError
 
     if not isinstance(dfs, list):
