@@ -866,7 +866,7 @@ class DropnaFrame(Blockwise):
 
 class Fillna(Blockwise):
     _parameters = ["frame", "value", "method", "limit", "axis"]
-    _defaults = {"value": None, "method": None, "limit": None, "axis": None}
+    _defaults = {"value": None, "method": None, "limit": None, "axis": 0}
     _keyword_only = ["method", "limit", "axis"]
     operation = M.fillna
 

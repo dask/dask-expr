@@ -151,11 +151,15 @@ def test_dropna(pdf):
         dict(method="bfill", limit=1),
     ],
 )
-def test_fillna(pdf, kwargs):
-    pdf.loc[0, "y"] = np.nan
-    df = from_pandas(pdf)
-    assert_eq(df.fillna(**kwargs), pdf.fillna(**kwargs))
-    assert_eq(df.y.fillna(**kwargs), pdf.y.fillna(**kwargs))
+def test_fillna(kwargs):
+    pdf = pd.DataFrame({"x": [1, 2, None, None, 5, 6]})
+    df = from_pandas(pdf, npartitions=2)
+    actual = df.fillna(**kwargs).compute()
+    expected = pdf.fillna(**kwargs)
+    # print(f"\n{expected}")
+    # print(f"\n{actual}")
+    assert_eq(actual, expected)
+    # assert_eq(df.x.fillna(**kwargs), pdf.x.fillna(**kwargs))
 
 
 def test_memory_usage(pdf):

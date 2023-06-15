@@ -608,9 +608,9 @@ class DataFrame(FrameBase):
             expr.Sample(self.expr, state_data=state_data, frac=frac, replace=replace)
         )
 
-    def fillna(self, value=None, method=None, limit=None, axis=None):
+    def fillna(self, value=None, method=None, limit=None):
         return new_collection(
-            expr.Fillna(self.expr, value=value, method=method, limit=limit, axis=axis)
+            expr.Fillna(self.expr, value=value, method=method, limit=limit)
         )
 
     def rename(self, columns):
