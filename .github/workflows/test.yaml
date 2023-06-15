@@ -38,6 +38,12 @@ jobs:
           extra-specs: |
             python=${{ matrix.python-version }}
 
+      - name: Upstream packages
+        if: ${{ matrix.python-version == '3.11' }}
+        run: |
+          python -m pip install git+https://github.com/dask/distributed
+          python -m pip install git+https://github.com/dask/dask
+
       - name: Install Dask-Match
         run: python -m pip install -e . --no-deps
 
