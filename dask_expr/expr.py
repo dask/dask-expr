@@ -1062,8 +1062,9 @@ class Projection(Elemwise):
         return f"{base}[{repr(self.operand('columns'))}]"
 
     def _simplify_down(self):
-        if str(self.frame.columns) == str(self.columns) and type(self._meta) == type(
-            self.frame._meta
+        if (
+            str(self.frame.columns) == str(self.columns)
+            and self._meta.ndim == self.frame._meta.ndim
         ):
             # TODO: we should get more precise around Expr.columns types
             return self.frame
