@@ -259,16 +259,6 @@ class Expr:
                     new = operand.simplify()
                     if new._name != operand._name:
                         changed = True
-                elif isinstance(operand, list):
-                    new = []
-                    for op in operand:
-                        if isinstance(op, Expr):
-                            n = op.simplify()
-                            if n._name != op._name:
-                                changed = True
-                            new.append(n)
-                        else:
-                            new.append(op)
                 else:
                     new = operand
                 new_operands.append(new)
@@ -504,8 +494,6 @@ class Expr:
             for operand in expr.operands:
                 if isinstance(operand, Expr):
                     stack.append(operand)
-                elif not isinstance(expr, Fused) and isinstance(operand, list):
-                    stack.extend(op for op in operand if isinstance(op, Expr))
 
         return toolz.merge(layers)
 

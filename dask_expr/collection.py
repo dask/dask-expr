@@ -831,19 +831,20 @@ def concat(
     if join not in ("inner", "outer"):
         raise ValueError("'join' must be 'inner' or 'outer'")
 
-    try:
-        # remove any empty DataFrames
-        dfs = [df for df in dfs if len(df.columns) > 0]
-    except AttributeError:
-        # 'Series' object has no attribute 'columns'
-        pass
+    if axis == 1:
+        try:
+            # remove any empty DataFrames
+            dfs = [df for df in dfs if len(df.columns) > 0]
+        except AttributeError:
+            # 'Series' object has no attribute 'columns'
+            pass
     dfs = [from_pandas(df) if not is_dask_collection(df) else df for df in dfs]
 
     return new_collection(
         Concat(
-            [df.expr for df in dfs],
-            join=join,
-            ignore_order=ignore_order,
-            _kwargs=kwargs,
+            join,
+            ignore_order,
+            kwargs,
+            *[df.expr for df in dfs],
         )
     )

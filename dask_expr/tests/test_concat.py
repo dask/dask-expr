@@ -59,3 +59,9 @@ def test_concat_one_object(df, pdf):
     expected = pd.concat([pdf])
     assert_eq(result, expected)
     assert not any(div is None for div in result.divisions)
+
+
+def test_concat_one_no_columns(df, pdf):
+    result = concat([df, df[[]]])
+    expected = pd.concat([pdf, pdf[[]]])
+    assert_eq(result, expected)
