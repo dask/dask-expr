@@ -268,7 +268,7 @@ class Expr:
                                 changed = True
                             new.append(n)
                         else:
-                            new.append(n)
+                            new.append(op)
                 else:
                     new = operand
                 new_operands.append(new)
@@ -504,7 +504,7 @@ class Expr:
             for operand in expr.operands:
                 if isinstance(operand, Expr):
                     stack.append(operand)
-                elif isinstance(operand, list):
+                elif not isinstance(expr, Fused) and isinstance(operand, list):
                     stack.extend(op for op in operand if isinstance(op, Expr))
 
         return toolz.merge(layers)
