@@ -3,7 +3,7 @@ import functools
 from dask.dataframe.dispatch import make_meta, meta_nonempty
 from dask.utils import M, apply
 
-from dask_expr.frameexpr import Blockwise, FrameExpr, Projection
+from dask_expr.frame import Blockwise, FrameExpr, Projection
 from dask_expr.repartition import Repartition
 from dask_expr.shuffle import Shuffle, _contains_index_name
 

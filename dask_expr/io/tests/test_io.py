@@ -6,7 +6,7 @@ import pytest
 from dask.dataframe.utils import assert_eq
 
 from dask_expr import from_dask_dataframe, from_pandas, optimize, read_csv, read_parquet
-from dask_expr.frameexpr import FrameExpr, Lengths, Literal
+from dask_expr.frame import FrameExpr, Lengths, Literal
 from dask_expr.io import ReadParquet
 from dask_expr.reductions import Len
 

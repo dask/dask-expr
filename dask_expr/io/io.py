@@ -5,13 +5,7 @@ import math
 
 from dask.dataframe.io.io import sorted_division_locations
 
-from dask_expr.frameexpr import (
-    Blockwise,
-    FrameExpr,
-    Lengths,
-    Literal,
-    PartitionsFiltered,
-)
+from dask_expr.frame import Blockwise, FrameExpr, Lengths, Literal, PartitionsFiltered
 from dask_expr.reductions import Len
 
 

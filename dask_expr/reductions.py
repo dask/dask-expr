@@ -13,7 +13,7 @@ from dask.dataframe.core import (
 )
 from dask.utils import M, apply
 
-from dask_expr.frameexpr import Elemwise, FrameExpr, Index, Projection
+from dask_expr.frame import Elemwise, FrameExpr, Index, Projection
 
 
 class ApplyConcatApply(FrameExpr):

@@ -27,7 +27,7 @@ from dask.delayed import delayed
 from dask.utils import apply, natural_sort_key
 from fsspec.utils import stringify_path
 
-from dask_expr.frameexpr import (
+from dask_expr.frame import (
     EQ,
     GE,
     GT,

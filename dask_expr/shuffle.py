@@ -17,7 +17,7 @@ from dask.dataframe.shuffle import (
 )
 from dask.utils import digit, get_default_shuffle_algorithm, insert
 
-from dask_expr.frameexpr import Blockwise, FrameExpr, PartitionsFiltered, Projection
+from dask_expr.frame import Blockwise, FrameExpr, PartitionsFiltered, Projection
 from dask_expr.reductions import (
     All,
     Any,
