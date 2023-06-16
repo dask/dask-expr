@@ -672,6 +672,8 @@ class Filter(Blockwise):
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
             return self.frame[parent.operand("columns")][self.predicate]
+        if isinstance(parent, Index):
+            return self.frame.index[self.predicate]
 
 
 class Projection(Elemwise):
@@ -718,7 +720,8 @@ class Projection(Elemwise):
             b = self.operand("columns")
 
             if not isinstance(a, list):
-                assert a == b
+                # df[scalar][b] -> First selection coerces to Series
+                return
             elif isinstance(b, list):
                 assert all(bb in a for bb in b)
             else:
