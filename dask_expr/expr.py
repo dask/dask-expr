@@ -22,8 +22,6 @@ class Expr:
     This mostly includes Dask protocols.
     """
 
-    commutative = False
-    associative = False
     _parameters = []
     _defaults = {}
 
