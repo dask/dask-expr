@@ -87,12 +87,6 @@ class FrameExpr(Expr):
 
         return {(self._name, i): self._task(i) for i in range(self.npartitions)}
 
-    def _simplify_down(self):
-        return
-
-    def _simplify_up(self, parent):
-        return
-
     def optimize(self, **kwargs):
         return optimize(self, **kwargs)
 
