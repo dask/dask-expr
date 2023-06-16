@@ -49,7 +49,7 @@ class FrameExpr(Expr):
 
     def __getattr__(self, key):
         try:
-            super().__getattr__(self, key)
+            return super().__getattr__(key)
         except AttributeError as err:
             if is_dataframe_like(self._meta) and key in self._meta.columns:
                 return self[key]
