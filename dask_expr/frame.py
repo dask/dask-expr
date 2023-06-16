@@ -8,7 +8,7 @@ from collections.abc import Mapping
 
 import dask
 import pandas as pd
-from dask.base import normalize_token, tokenize
+from dask.base import tokenize
 from dask.dataframe import methods
 from dask.dataframe.core import (
     _get_divisions_map_partitions,
@@ -1106,11 +1106,6 @@ class PartitionsFiltered(Frame):
 
     def _filtered_task(self, index: int):
         raise NotImplementedError()
-
-
-@normalize_token.register(Frame)
-def normalize_expression(expr):
-    return expr._name
 
 
 ## Utilites for Expr fusion

@@ -6,7 +6,7 @@ from collections.abc import Generator
 
 import pandas as pd
 import toolz
-from dask.base import tokenize
+from dask.base import normalize_token, tokenize
 from dask.core import ishashable
 from dask.dataframe.core import is_dataframe_like, is_index_like, is_series_like
 from dask.utils import funcname, import_required, is_arraylike
@@ -446,3 +446,8 @@ class Expr:
 
             if isinstance(node, operation):
                 yield node
+
+
+@normalize_token.register(Expr)
+def normalize_expression(expr):
+    return expr._name
