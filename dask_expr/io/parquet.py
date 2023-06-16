@@ -37,7 +37,7 @@ from dask_expr.frame import (
     And,
     Blockwise,
     Filter,
-    FrameExpr,
+    Frame,
     Index,
     Lengths,
     Literal,
@@ -69,7 +69,7 @@ def normalize_pa_schema(schema):
     return schema.to_string()
 
 
-class ToParquet(FrameExpr):
+class ToParquet(Frame):
     _parameters = [
         "frame",
         "path",
@@ -122,7 +122,7 @@ class ToParquetData(Blockwise):
         return (self.io_func, (self.frame._name, index), (index,))
 
 
-class ToParquetBarrier(FrameExpr):
+class ToParquetBarrier(Frame):
     _parameters = ToParquet._parameters
 
     @property
@@ -794,15 +794,13 @@ class _DNF:
         return _DNF(result)
 
     @classmethod
-    def extract_pq_filters(
-        cls, pq_expr: ReadParquet, predicate_expr: FrameExpr
-    ) -> _DNF:
+    def extract_pq_filters(cls, pq_expr: ReadParquet, predicate_expr: Frame) -> _DNF:
         _filters = None
         if isinstance(predicate_expr, (LE, GE, LT, GT, EQ, NE)):
             if (
                 isinstance(predicate_expr.left, ReadParquet)
                 and predicate_expr.left.path == pq_expr.path
-                and not isinstance(predicate_expr.right, FrameExpr)
+                and not isinstance(predicate_expr.right, Frame)
             ):
                 op = predicate_expr._operator_repr
                 column = predicate_expr.left.columns[0]
@@ -811,7 +809,7 @@ class _DNF:
             elif (
                 isinstance(predicate_expr.right, ReadParquet)
                 and predicate_expr.right.path == pq_expr.path
-                and not isinstance(predicate_expr.left, FrameExpr)
+                and not isinstance(predicate_expr.left, Frame)
             ):
                 # Simple dict to make sure field comes first in filter
                 flip = {LE: GE, LT: GT, GE: LE, GT: LT}

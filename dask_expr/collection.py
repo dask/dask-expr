@@ -47,7 +47,7 @@ def _wrap_expr_api(*args, wrap_api=None, **kwargs):
         *[arg.expr if isinstance(arg, FrameBase) else arg for arg in args],
         **kwargs,
     )
-    if isinstance(result, frame.FrameExpr):
+    if isinstance(result, frame.Frame):
         return new_collection(result)
     return result
 
@@ -544,7 +544,7 @@ class DataFrame(FrameBase):
     def __dir__(self):
         o = set(dir(type(self)))
         o.update(self.__dict__)
-        o.update(set(dir(frame.FrameExpr)))
+        o.update(set(dir(frame.Frame)))
         o.update(c for c in self.columns if (isinstance(c, str) and c.isidentifier()))
         return list(o)
 
@@ -626,7 +626,7 @@ class Series(FrameBase):
     def __dir__(self):
         o = set(dir(type(self)))
         o.update(self.__dict__)
-        o.update(set(dir(frame.FrameExpr)))
+        o.update(set(dir(frame.Frame)))
         return list(o)
 
     @property
@@ -695,7 +695,7 @@ class Index(Series):
     def __dir__(self):
         o = set(dir(type(self)))
         o.update(self.__dict__)
-        o.update(set(dir(frame.FrameExpr)))
+        o.update(set(dir(frame.Frame)))
         return list(o)
 
 

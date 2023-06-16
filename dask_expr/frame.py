@@ -29,7 +29,7 @@ replacement_rules = []
 no_default = "__no_default__"
 
 
-class FrameExpr(Expr):
+class Frame(Expr):
     """Primary class for all Expressions
 
     This mostly includes pandas-like method
@@ -60,7 +60,7 @@ class FrameExpr(Expr):
 
         Examples
         --------
-        >>> class Add(FrameExpr):
+        >>> class Add(Frame):
         ...     def _layer(self):
         ...         return {
         ...             (self._name, i): (operator.add, (self.left._name, i), (self.right._name, i))
@@ -96,7 +96,7 @@ class FrameExpr(Expr):
         return NBytes(self)
 
     def __getitem__(self, other):
-        if isinstance(other, FrameExpr):
+        if isinstance(other, Frame):
             return Filter(self, other)  # df[df.x > 1]
         else:
             return Projection(self, other)  # df[["a", "b", "c"]]
@@ -278,7 +278,7 @@ class FrameExpr(Expr):
         raise NotImplementedError()
 
 
-class Literal(FrameExpr):
+class Literal(Frame):
     """Represent a literal (known) value as an `Expr`"""
 
     _parameters = ["value"]
@@ -295,7 +295,7 @@ class Literal(FrameExpr):
         return self.value
 
 
-class Blockwise(FrameExpr):
+class Blockwise(Frame):
     """Super-class for block-wise operations
 
     This is fairly generic, and includes definitions for `_meta`, `divisions`,
@@ -311,7 +311,7 @@ class Blockwise(FrameExpr):
 
     @functools.cached_property
     def _meta(self):
-        args = [op._meta if isinstance(op, FrameExpr) else op for op in self._args]
+        args = [op._meta if isinstance(op, Frame) else op for op in self._args]
         return self.operation(*args, **self._kwargs)
 
     @functools.cached_property
@@ -333,7 +333,7 @@ class Blockwise(FrameExpr):
             return args
         return self.operands
 
-    def _broadcast_dep(self, dep: FrameExpr):
+    def _broadcast_dep(self, dep: Frame):
         # Checks if a dependency should be broadcasted to
         # all partitions of this `Blockwise` operation
         return dep.npartitions == 1 and dep.ndim < self.ndim
@@ -359,7 +359,7 @@ class Blockwise(FrameExpr):
 
     def _blockwise_arg(self, arg, i):
         """Return a Blockwise-task argument"""
-        if isinstance(arg, FrameExpr):
+        if isinstance(arg, Frame):
             # Make key for Expr-based argument
             if self._broadcast_dep(arg):
                 return (arg._name, 0)
@@ -403,7 +403,7 @@ class MapPartitions(Blockwise):
     def __str__(self):
         return f"MapPartitions({funcname(self.func)})"
 
-    def _broadcast_dep(self, dep: FrameExpr):
+    def _broadcast_dep(self, dep: Frame):
         # Always broadcast single-partition dependencies in MapPartitions
         return dep.npartitions == 1
 
@@ -414,7 +414,7 @@ class MapPartitions(Blockwise):
     @functools.cached_property
     def _meta(self):
         meta = self.operand("meta")
-        args = [arg._meta if isinstance(arg, FrameExpr) else arg for arg in self.args]
+        args = [arg._meta if isinstance(arg, Frame) else arg for arg in self.args]
         return _get_meta_map_partitions(args, [], self.func, self.kwargs, meta, None)
 
     def _divisions(self):
@@ -423,7 +423,7 @@ class MapPartitions(Blockwise):
             return (None,) * (self.frame.npartitions + 1)
 
         # (Possibly) known divisions
-        dfs = [arg for arg in self.args if isinstance(arg, FrameExpr)]
+        dfs = [arg for arg in self.args if isinstance(arg, Frame)]
         return _get_divisions_map_partitions(
             True,  # Partitions must already be "aligned"
             self.transform_divisions,
@@ -739,7 +739,7 @@ class Index(Elemwise):
         )
 
 
-class Lengths(FrameExpr):
+class Lengths(Frame):
     """Returns a tuple of partition lengths"""
 
     _parameters = ["frame"]
@@ -778,7 +778,7 @@ class ResetIndex(Elemwise):
         return (None,) * (self.frame.npartitions + 1)
 
 
-class Head(FrameExpr):
+class Head(Frame):
     """Take the first `n` rows of the first partition"""
 
     _parameters = ["frame", "n"]
@@ -797,7 +797,7 @@ class Head(FrameExpr):
     def _simplify_down(self):
         if isinstance(self.frame, Elemwise):
             operands = [
-                Head(op, self.n) if isinstance(op, FrameExpr) else op
+                Head(op, self.n) if isinstance(op, Frame) else op
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
@@ -822,7 +822,7 @@ class BlockwiseHead(Head, Blockwise):
         return (M.head, (self.frame._name, index), self.n)
 
 
-class Tail(FrameExpr):
+class Tail(Frame):
     """Take the last `n` rows of the last partition"""
 
     _parameters = ["frame", "n"]
@@ -841,7 +841,7 @@ class Tail(FrameExpr):
     def _simplify_down(self):
         if isinstance(self.frame, Elemwise):
             operands = [
-                Tail(op, self.n) if isinstance(op, FrameExpr) else op
+                Tail(op, self.n) if isinstance(op, Frame) else op
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
@@ -874,13 +874,13 @@ class Binop(Elemwise):
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
-            if isinstance(self.left, FrameExpr):
+            if isinstance(self.left, Frame):
                 left = self.left[
                     parent.operand("columns")
                 ]  # TODO: filter just the correct columns
             else:
                 left = self.left
-            if isinstance(self.right, FrameExpr):
+            if isinstance(self.right, Frame):
                 right = self.right[parent.operand("columns")]
             else:
                 right = self.right
@@ -896,8 +896,8 @@ class Add(Binop):
 
     def _simplify_down(self):
         if (
-            isinstance(self.left, FrameExpr)
-            and isinstance(self.right, FrameExpr)
+            isinstance(self.left, Frame)
+            and isinstance(self.right, Frame)
             and self.left._name == self.right._name
         ):
             return 2 * self.left
@@ -979,7 +979,7 @@ class Unaryop(Elemwise):
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
-            if isinstance(self.frame, FrameExpr):
+            if isinstance(self.frame, Frame):
                 frame = self.frame[
                     parent.operand("columns")
                 ]  # TODO: filter just the correct columns
@@ -1006,7 +1006,7 @@ class Pos(Unaryop):
     _operator_repr = "+"
 
 
-class Partitions(FrameExpr):
+class Partitions(Frame):
     """Select one or more partitions"""
 
     _parameters = ["frame", "partitions"]
@@ -1031,7 +1031,7 @@ class Partitions(FrameExpr):
         ):
             operands = [
                 Partitions(op, self.partitions)
-                if (isinstance(op, FrameExpr) and not self.frame._broadcast_dep(op))
+                if (isinstance(op, Frame) and not self.frame._broadcast_dep(op))
                 else op
                 for op in self.frame.operands
             ]
@@ -1053,7 +1053,7 @@ class Partitions(FrameExpr):
         return [self.frame, self.partitions]
 
 
-class PartitionsFiltered(FrameExpr):
+class PartitionsFiltered(Frame):
     """Mixin class for partition filtering
 
     A `PartitionsFiltered` subclass must define a
@@ -1108,7 +1108,7 @@ class PartitionsFiltered(FrameExpr):
         raise NotImplementedError()
 
 
-@normalize_token.register(FrameExpr)
+@normalize_token.register(Frame)
 def normalize_expression(expr):
     return expr._name
 
@@ -1166,7 +1166,7 @@ def optimize_blockwise_fusion(expr):
                     dependents[next] = set()
 
             for operand in next.operands:
-                if isinstance(operand, FrameExpr):
+                if isinstance(operand, Frame):
                     stack.append(operand)
                     if isinstance(operand, Blockwise):
                         if next in dependencies:
@@ -1314,7 +1314,7 @@ class Fused(Blockwise):
     def _divisions(self):
         return self.exprs[0]._divisions()
 
-    def _broadcast_dep(self, dep: FrameExpr):
+    def _broadcast_dep(self, dep: Frame):
         # Always broadcast single-partition dependencies in Fused
         return dep.npartitions == 1
 
