@@ -49,15 +49,8 @@ class FrameExpr(Expr):
 
     def __getattr__(self, key):
         try:
-            return object.__getattribute__(self, key)
+            super().__getattr__(self, key)
         except AttributeError as err:
-            # Allow operands to be accessed as attributes
-            # as long as the keys are not already reserved
-            # by existing methods/properties
-            _parameters = type(self)._parameters
-            if key in _parameters:
-                idx = _parameters.index(key)
-                return self.operands[idx]
             if is_dataframe_like(self._meta) and key in self._meta.columns:
                 return self[key]
             raise err
