@@ -224,12 +224,6 @@ class Expr:
 
         return expr
 
-    def _simplify_down(self):
-        return
-
-    def _simplify_up(self, parent):
-        return
-
     def optimize(self, **kwargs):
         raise NotImplementedError()
 
