@@ -27,7 +27,7 @@ from dask.delayed import delayed
 from dask.utils import apply, natural_sort_key
 from fsspec.utils import stringify_path
 
-from dask_expr.expr import (
+from dask_expr.frameexpr import (
     EQ,
     GE,
     GT,
@@ -36,8 +36,8 @@ from dask_expr.expr import (
     NE,
     And,
     Blockwise,
-    Expr,
     Filter,
+    FrameExpr,
     Lengths,
     Literal,
     Or,
@@ -68,7 +68,7 @@ def normalize_pa_schema(schema):
     return schema.to_string()
 
 
-class ToParquet(Expr):
+class ToParquet(FrameExpr):
     _parameters = [
         "frame",
         "path",
@@ -121,7 +121,7 @@ class ToParquetData(Blockwise):
         return (self.io_func, (self.frame._name, index), (index,))
 
 
-class ToParquetBarrier(Expr):
+class ToParquetBarrier(FrameExpr):
     _parameters = ToParquet._parameters
 
     @property
@@ -786,13 +786,15 @@ class _DNF:
         return _DNF(result)
 
     @classmethod
-    def extract_pq_filters(cls, pq_expr: ReadParquet, predicate_expr: Expr) -> _DNF:
+    def extract_pq_filters(
+        cls, pq_expr: ReadParquet, predicate_expr: FrameExpr
+    ) -> _DNF:
         _filters = None
         if isinstance(predicate_expr, (LE, GE, LT, GT, EQ, NE)):
             if (
                 isinstance(predicate_expr.left, ReadParquet)
                 and predicate_expr.left.path == pq_expr.path
-                and not isinstance(predicate_expr.right, Expr)
+                and not isinstance(predicate_expr.right, FrameExpr)
             ):
                 op = predicate_expr._operator_repr
                 column = predicate_expr.left.columns[0]
@@ -801,7 +803,7 @@ class _DNF:
             elif (
                 isinstance(predicate_expr.right, ReadParquet)
                 and predicate_expr.right.path == pq_expr.path
-                and not isinstance(predicate_expr.left, Expr)
+                and not isinstance(predicate_expr.left, FrameExpr)
             ):
                 # Simple dict to make sure field comes first in filter
                 flip = {LE: GE, LT: GT, GE: LE, GT: LT}

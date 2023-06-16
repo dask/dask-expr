@@ -19,8 +19,8 @@ from dask.utils import IndexCallable, random_state_data
 from fsspec.utils import stringify_path
 from tlz import first
 
-from dask_expr import expr
-from dask_expr.expr import no_default
+from dask_expr import frameexpr
+from dask_expr.frameexpr import no_default
 from dask_expr.merge import Merge
 from dask_expr.reductions import (
     DropDuplicates,
@@ -47,7 +47,7 @@ def _wrap_expr_api(*args, wrap_api=None, **kwargs):
         *[arg.expr if isinstance(arg, FrameBase) else arg for arg in args],
         **kwargs,
     )
-    if isinstance(result, expr.Expr):
+    if isinstance(result, frameexpr.FrameExpr):
         return new_collection(result)
     return result
 
@@ -170,16 +170,16 @@ class FrameBase(DaskMethodsMixin):
         return new_collection(self.expr.index)
 
     def reset_index(self, drop=False):
-        return new_collection(expr.ResetIndex(self.expr, drop))
+        return new_collection(frameexpr.ResetIndex(self.expr, drop))
 
     def head(self, n=5, compute=True):
-        out = new_collection(expr.Head(self.expr, n=n))
+        out = new_collection(frameexpr.Head(self.expr, n=n))
         if compute:
             out = out.compute()
         return out
 
     def tail(self, n=5, compute=True):
-        out = new_collection(expr.Tail(self.expr, n=n))
+        out = new_collection(frameexpr.Tail(self.expr, n=n))
         if compute:
             out = out.compute()
         return out
@@ -200,7 +200,7 @@ class FrameBase(DaskMethodsMixin):
         assert set(index).issubset(range(self.npartitions))
 
         # Return selected partitions
-        return new_collection(expr.Partitions(self.expr, index))
+        return new_collection(frameexpr.Partitions(self.expr, index))
 
     @property
     def partitions(self):
@@ -313,7 +313,7 @@ class FrameBase(DaskMethodsMixin):
             # will need to call `Repartition` on operands that are not
             # aligned with `self.expr`.
             raise NotImplementedError()
-        new_expr = expr.MapPartitions(
+        new_expr = frameexpr.MapPartitions(
             self.expr,
             func,
             meta,
@@ -417,7 +417,7 @@ class DataFrame(FrameBase):
                 raise TypeError(f"Column assignment doesn't support type {type(v)}")
             if not isinstance(k, str):
                 raise TypeError(f"Column name cannot be type {type(k)}")
-            result = new_collection(expr.Assign(result.expr, k, v.expr))
+            result = new_collection(frameexpr.Assign(result.expr, k, v.expr))
         return result
 
     def merge(
@@ -544,15 +544,15 @@ class DataFrame(FrameBase):
     def __dir__(self):
         o = set(dir(type(self)))
         o.update(self.__dict__)
-        o.update(set(dir(expr.Expr)))
+        o.update(set(dir(frameexpr.FrameExpr)))
         o.update(c for c in self.columns if (isinstance(c, str) and c.isidentifier()))
         return list(o)
 
     def map(self, func, na_action=None):
-        return new_collection(expr.Map(self.expr, arg=func, na_action=na_action))
+        return new_collection(frameexpr.Map(self.expr, arg=func, na_action=na_action))
 
     def __repr__(self):
-        return f"<dask_expr.expr.DataFrame: expr={self.expr}>"
+        return f"<dask_expr.frameexpr.DataFrame: expr={self.expr}>"
 
     def nlargest(self, n=5, columns=None):
         return new_collection(NLargest(self.expr, n=n, _columns=columns))
@@ -582,7 +582,7 @@ class DataFrame(FrameBase):
                 "You cannot set both the how and thresh arguments at the same time."
             )
         return new_collection(
-            expr.DropnaFrame(self.expr, how=how, subset=subset, thresh=thresh)
+            frameexpr.DropnaFrame(self.expr, how=how, subset=subset, thresh=thresh)
         )
 
     def sample(self, n=None, frac=None, replace=False, random_state=None):
@@ -605,14 +605,16 @@ class DataFrame(FrameBase):
 
         state_data = random_state_data(self.npartitions, random_state)
         return new_collection(
-            expr.Sample(self.expr, state_data=state_data, frac=frac, replace=replace)
+            frameexpr.Sample(
+                self.expr, state_data=state_data, frac=frac, replace=replace
+            )
         )
 
     def rename(self, columns):
-        return new_collection(expr.RenameFrame(self.expr, columns=columns))
+        return new_collection(frameexpr.RenameFrame(self.expr, columns=columns))
 
     def explode(self, column):
-        return new_collection(expr.ExplodeFrame(self.expr, column=column))
+        return new_collection(frameexpr.ExplodeFrame(self.expr, column=column))
 
     def to_parquet(self, path, **kwargs):
         from dask_expr.io.parquet import to_parquet
@@ -626,7 +628,7 @@ class Series(FrameBase):
     def __dir__(self):
         o = set(dir(type(self)))
         o.update(self.__dict__)
-        o.update(set(dir(expr.Expr)))
+        o.update(set(dir(frameexpr.FrameExpr)))
         return list(o)
 
     @property
@@ -638,13 +640,13 @@ class Series(FrameBase):
         return new_collection(self.expr.nbytes)
 
     def map(self, arg, na_action=None):
-        return new_collection(expr.Map(self.expr, arg=arg, na_action=na_action))
+        return new_collection(frameexpr.Map(self.expr, arg=arg, na_action=na_action))
 
     def __repr__(self):
-        return f"<dask_expr.expr.Series: expr={self.expr}>"
+        return f"<dask_expr.frameexpr.Series: expr={self.expr}>"
 
     def to_frame(self, name=no_default):
-        return new_collection(expr.ToFrame(self.expr, name=name))
+        return new_collection(frameexpr.ToFrame(self.expr, name=name))
 
     def value_counts(self, sort=None, ascending=False, dropna=True, normalize=False):
         return new_collection(
@@ -667,27 +669,27 @@ class Series(FrameBase):
         return new_collection(DropDuplicates(self.expr, ignore_index=ignore_index))
 
     def dropna(self):
-        return new_collection(expr.DropnaSeries(self.expr))
+        return new_collection(frameexpr.DropnaSeries(self.expr))
 
     def between(self, left, right, inclusive="both"):
         return new_collection(
-            expr.Between(self.expr, left=left, right=right, inclusive=inclusive)
+            frameexpr.Between(self.expr, left=left, right=right, inclusive=inclusive)
         )
 
     def explode(self):
-        return new_collection(expr.ExplodeSeries(self.expr))
+        return new_collection(frameexpr.ExplodeSeries(self.expr))
 
 
 class Index(Series):
     """Index-like Expr Collection"""
 
     def __repr__(self):
-        return f"<dask_expr.expr.Index: expr={self.expr}>"
+        return f"<dask_expr.frameexpr.Index: expr={self.expr}>"
 
     def to_frame(self, index=True, name=no_default):
         if not index:
             raise NotImplementedError
-        return new_collection(expr.ToFrameIndex(self.expr, index=index, name=name))
+        return new_collection(frameexpr.ToFrameIndex(self.expr, index=index, name=name))
 
     def memory_usage(self, deep=False):
         return new_collection(MemoryUsageIndex(self.expr, deep=deep))
@@ -695,7 +697,7 @@ class Index(Series):
     def __dir__(self):
         o = set(dir(type(self)))
         o.update(self.__dict__)
-        o.update(set(dir(expr.Expr)))
+        o.update(set(dir(frameexpr.FrameExpr)))
         return list(o)
 
 
@@ -703,7 +705,7 @@ class Scalar(FrameBase):
     """Scalar Expr Collection"""
 
     def __repr__(self):
-        return f"<dask_expr.expr.Scalar: expr={self.expr}>"
+        return f"<dask_expr.frameexpr.Scalar: expr={self.expr}>"
 
     def __dask_postcompute__(self):
         return first, ()
@@ -724,7 +726,7 @@ def new_collection(expr):
 
 
 def optimize(collection, fuse=True):
-    return new_collection(expr.optimize(collection.expr, fuse=fuse))
+    return new_collection(frameexpr.optimize(collection.expr, fuse=fuse))
 
 
 def from_pandas(*args, **kwargs):

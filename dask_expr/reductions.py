@@ -13,10 +13,10 @@ from dask.dataframe.core import (
 )
 from dask.utils import M, apply
 
-from dask_expr.expr import Elemwise, Expr, Projection
+from dask_expr.frameexpr import Elemwise, FrameExpr, Projection
 
 
-class ApplyConcatApply(Expr):
+class ApplyConcatApply(FrameExpr):
     """Perform reduction-like operation on dataframes
 
     This pattern is commonly used for reductions, groupby-aggregations, and
