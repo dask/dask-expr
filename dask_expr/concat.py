@@ -14,14 +14,14 @@ class Concat(Expr):
     _defaults = {"join": "outer", "ignore_order": False, "_kwargs": {}}
 
     @property
-    def _frame(self):
-        return self.operands[len(self._parameters) :]
+    def _frames(self):
+        return self.dependencies()
 
     @functools.cached_property
     def _meta(self):
         meta = make_meta(
             methods.concat(
-                [meta_nonempty(df._meta) for df in self._frame],
+                [meta_nonempty(df._meta) for df in self._frames],
                 join=self.join,
                 filter_warning=False,
                 **self._kwargs,
@@ -30,7 +30,7 @@ class Concat(Expr):
         return strip_unknown_categories(meta)
 
     def _divisions(self):
-        dfs = self._frame
+        dfs = self._frames
         if all(df.known_divisions for df in dfs):
             # each DataFrame's division must be greater than previous one
             if all(
@@ -47,7 +47,7 @@ class Concat(Expr):
         return [None] * (sum(df.npartitions for df in dfs) + 1)
 
     def _simplify_down(self):
-        dfs = self._frame
+        dfs = self._frames
         cast_dfs = []
         for df in dfs:
             # dtypes of all dfs need to be coherent
@@ -94,7 +94,7 @@ class StackPartition(Concat):
 
     def _layer(self):
         dsk, i = {}, 0
-        for df in self._frame:
+        for df in self._frames:
             try:
                 check_meta(df._meta, self._meta)
                 match = True
