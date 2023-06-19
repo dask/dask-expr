@@ -92,10 +92,6 @@ class StackPartition(Concat):
     _parameters = ["join", "ignore_order", "_kwargs"]
     _defaults = {"join": "outer", "ignore_order": False, "_kwargs": {}}
 
-    # @functools.cached_property
-    # def _name(self):
-    #     return funcname(type(self)).lower() + "-" + tokenize(*self.operand("frame"))
-
     def _layer(self):
         dsk, i = {}, 0
         for df in self._frame:
