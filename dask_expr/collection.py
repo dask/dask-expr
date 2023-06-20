@@ -218,6 +218,7 @@ class FrameBase(DaskMethodsMixin):
                     # Numpy 1.23 supports creating arrays of iterables, while lower
                     # version 1.21.x and 1.22.x do not
                     pass
+        # TODO: use delayed for values
         return new_collection(expr.Isin(self.expr, values=values))
 
     def _partitions(self, index):
