@@ -184,6 +184,12 @@ def test_conditionals(func, pdf, df):
     assert_eq(func(pdf), func(df), check_names=False)
 
 
+def test_binop_non_matching_divisions(pdf, df):
+    pdf2 = pdf.iloc[3:6]
+    df2 = from_pandas(pdf2)
+    assert_eq(pdf2 - pdf, df - df2)
+
+
 @pytest.mark.parametrize(
     "func",
     [
@@ -755,5 +761,6 @@ def test_align_different_partitions():
 def test_align_unknown_partitions():
     pdf = pd.DataFrame({"a": 1}, index=[3, 2, 1])
     df = from_pandas(pdf, npartitions=2, sort=False)
+    df2 = from_pandas(pdf, npartitions=2)
     with pytest.raises(ValueError, match="Not all divisions"):
-        df.align(df)
+        df.align(df2)

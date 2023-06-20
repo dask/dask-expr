@@ -32,7 +32,7 @@ from dask_expr.reductions import (
     Unique,
     ValueCounts,
 )
-from dask_expr.repartition import Repartition
+from dask_expr.repartition import Repartition, _maybe_align_partitions
 
 #
 # Utilities to wrap Expr API
@@ -57,7 +57,14 @@ def _wrap_expr_op(self, other, op=None):
     assert op is not None
     if isinstance(other, FrameBase):
         other = other.expr
-    return new_collection(getattr(self.expr, op)(other))
+    left = self.expr
+
+    if not isinstance(left, expr.Expr) or not isinstance(other, expr.Expr):
+        pass
+    else:
+        left, other = _maybe_align_partitions([left, other])
+
+    return new_collection(getattr(left, op)(other))
 
 
 def _wrap_unary_expr_op(self, op=None):

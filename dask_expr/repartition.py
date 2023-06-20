@@ -8,7 +8,7 @@ from dask.dataframe import methods
 from dask.dataframe.core import split_evenly
 from dask.dataframe.utils import is_series_like
 from pandas.api.types import is_datetime64_any_dtype, is_numeric_dtype
-from tlz import unique
+from tlz import merge_sorted, unique
 
 from dask_expr.expr import Expr, Projection
 
@@ -313,3 +313,45 @@ class RepartitionDivisions(Repartition):
                 d[(out2, j - 1)] = (methods.concat, tmp)
             j += 1
         return d
+
+
+def is_broadcastable(dfs, s):
+    """
+    This Series is broadcastable against another dataframe in the sequence
+    """
+
+    def compare(s, df):
+        try:
+            return s.divisions == (df.columns.min(), df.columns.max())
+        except TypeError:
+            return False
+
+    return (
+        s.ndim <= 1
+        and s.npartitions == 1
+        and s.known_divisions
+        and any(compare(s, df) for df in dfs if df.ndim == 2)
+    )
+
+
+def _maybe_align_partitions(args):
+    _is_broadcastable = functools.partial(is_broadcastable, args)
+    dfs = [df for df in args if df.ndim > 0 and not _is_broadcastable(df)]
+    if not dfs:
+        return args
+
+    if all(df.divisions == dfs[0].divisions for df in dfs):
+        return args
+
+    if not all(df.known_divisions for df in dfs):
+        raise ValueError(
+            "Not all divisions are known, can't align "
+            "partitions. Please use `set_index` "
+            "to set the index."
+        )
+
+    divisions = list(unique(merge_sorted(*[df.divisions for df in dfs])))
+    if len(divisions) == 1:  # single value for index
+        divisions = (divisions[0], divisions[0])
+
+    return [Repartition(df, new_divisions=divisions, force=True) for df in dfs]
