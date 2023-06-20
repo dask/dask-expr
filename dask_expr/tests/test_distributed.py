@@ -57,10 +57,13 @@ async def test_p2p_shuffle(c, s, a, b, npartitions):
         assert out.npartitions == df.npartitions
     else:
         assert out.npartitions == npartitions
-    x, y = c.compute([df.x.size, out.x.size])
+    x, y, z = c.compute([df.x.size, out.x.size, out.partitions[-1].x.size])
     x = await x
     y = await y
+    z = await z
     assert x == y
+    if npartitions != 1:
+        assert x > z
 
     await clean_worker(a)
     await clean_worker(b)
