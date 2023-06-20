@@ -60,7 +60,7 @@ def _wrap_expr_op(self, other, op=None):
         other = other.expr
     left = self.expr
 
-    if not isinstance(left, expr.Expr) or not isinstance(other, expr.Expr):
+    if not isinstance(other, expr.Expr):
         pass
     else:
         left, other = _maybe_align_partitions([left, other])
