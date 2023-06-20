@@ -757,3 +757,8 @@ def test_align_unknown_partitions():
     df = from_pandas(pdf, npartitions=2, sort=False)
     with pytest.raises(ValueError, match="Not all divisions"):
         df.align(df)
+
+
+def test_nunique_approx(df):
+    result = df.nunique_approx().compute()
+    assert 99 < result < 101
