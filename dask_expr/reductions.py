@@ -460,9 +460,9 @@ class Mode(ApplyConcatApply):
 
 class NuniqueApprox(Reduction):
     _parameters = ["frame", "b"]
-    reduction_chunk = staticmethod(hyperloglog.compute_hll_array)
-    reduction_combine = staticmethod(hyperloglog.reduce_state)
-    reduction_aggregate = staticmethod(hyperloglog.estimate_count)
+    reduction_chunk = hyperloglog.compute_hll_array
+    reduction_combine = hyperloglog.reduce_state
+    reduction_aggregate = hyperloglog.estimate_count
 
     @property
     def _meta(self):
