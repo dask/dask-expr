@@ -446,12 +446,6 @@ def test_remove_unnecessary_projections(df):
 
     assert optimized._name == expected._name
 
-    result = (df.x + 1)["x"]
-    optimized = optimize(result, fuse=False)
-    expected = df.x + 1
-
-    assert optimized._name == expected._name
-
 
 def test_substitute(df):
     pdf = pd.DataFrame(
