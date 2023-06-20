@@ -84,9 +84,7 @@ class Shuffle(Expr):
     def _simplify_down(self):
         # Use `backend` to decide how to compose a
         # shuffle operation from concerete expressions
-        # TODO: Support "p2p"
         backend = self.backend or get_default_shuffle_algorithm()
-        # backend = "tasks" if backend == "p2p" else backend
         if hasattr(backend, "from_abstract_shuffle"):
             return backend.from_abstract_shuffle(self)
         elif backend == "p2p":
@@ -499,6 +497,7 @@ class P2PShuffle(SimpleShuffle):
 
         dsk[_barrier_key] = (shuffle_barrier, token, transfer_keys)
 
+        # TODO: Decompose p2p Into transfer/barrier + unpack
         name = self._name
         for i, part_out in enumerate(parts_out):
             dsk[(name, i)] = (
