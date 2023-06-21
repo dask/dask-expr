@@ -728,6 +728,29 @@ def test_dir(df):
     assert "sum" in dir(df.index)
 
 
+@pytest.mark.parametrize(
+    "func, args",
+    [
+        ("replace", (1, 2)),
+        ("isin", ([1, 2],)),
+        ("clip", (0, 5)),
+        ("isna", ()),
+        ("round", ()),
+        ("abs", ()),
+        ("apply", (lambda x: x + 1,)),
+        # ("map", (lambda x: x+1, )),  # add in when pandas 2.1 is out
+    ],
+)
+@pytest.mark.parametrize("indexer", ["x", ["x"]])
+def test_simplify_up_blockwise(df, pdf, func, args, indexer):
+    q = getattr(df, func)(*args)[indexer]
+    result = optimize(q, fuse=False)
+    expected = getattr(df[indexer], func)(*args)
+    assert result._name == expected._name
+
+    assert_eq(q, getattr(pdf, func)(*args)[indexer])
+
+
 def test_sample(df):
     result = df.sample(frac=0.5)
 

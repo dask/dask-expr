@@ -810,6 +810,26 @@ class Blockwise(Expr):
         else:
             return (self.operation,) + tuple(args)
 
+    def _simplify_up(self, parent):
+        if isinstance(
+            self,
+            (
+                Replace,
+                Isin,
+                Clip,
+                ToTimestamp,
+                IsNa,
+                Round,
+                Abs,
+                Apply,
+                Map,
+            ),
+        ) and isinstance(parent, Projection):
+            if list(self.columns) == list(parent.columns):
+                return self
+
+            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+
 
 class MapPartitions(Blockwise):
     _parameters = [
