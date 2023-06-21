@@ -678,6 +678,10 @@ class DataFrame(FrameBase):
 
         return to_parquet(self, path, **kwargs)
 
+    def select_dtypes(self, include=None, exclude=None):
+        columns = self._meta.select_dtypes(include=include, exclude=exclude).columns
+        return new_collection(expr.Projection(self.expr, columns=columns))
+
 
 class Series(FrameBase):
     """Series-like Expr Collection"""
