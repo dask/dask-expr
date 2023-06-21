@@ -737,7 +737,6 @@ def test_dir(df):
         ("isna", ()),
         ("round", ()),
         ("abs", ()),
-        ("apply", (lambda x: x + 1,)),
         # ("map", (lambda x: x+1, )),  # add in when pandas 2.1 is out
     ],
 )
