@@ -813,9 +813,6 @@ class Blockwise(Expr):
 
     def _simplify_up(self, parent):
         if self.projection_passthrough and isinstance(parent, Projection):
-            if list(self.columns) == list(parent.columns):
-                return self
-
             return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
 
 
