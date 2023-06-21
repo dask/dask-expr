@@ -998,7 +998,7 @@ class Clip(Elemwise):
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
-            if sorted(self.frame.columns) == sorted(parent.columns):
+            if self.frame.columns == parent.columns:
                 # Don't introduce unnecessary projections
                 return
             return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
