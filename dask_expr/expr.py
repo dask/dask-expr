@@ -489,7 +489,7 @@ class Expr:
         return funcname(type(self)).lower() + "-" + tokenize(*self.operands)
 
     @property
-    def columns(self):
+    def columns(self) -> list:
         try:
             return list(self._meta.columns)
         except AttributeError:
