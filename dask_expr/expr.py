@@ -1058,7 +1058,6 @@ class Abs(Elemwise):
 class Apply(Elemwise):
     """A good example of writing a less-trivial blockwise operation"""
 
-    projection_passthrough = True
     _parameters = ["frame", "function", "args", "kwargs"]
     _defaults = {"args": (), "kwargs": {}}
     operation = M.apply
