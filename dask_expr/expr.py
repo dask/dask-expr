@@ -731,6 +731,7 @@ class Blockwise(Expr):
 
     operation = None
     _keyword_only = []
+    projection_passthrough = False
 
     @functools.cached_property
     def _meta(self):
@@ -811,20 +812,7 @@ class Blockwise(Expr):
             return (self.operation,) + tuple(args)
 
     def _simplify_up(self, parent):
-        if isinstance(
-            self,
-            (
-                Replace,
-                Isin,
-                Clip,
-                ToTimestamp,
-                IsNa,
-                Round,
-                Abs,
-                Apply,
-                Map,
-            ),
-        ) and isinstance(parent, Projection):
+        if self.projection_passthrough and isinstance(parent, Projection):
             if list(self.columns) == list(parent.columns):
                 return self
 
@@ -933,6 +921,7 @@ class DropnaFrame(Blockwise):
 
 
 class Replace(Blockwise):
+    projection_passthrough = True
     _parameters = ["frame", "to_replace", "value", "regex"]
     _defaults = {"to_replace": None, "value": no_default, "regex": False}
     _keyword_only = ["value", "regex"]
@@ -1007,11 +996,13 @@ class Elemwise(Blockwise):
 
 
 class Isin(Elemwise):
+    projection_passthrough = True
     _parameters = ["frame", "values"]
     operation = M.isin
 
 
 class Clip(Elemwise):
+    projection_passthrough = True
     _parameters = ["frame", "lower", "upper"]
     _defaults = {"lower": None, "upper": None}
     operation = M.clip
@@ -1031,6 +1022,7 @@ class Between(Elemwise):
 
 
 class ToTimestamp(Elemwise):
+    projection_passthrough = True
     _parameters = ["frame", "freq", "how"]
     _defaults = {"freq": None, "how": "start"}
     operation = M.to_timestamp
@@ -1049,16 +1041,19 @@ class AsType(Elemwise):
 
 
 class IsNa(Elemwise):
+    projection_passthrough = True
     _parameters = ["frame"]
     operation = M.isna
 
 
 class Round(Elemwise):
+    projection_passthrough = True
     _parameters = ["frame", "decimals"]
     operation = M.round
 
 
 class Abs(Elemwise):
+    projection_passthrough = True
     _parameters = ["frame"]
     operation = M.abs
 
@@ -1066,6 +1061,7 @@ class Abs(Elemwise):
 class Apply(Elemwise):
     """A good example of writing a less-trivial blockwise operation"""
 
+    projection_passthrough = True
     _parameters = ["frame", "function", "args", "kwargs"]
     _defaults = {"args": (), "kwargs": {}}
     operation = M.apply
@@ -1088,6 +1084,7 @@ class Apply(Elemwise):
 
 
 class Map(Elemwise):
+    projection_passthrough = True
     _parameters = ["frame", "arg", "na_action"]
     _defaults = {"na_action": None}
     operation = M.map
