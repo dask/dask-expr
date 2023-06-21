@@ -750,6 +750,11 @@ def test_simplify_up_blockwise(df, pdf, func, args, indexer):
 
     assert_eq(q, getattr(pdf, func)(*args)[indexer])
 
+    q = getattr(df, func)(*args)[["x", "y"]]
+    result = optimize(q, fuse=False)
+    expected = getattr(df, func)(*args)
+    assert result._name == expected._name
+
 
 def test_sample(df):
     result = df.sample(frac=0.5)
