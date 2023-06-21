@@ -11,13 +11,16 @@ from dask.dataframe.groupby import (
     _groupby_aggregate,
     _groupby_apply_funcs,
     _normalize_spec,
+    _value_counts,
+    _value_counts_aggregate,
     _var_agg,
     _var_chunk,
     _var_combine,
 )
 from dask.utils import M, is_index_like
 
-from dask_expr.collection import DataFrame, new_collection
+from dask_expr.collection import DataFrame, Series, new_collection
+from dask_expr.expr import MapPartitions
 from dask_expr.reductions import ApplyConcatApply, Reduction
 
 
@@ -253,6 +256,16 @@ class Count(SingleAggregation):
     groupby_aggregate = M.sum
 
 
+class Size(SingleAggregation):
+    groupby_chunk = M.size
+    groupby_aggregate = M.sum
+
+
+class ValueCounts(SingleAggregation):
+    groupby_chunk = staticmethod(_value_counts)
+    groupby_aggregate = staticmethod(_value_counts_aggregate)
+
+
 class Var(Reduction):
     _parameters = ["frame", "by", "ddof", "numeric_only"]
     reduction_aggregate = _var_agg
@@ -280,6 +293,28 @@ class Var(Reduction):
     @functools.cached_property
     def combine_kwargs(self):
         return {"levels": self.levels}
+
+    def _divisions(self):
+        return (None, None)
+
+
+class Std(SingleAggregation):
+    _parameters = ["frame", "by", "ddof", "numeric_only"]
+
+    @functools.cached_property
+    def _meta(self):
+        return self.simplify()._meta
+
+    def _simplify_down(self):
+        v = Var(*self.operands)
+        return MapPartitions(
+            v,
+            func=np.sqrt,
+            meta=v._meta,
+            enforce_metadata=True,
+            transform_divisions=True,
+            clear_divisions=True,
+        )
 
 
 class Mean(SingleAggregation):
@@ -328,6 +363,16 @@ class GroupBy:
         dropna=None,
         slice=None,
     ):
+        if (
+            isinstance(by, Series)
+            and by.name in obj.columns
+            and by._name == obj[by.name]._name
+        ):
+            by = by.name
+        elif isinstance(by, Series):
+            # TODO: Implement this
+            raise ValueError("by must be in the DataFrames columns.")
+
         by_ = by if isinstance(by, (tuple, list)) else [by]
         self._slice = slice
         # Check if we can project columns
@@ -445,10 +490,21 @@ class GroupBy:
         numeric_kwargs = self._numeric_only_kwargs(numeric_only)
         return self._single_agg(Last, **kwargs, **numeric_kwargs)
 
+    def size(self, **kwargs):
+        return self._single_agg(Size, **kwargs)
+
+    def value_counts(self, **kwargs):
+        return self._single_agg(ValueCounts, **kwargs)
+
     def var(self, ddof=1, numeric_only=True):
         if not numeric_only:
             raise NotImplementedError("numeric_only=False is not implemented")
         return self._aca_agg(Var, ddof=ddof, numeric_only=numeric_only)
+
+    def std(self, ddof=1, numeric_only=True):
+        if not numeric_only:
+            raise NotImplementedError("numeric_only=False is not implemented")
+        return self._aca_agg(Std, ddof=ddof, numeric_only=numeric_only)
 
     def aggregate(self, arg=None, split_every=8, split_out=1):
         if arg is None:

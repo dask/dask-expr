@@ -24,6 +24,7 @@ from dask.dataframe.core import (
 )
 from dask.dataframe.dispatch import meta_nonempty
 from dask.utils import M, apply, funcname, import_required, is_arraylike
+from tlz import merge_sorted, unique
 
 replacement_rules = []
 
@@ -370,6 +371,15 @@ class Expr:
     def __rxor__(self, other):
         return XOr(other, self)
 
+    def __invert__(self):
+        return Invert(self)
+
+    def __neg__(self):
+        return Neg(self)
+
+    def __pos__(self):
+        return Pos(self)
+
     def sum(self, skipna=True, numeric_only=False, min_count=0):
         return Sum(self, skipna, numeric_only, min_count)
 
@@ -429,6 +439,30 @@ class Expr:
 
     def replace(self, to_replace=None, value=no_default, regex=False):
         return Replace(self, to_replace=to_replace, value=value, regex=regex)
+
+    def align(self, other, join="outer", fill_value=None):
+        from dask_expr.collection import new_collection
+        from dask_expr.repartition import Repartition
+
+        dfs = [self, other]
+        if not all(df.known_divisions for df in dfs):
+            raise ValueError(
+                "Not all divisions are known, can't align "
+                "partitions. Please use `set_index` "
+                "to set the index."
+            )
+
+        divisions = list(unique(merge_sorted(*[df.divisions for df in dfs])))
+        if len(divisions) == 1:  # single value for index
+            divisions = (divisions[0], divisions[0])
+
+        left = Repartition(self, new_divisions=divisions, force=True)
+        other = Repartition(other, new_divisions=divisions, force=True)
+        aligned = _Align(left, other, join=join, fill_value=fill_value)
+
+        return new_collection(AlignGetitem(aligned, position=0)), new_collection(
+            AlignGetitem(aligned, position=1)
+        )
 
     @functools.cached_property
     def divisions(self):
@@ -787,6 +821,7 @@ class MapPartitions(Blockwise):
         "clear_divisions",
         "kwargs",
     ]
+    _defaults = {"kwargs": None}
 
     def __str__(self):
         return f"MapPartitions({funcname(self.func)})"
@@ -823,8 +858,9 @@ class MapPartitions(Blockwise):
 
     def _task(self, index: int):
         args = [self._blockwise_arg(op, index) for op in self.args]
+        kwargs = self.kwargs if self.kwargs is not None else {}
         if self.enforce_metadata:
-            kwargs = self.kwargs.copy()
+            kwargs = kwargs.copy()
             kwargs.update(
                 {
                     "_func": self.func,
@@ -837,8 +873,31 @@ class MapPartitions(Blockwise):
                 apply,
                 self.func,
                 args,
-                self.kwargs,
+                kwargs,
             )
+
+
+class _Align(Blockwise):
+    _parameters = ["frame", "other", "join", "fill_value"]
+    _defaults = {"join": "outer", "fill_value": None}
+    _keyword_only = ["join", "fill_value"]
+    operation = M.align
+
+    def _divisions(self):
+        # Aligning, so take first frames divisions
+        return self.frame._divisions()
+
+
+class AlignGetitem(Blockwise):
+    _parameters = ["frame", "position"]
+    operation = operator.getitem
+
+    @functools.cached_property
+    def _meta(self):
+        return self.frame._meta[self.position]
+
+    def _divisions(self):
+        return self.frame._divisions()
 
 
 class DropnaSeries(Blockwise):
@@ -875,7 +934,7 @@ class RenameFrame(Blockwise):
             self.operand("columns"), Mapping
         ):
             reverse_mapping = {val: key for key, val in self.operand("columns").items()}
-            if not isinstance(parent.columns, pd.Index):
+            if is_series_like(parent._meta):
                 # Fill this out when Series.rename is implemented
                 return
             else:
@@ -904,6 +963,20 @@ class Sample(Blockwise):
         return (self.operation,) + tuple(args)
 
 
+class ToFrame(Blockwise):
+    _parameters = ["frame", "name"]
+    _defaults = {"name": no_default}
+    _keyword_only = ["name"]
+    operation = M.to_frame
+
+
+class ToFrameIndex(Blockwise):
+    _parameters = ["frame", "index", "name"]
+    _defaults = {"name": no_default, "index": True}
+    _keyword_only = ["name", "index"]
+    operation = M.to_frame
+
+
 class Elemwise(Blockwise):
     """
     This doesn't really do anything, but we anticipate that future
@@ -911,6 +984,11 @@ class Elemwise(Blockwise):
     """
 
     pass
+
+
+class Isin(Elemwise):
+    _parameters = ["frame", "values"]
+    operation = M.isin
 
 
 class Clip(Elemwise):
@@ -1006,6 +1084,15 @@ class Map(Elemwise):
         return super()._divisions()
 
 
+class ExplodeSeries(Blockwise):
+    _parameters = ["frame"]
+    operation = M.explode
+
+
+class ExplodeFrame(ExplodeSeries):
+    _parameters = ["frame", "column"]
+
+
 class Assign(Elemwise):
     """Column Assignment"""
 
@@ -1040,6 +1127,8 @@ class Filter(Blockwise):
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
             return self.frame[parent.operand("columns")][self.predicate]
+        if isinstance(parent, Index):
+            return self.frame.index[self.predicate]
 
 
 class Projection(Elemwise):
@@ -1052,8 +1141,10 @@ class Projection(Elemwise):
     def columns(self):
         if isinstance(self.operand("columns"), list):
             return pd.Index(self.operand("columns"))
-        else:
+        elif isinstance(self.operand("columns"), pd.Index):
             return self.operand("columns")
+        else:
+            return pd.Index([self.operand("columns")])
 
     @property
     def _meta(self):
@@ -1074,10 +1165,18 @@ class Projection(Elemwise):
         base = str(self.frame)
         if " " in base:
             base = "(" + base + ")"
-        return f"{base}[{repr(self.columns)}]"
+        return f"{base}[{repr(self.operand('columns'))}]"
+
+    def _divisions(self):
+        if self.ndim == 0:
+            return (None, None)
+        return super()._divisions()
 
     def _simplify_down(self):
-        if str(self.frame.columns) == str(self.columns):
+        if (
+            str(self.frame.columns) == str(self.columns)
+            and self._meta.ndim == self.frame._meta.ndim
+        ):
             # TODO: we should get more precise around Expr.columns types
             return self.frame
         if isinstance(self.frame, Projection):
@@ -1086,7 +1185,8 @@ class Projection(Elemwise):
             b = self.operand("columns")
 
             if not isinstance(a, list):
-                assert a == b
+                # df[scalar][b] -> First selection coerces to Series
+                return
             elif isinstance(b, list):
                 assert all(bb in a for bb in b)
             else:
@@ -1347,6 +1447,41 @@ class Or(Binop):
 class XOr(Binop):
     operation = operator.xor
     _operator_repr = "^"
+
+
+class Unaryop(Elemwise):
+    _parameters = ["frame"]
+
+    def __str__(self):
+        return f"{self._operator_repr} {self.frame}"
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            if isinstance(self.frame, Expr):
+                frame = self.frame[
+                    parent.operand("columns")
+                ]  # TODO: filter just the correct columns
+            else:
+                frame = self.frame
+            return type(self)(frame)
+
+    def _node_label_args(self):
+        return [self.frame]
+
+
+class Invert(Unaryop):
+    operation = operator.inv
+    _operator_repr = "~"
+
+
+class Neg(Unaryop):
+    operation = operator.neg
+    _operator_repr = "-"
+
+
+class Pos(Unaryop):
+    operation = operator.pos
+    _operator_repr = "+"
 
 
 class Partitions(Expr):

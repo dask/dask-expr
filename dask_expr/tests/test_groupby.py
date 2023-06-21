@@ -22,11 +22,11 @@ def test_groupby_unsupported_by(pdf, df):
 
 
 @pytest.mark.parametrize(
-    "api", ["sum", "mean", "min", "max", "prod", "first", "last", "var"]
+    "api", ["sum", "mean", "min", "max", "prod", "first", "last", "var", "std"]
 )
 @pytest.mark.parametrize("numeric_only", [True, False])
 def test_groupby_numeric(pdf, df, api, numeric_only):
-    if not numeric_only and api == "var":
+    if not numeric_only and api in {"var", "std"}:
         pytest.xfail("not implemented")
     g = df.groupby("x")
     agg = getattr(g, api)(numeric_only=numeric_only)
@@ -35,11 +35,12 @@ def test_groupby_numeric(pdf, df, api, numeric_only):
     assert_eq(agg, expect)
 
 
-def test_groupby_count(pdf, df):
+@pytest.mark.parametrize("func", ["count", "value_counts", "size"])
+def test_groupby_no_numeric_only(pdf, df, func):
     g = df.groupby("x")
-    agg = g.count()
+    agg = getattr(g, func)()
 
-    expect = pdf.groupby("x").count()
+    expect = getattr(pdf.groupby("x"), func)()
     assert_eq(agg, expect)
 
 
@@ -49,6 +50,19 @@ def test_groupby_mean_slice(pdf, df):
 
     expect = pdf.groupby("x").y.mean()
     assert_eq(agg, expect)
+
+
+def test_groupby_series(pdf, df):
+    pdf_result = pdf.groupby(pdf.x).sum()
+    result = df.groupby(df.x).sum()
+    assert_eq(result, pdf_result)
+    result = df.groupby("x").sum()
+    assert_eq(result, pdf_result)
+
+    df2 = from_pandas(pd.DataFrame({"a": [1, 2, 3]}))
+
+    with pytest.raises(ValueError, match="DataFrames columns"):
+        df.groupby(df2.a)
 
 
 @pytest.mark.parametrize(

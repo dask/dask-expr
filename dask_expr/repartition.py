@@ -77,6 +77,8 @@ class Repartition(Expr):
                 else:
                     return RepartitionToMore(self.frame, self.n)
         elif self.new_divisions:
+            if tuple(self.new_divisions) == self.frame.divisions:
+                return self.frame
             return RepartitionDivisions(self.frame, self.new_divisions, self.force)
         else:
             raise NotImplementedError()
@@ -84,7 +86,7 @@ class Repartition(Expr):
     def _simplify_up(self, parent):
         # Reorder with column projection
         if isinstance(parent, Projection):
-            return type(self)(self.frame[parent.columns], *self.operands[1:])
+            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
 
 
 class RepartitionToFewer(Repartition):
