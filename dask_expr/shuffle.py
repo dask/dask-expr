@@ -15,7 +15,7 @@ from dask.dataframe.shuffle import (
     shuffle_group_2,
     shuffle_group_get,
 )
-from dask.utils import digit, get_default_shuffle_algorithm, insert
+from dask.utils import digit, get_default_shuffle_method, insert
 
 from dask_expr.expr import Blockwise, Expr, PartitionsFiltered, Projection
 from dask_expr.reductions import (
@@ -84,7 +84,7 @@ class Shuffle(Expr):
     def _simplify_down(self):
         # Use `backend` to decide how to compose a
         # shuffle operation from concerete expressions
-        backend = self.backend or get_default_shuffle_algorithm()
+        backend = self.backend or get_default_shuffle_method()
         if hasattr(backend, "from_abstract_shuffle"):
             return backend.from_abstract_shuffle(self)
         elif backend == "p2p":
