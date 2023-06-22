@@ -492,7 +492,7 @@ class P2PShuffle(SimpleShuffle):
                 i,
                 self.npartitions_out,
                 self.partitioning_index,
-                parts_out,
+                set(parts_out),
             )
 
         dsk[_barrier_key] = (shuffle_barrier, token, transfer_keys)
