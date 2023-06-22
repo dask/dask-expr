@@ -15,13 +15,7 @@ from dask.dataframe.shuffle import (
     shuffle_group_2,
     shuffle_group_get,
 )
-from dask.utils import digit, insert
-
-try:
-    from dask.utils import get_default_shuffle_method
-except ImportError:
-    # Fallback to old name for `dask<=2023.6.0`
-    from dask.utils import get_default_shuffle_algorithm as get_default_shuffle_method
+from dask.utils import digit, get_default_shuffle_method, insert
 
 from dask_expr.expr import Blockwise, Expr, PartitionsFiltered, Projection
 from dask_expr.reductions import (
