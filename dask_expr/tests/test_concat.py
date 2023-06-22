@@ -73,7 +73,7 @@ def test_concat_simplify(pdf, df):
     df2 = from_pandas(pdf2)
     q = concat([df, df2])[["z", "x"]]
     result = q.simplify()
-    expected = concat([df[["x"]], df2[["x", "z"]]])._simplify_down()[["z", "x"]]
+    expected = concat([df[["x"]], df2[["x", "z"]]]).simplify()[["z", "x"]]
     assert result._name == expected._name
 
     assert_eq(q, pd.concat([pdf, pdf2])[["z", "x"]])
