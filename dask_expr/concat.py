@@ -97,9 +97,8 @@ class Concat(Expr):
                 return
 
             frames = [
-                frame[cols]
+                frame[cols] if cols != sorted(frame.columns) else frame
                 for frame, cols in zip(self._frames, columns_frame)
-                if cols != sorted(frame.columns)
             ]
             return type(parent)(
                 type(self)(self.join, self.ignore_order, self._kwargs, *frames),

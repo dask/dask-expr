@@ -77,3 +77,15 @@ def test_concat_simplify(pdf, df):
     assert result._name == expected._name
 
     assert_eq(q, pd.concat([pdf, pdf2])[["z", "x"]])
+
+
+def test_concat_simplify_projection_not_added(pdf, df):
+    pdf2 = pdf.copy()
+    pdf2["z"] = 1
+    df2 = from_pandas(pdf2)
+    q = concat([df, df2])[["y", "x"]]
+    result = q.simplify()
+    expected = concat([df, df2[["x", "y"]]]).simplify()[["y", "x"]]
+    assert result._name == expected._name
+
+    assert_eq(q, pd.concat([pdf, pdf2])[["y", "x"]])
