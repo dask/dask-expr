@@ -1104,6 +1104,9 @@ class Assign(Elemwise):
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
+            if self.key not in parent.columns:
+                return type(parent)(self.frame, *parent.operands[1:])
+
             columns = set(parent.columns) - {self.key}
             if columns == set(self.frame.columns):
                 # Protect against pushing the same projection twice
