@@ -38,8 +38,6 @@ class Expr:
     definitions to make us look more like a DataFrame.
     """
 
-    commutative = False
-    associative = False
     _parameters = []
     _defaults = {}
 
@@ -489,11 +487,11 @@ class Expr:
         return funcname(type(self)).lower() + "-" + tokenize(*self.operands)
 
     @property
-    def columns(self):
+    def columns(self) -> list:
         try:
-            return self._meta.columns
+            return list(self._meta.columns)
         except AttributeError:
-            return pd.Index([])
+            return []
 
     @property
     def dtypes(self):
@@ -731,6 +729,7 @@ class Blockwise(Expr):
 
     operation = None
     _keyword_only = []
+    _projection_passthrough = False
 
     @functools.cached_property
     def _meta(self):
@@ -809,6 +808,10 @@ class Blockwise(Expr):
             return apply, self.operation, args, self._kwargs
         else:
             return (self.operation,) + tuple(args)
+
+    def _simplify_up(self, parent):
+        if self._projection_passthrough and isinstance(parent, Projection):
+            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
 
 
 class MapPartitions(Blockwise):
@@ -913,6 +916,7 @@ class DropnaFrame(Blockwise):
 
 
 class Replace(Blockwise):
+    _projection_passthrough = True
     _parameters = ["frame", "to_replace", "value", "regex"]
     _defaults = {"to_replace": None, "value": no_default, "regex": False}
     _keyword_only = ["value", "regex"]
@@ -934,7 +938,7 @@ class RenameFrame(Blockwise):
             self.operand("columns"), Mapping
         ):
             reverse_mapping = {val: key for key, val in self.operand("columns").items()}
-            if not isinstance(parent.columns, pd.Index):
+            if is_series_like(parent._meta):
                 # Fill this out when Series.rename is implemented
                 return
             else:
@@ -986,14 +990,21 @@ class Elemwise(Blockwise):
     pass
 
 
+class Isin(Elemwise):
+    _projection_passthrough = True
+    _parameters = ["frame", "values"]
+    operation = M.isin
+
+
 class Clip(Elemwise):
+    _projection_passthrough = True
     _parameters = ["frame", "lower", "upper"]
     _defaults = {"lower": None, "upper": None}
     operation = M.clip
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
-            if self.frame.columns.equals(parent.columns):
+            if self.frame.columns == parent.columns:
                 # Don't introduce unnecessary projections
                 return
             return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
@@ -1006,6 +1017,7 @@ class Between(Elemwise):
 
 
 class ToTimestamp(Elemwise):
+    _projection_passthrough = True
     _parameters = ["frame", "freq", "how"]
     _defaults = {"freq": None, "how": "start"}
     operation = M.to_timestamp
@@ -1022,18 +1034,32 @@ class AsType(Elemwise):
     _parameters = ["frame", "dtypes"]
     operation = M.astype
 
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            dtypes = self.operand("dtypes")
+            if isinstance(dtypes, dict):
+                dtypes = {
+                    key: val for key, val in dtypes.items() if key in parent.columns
+                }
+                if not dtypes:
+                    return type(parent)(self.frame, *parent.operands[1:])
+            return type(self)(self.frame[parent.operand("columns")], dtypes)
+
 
 class IsNa(Elemwise):
+    _projection_passthrough = True
     _parameters = ["frame"]
     operation = M.isna
 
 
 class Round(Elemwise):
+    _projection_passthrough = True
     _parameters = ["frame", "decimals"]
     operation = M.round
 
 
 class Abs(Elemwise):
+    _projection_passthrough = True
     _parameters = ["frame"]
     operation = M.abs
 
@@ -1063,6 +1089,7 @@ class Apply(Elemwise):
 
 
 class Map(Elemwise):
+    _projection_passthrough = True
     _parameters = ["frame", "arg", "na_action"]
     _defaults = {"na_action": None}
     operation = M.map
@@ -1118,9 +1145,11 @@ class Projection(Elemwise):
     @property
     def columns(self):
         if isinstance(self.operand("columns"), list):
-            return pd.Index(self.operand("columns"))
-        else:
             return self.operand("columns")
+        elif isinstance(self.operand("columns"), pd.Index):
+            return list(self.operand("columns"))
+        else:
+            return [self.operand("columns")]
 
     @property
     def _meta(self):
@@ -1141,10 +1170,18 @@ class Projection(Elemwise):
         base = str(self.frame)
         if " " in base:
             base = "(" + base + ")"
-        return f"{base}[{repr(self.columns)}]"
+        return f"{base}[{repr(self.operand('columns'))}]"
+
+    def _divisions(self):
+        if self.ndim == 0:
+            return (None, None)
+        return super()._divisions()
 
     def _simplify_down(self):
-        if str(self.frame.columns) == str(self.columns):
+        if (
+            str(self.frame.columns) == str(self.columns)
+            and self._meta.ndim == self.frame._meta.ndim
+        ):
             # TODO: we should get more precise around Expr.columns types
             return self.frame
         if isinstance(self.frame, Projection):

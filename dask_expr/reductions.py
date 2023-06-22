@@ -177,10 +177,7 @@ class DropDuplicates(Unique):
 
     def _simplify_up(self, parent):
         if self.subset is not None:
-            columns = parent.columns
-            if not isinstance(columns, pd.Index):
-                columns = [columns]
-            columns = set(columns).union(self.subset)
+            columns = set(parent.columns).union(self.subset)
             if columns == set(self.frame.columns):
                 # Don't add unnecessary Projections, protects against loops
                 return
@@ -240,7 +237,9 @@ class Reduction(ApplyConcatApply):
         return toolz.first, ()
 
     def _divisions(self):
-        return [None, None]
+        if self.ndim == 0:
+            return (None, None)
+        return (min(self.frame.columns), max(self.frame.columns))
 
     def __str__(self):
         params = {param: self.operand(param) for param in self._parameters[1:]}
@@ -473,6 +472,10 @@ class ReductionConstantDim(Reduction):
         df = _concat(inputs)
         return func(df, **kwargs)
 
+    def _divisions(self):
+        # TODO: We can do better in some cases
+        return (None, None)
+
 
 class NLargest(ReductionConstantDim):
     _defaults = {"n": 5, "_columns": None}
@@ -533,6 +536,10 @@ class ValueCounts(ReductionConstantDim):
 class MemoryUsage(Reduction):
     reduction_chunk = M.memory_usage
     reduction_aggregate = M.sum
+
+    def _divisions(self):
+        # TODO: We can do better, but not high priority
+        return (None, None)
 
 
 class MemoryUsageIndex(MemoryUsage):
