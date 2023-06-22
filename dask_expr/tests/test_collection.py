@@ -775,18 +775,24 @@ def test_assign_simplify(pdf):
     df = from_pandas(pdf)
     df2 = from_pandas(pdf)
     df["new"] = df.x > 1
-    result = optimize(df[["x", "new"]], fuse=False)
-    expected = optimize(df2[["x"]].assign(new=df2.x > 1), fuse=False)
+    result = df[["x", "new"]].simplify()
+    expected = df2[["x"]].assign(new=df2.x > 1).simplify()
     assert result._name == expected._name
+
+    pdf["new"] = pdf.x > 1
+    assert_eq(pdf[["x", "new"]], result)
 
 
 def test_assign_simplify_new_column_not_needed(pdf):
     df = from_pandas(pdf)
     df2 = from_pandas(pdf)
     df["new"] = df.x > 1
-    result = optimize(df[["x"]], fuse=False)
-    expected = optimize(df2[["x"]], fuse=False)
+    result = df[["x"]].simplify()
+    expected = df2[["x"]].simplify()
     assert result._name == expected._name
+
+    pdf["new"] = pdf.x > 1
+    assert_eq(result, pdf[["x"]])
 
 
 def test_assign_simplify_series(pdf):
