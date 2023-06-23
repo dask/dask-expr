@@ -1125,6 +1125,17 @@ class Assign(Elemwise):
         return [self.frame, self.key, self.value]
 
 
+class Eval(Elemwise):
+    _parameters = ["frame", "_expr", "expr_kwargs"]
+    _defaults = {"expr_kwargs": {}}
+    _keyword_only = ["expr_kwargs"]
+    operation = M.eval
+
+    @functools.cached_property
+    def _kwargs(self) -> dict:
+        return {**self.expr_kwargs}
+
+
 class Filter(Blockwise):
     _parameters = ["frame", "predicate"]
     operation = operator.getitem
