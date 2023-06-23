@@ -680,7 +680,7 @@ class DataFrame(FrameBase):
 
     def select_dtypes(self, include=None, exclude=None):
         columns = self._meta.select_dtypes(include=include, exclude=exclude).columns
-        return new_collection(expr.Projection(self.expr, columns=columns))
+        return new_collection(self.expr[columns])
 
 
 class Series(FrameBase):
