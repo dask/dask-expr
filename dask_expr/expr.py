@@ -23,6 +23,7 @@ from dask.dataframe.core import (
     make_meta,
 )
 from dask.dataframe.dispatch import meta_nonempty
+from dask.dataframe.utils import drop_by_shallow_copy
 from dask.utils import M, apply, funcname, import_required, is_arraylike
 from tlz import merge_sorted, unique
 
@@ -1113,6 +1114,12 @@ class ExplodeSeries(Blockwise):
 
 class ExplodeFrame(ExplodeSeries):
     _parameters = ["frame", "column"]
+
+
+class Drop(Elemwise):
+    _parameters = ["frame", "columns", "errors"]
+    _defaults = {"errors": "raise"}
+    operation = staticmethod(drop_by_shallow_copy)
 
 
 class Assign(Elemwise):
