@@ -682,6 +682,10 @@ class DataFrame(FrameBase):
 
         return to_parquet(self, path, **kwargs)
 
+    def select_dtypes(self, include=None, exclude=None):
+        columns = self._meta.select_dtypes(include=include, exclude=exclude).columns
+        return new_collection(self.expr[columns])
+
     def eval(self, expr, **kwargs):
         return new_collection(Eval(self.expr, _expr=expr, expr_kwargs=kwargs))
 
