@@ -272,10 +272,17 @@ def test_to_timestamp(pdf, how):
         lambda df: df.x.combine_first(df.y),
         lambda df: df.x.to_frame(),
         lambda df: df.x.index.to_frame(),
+        lambda df: df.select_dtypes(include="integer"),
     ],
 )
 def test_blockwise(func, pdf, df):
     assert_eq(func(pdf), func(df))
+
+
+def test_isin(df, pdf):
+    values = [1, 2]
+    assert_eq(pdf.isin(values), df.isin(values))
+    assert_eq(pdf.x.isin(values), df.x.isin(values))
 
 
 def test_round(pdf):
@@ -316,6 +323,12 @@ def test_clip_traverse_filters(df):
 
     result = optimize(df.clip(lower=10)[["x", "y"]], fuse=False)
     expected = df.clip(lower=10)
+
+    assert result._name == expected._name
+
+    arg = df.clip(lower=10)[["x"]]
+    result = optimize(arg, fuse=False)
+    expected = df[["x"]].clip(lower=10)
 
     assert result._name == expected._name
 
@@ -434,9 +447,9 @@ def test_remove_unnecessary_projections(df):
 
     assert optimized._name == expected._name
 
-    result = (df.x + 1)["x"]
+    result = (df[["x"]] + 1)[["x"]]
     optimized = optimize(result, fuse=False)
-    expected = df.x + 1
+    expected = df[["x"]] + 1
 
     assert optimized._name == expected._name
 
@@ -669,6 +682,24 @@ def test_len(df, pdf):
     assert isinstance(expr.Lengths(df2.expr).optimize(), expr.Literal)
 
 
+def test_astype_simplify(df, pdf):
+    q = df.astype({"x": "float64", "y": "float64"})["x"]
+    result = optimize(q, fuse=False)
+    expected = df["x"].astype({"x": "float64"})
+    assert result._name == expected._name
+    assert_eq(q, pdf.astype({"x": "float64", "y": "float64"})["x"])
+
+    q = df.astype({"y": "float64"})["x"]
+    result = optimize(q, fuse=False)
+    expected = df["x"]
+    assert result._name == expected._name
+
+    q = df.astype("float64")["x"]
+    result = optimize(q, fuse=False)
+    expected = df["x"].astype("float64")
+    assert result._name == expected._name
+
+
 def test_drop_duplicates(df, pdf):
     assert_eq(df.drop_duplicates(), pdf.drop_duplicates())
     assert_eq(
@@ -714,6 +745,33 @@ def test_dir(df):
     assert "sum" in dir(df)
     assert "sum" in dir(df.x)
     assert "sum" in dir(df.index)
+
+
+@pytest.mark.parametrize(
+    "func, args",
+    [
+        ("replace", (1, 2)),
+        ("isin", ([1, 2],)),
+        ("clip", (0, 5)),
+        ("isna", ()),
+        ("round", ()),
+        ("abs", ()),
+        # ("map", (lambda x: x+1, )),  # add in when pandas 2.1 is out
+    ],
+)
+@pytest.mark.parametrize("indexer", ["x", ["x"]])
+def test_simplify_up_blockwise(df, pdf, func, args, indexer):
+    q = getattr(df, func)(*args)[indexer]
+    result = optimize(q, fuse=False)
+    expected = getattr(df[indexer], func)(*args)
+    assert result._name == expected._name
+
+    assert_eq(q, getattr(pdf, func)(*args)[indexer])
+
+    q = getattr(df, func)(*args)[["x", "y"]]
+    result = optimize(q, fuse=False)
+    expected = getattr(df, func)(*args)
+    assert result._name == expected._name
 
 
 def test_sample(df):
@@ -762,3 +820,36 @@ def test_align_unknown_partitions():
 def test_nunique_approx(df):
     result = df.nunique_approx().compute()
     assert 99 < result < 101
+
+
+def test_assign_simplify(pdf):
+    df = from_pandas(pdf)
+    df2 = from_pandas(pdf)
+    df["new"] = df.x > 1
+    result = df[["x", "new"]].simplify()
+    expected = df2[["x"]].assign(new=df2.x > 1).simplify()
+    assert result._name == expected._name
+
+    pdf["new"] = pdf.x > 1
+    assert_eq(pdf[["x", "new"]], result)
+
+
+def test_assign_simplify_new_column_not_needed(pdf):
+    df = from_pandas(pdf)
+    df2 = from_pandas(pdf)
+    df["new"] = df.x > 1
+    result = df[["x"]].simplify()
+    expected = df2[["x"]].simplify()
+    assert result._name == expected._name
+
+    pdf["new"] = pdf.x > 1
+    assert_eq(result, pdf[["x"]])
+
+
+def test_assign_simplify_series(pdf):
+    df = from_pandas(pdf)
+    df2 = from_pandas(pdf)
+    df["new"] = df.x > 1
+    result = optimize(df.new, fuse=False)
+    expected = optimize(df2[[]].assign(new=df2.x > 1).new, fuse=False)
+    assert result._name == expected._name

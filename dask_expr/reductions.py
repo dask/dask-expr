@@ -177,10 +177,7 @@ class DropDuplicates(Unique):
 
     def _simplify_up(self, parent):
         if self.subset is not None:
-            columns = parent.columns
-            if not isinstance(columns, pd.Index):
-                columns = [columns]
-            columns = set(columns).union(self.subset)
+            columns = set(parent.columns).union(self.subset)
             if columns == set(self.frame.columns):
                 # Don't add unnecessary Projections, protects against loops
                 return
@@ -242,7 +239,7 @@ class Reduction(ApplyConcatApply):
     def _divisions(self):
         if self.ndim == 0:
             return (None, None)
-        return (self.frame.columns.min(), self.frame.columns.max())
+        return (min(self.frame.columns), max(self.frame.columns))
 
     def __str__(self):
         params = {param: self.operand(param) for param in self._parameters[1:]}
