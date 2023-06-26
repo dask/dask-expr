@@ -1654,7 +1654,7 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
 
 
 def non_blockwise_ancestors(expr):
-    """Traverse through tree to find ancestors that are not blockwise"""
+    """Traverse through tree to find ancestors that are not blockwise or are IO"""
     stack = [expr]
     while stack:
         e = stack.pop()
