@@ -336,7 +336,7 @@ def test_clip_traverse_filters(df):
 
 @pytest.mark.parametrize("projection", ["zz", ["zz"], ["zz", "x"], "zz"])
 @pytest.mark.parametrize("subset", ["x", ["x"]])
-def test_drop_duplicates_subset_optimizing(pdf, subset, projection):
+def test_drop_duplicates_subset_simplify(pdf, subset, projection):
     pdf["zz"] = 1
     df = from_pandas(pdf)
     result = df.drop_duplicates(subset=subset)[projection].simplify()
