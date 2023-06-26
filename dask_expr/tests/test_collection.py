@@ -57,7 +57,7 @@ def test_explode_simplify(pdf):
     pdf["z"] = 1
     df = from_pandas(pdf)
     q = df.explode(column="x")["y"]
-    result = optimize(q, fuse=False)
+    result = q.simplify()
     expected = df[["x", "y"]].explode(column="x")["y"]
     assert result._name == expected._name
 
