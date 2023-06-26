@@ -746,9 +746,10 @@ def test_dropna_simplify(pdf, subset):
     pdf["z"] = 1
     df = from_pandas(pdf)
     q = df.dropna(subset=subset)["y"]
-    result = optimize(q, fuse=False)
+    result = q.simplify()
     expected = df[["x", "y"]].dropna(subset=subset)["y"]
     assert result._name == expected._name
+    assert_eq(q, pdf.dropna(subset=subset)["y"])
 
 
 def test_dir(df):
