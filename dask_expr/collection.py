@@ -21,7 +21,6 @@ from fsspec.utils import stringify_path
 from tlz import first
 
 from dask_expr import expr
-from dask_expr._utils import _convert_to_list
 from dask_expr.concat import Concat
 from dask_expr.expr import no_default
 from dask_expr.merge import Merge
@@ -625,7 +624,12 @@ class DataFrame(FrameBase):
 
     def drop_duplicates(self, subset=None, ignore_index=False):
         # Fail early if subset is not valid, e.g. missing columns
-        subset = _convert_to_list(subset)
+        if (
+            subset is not None
+            and not isinstance(subset, list)
+            and not hasattr(subset, "dtype")
+        ):
+            subset = [subset]
         meta_nonempty(self._meta).drop_duplicates(subset=subset)
         return new_collection(
             DropDuplicates(self.expr, subset=subset, ignore_index=ignore_index)
@@ -667,7 +671,12 @@ class DataFrame(FrameBase):
         return new_collection(expr.RenameFrame(self.expr, columns=columns))
 
     def explode(self, column):
-        column = _convert_to_list(column)
+        if (
+            column is not None
+            and not isinstance(column, list)
+            and not hasattr(column, "dtype")
+        ):
+            column = [column]
         return new_collection(expr.ExplodeFrame(self.expr, column=column))
 
     def to_parquet(self, path, **kwargs):
