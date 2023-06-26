@@ -859,6 +859,7 @@ def test_assign_simplify_series(pdf):
 def test_can_align_without_repartition(pdf, df):
     df2 = df.reset_index()
     assert df._can_align_without_repartition(df2)
+    assert not df._can_align_without_repartition(df2.sum())
 
     pdf["z"] = 1
     df2 = from_pandas(pdf, npartitions=10)
