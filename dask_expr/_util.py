@@ -1,4 +1,4 @@
-def _convert_to_list(column):
+def _convert_to_list(column) -> list | None:
     if column is None or isinstance(column, list):
         pass
     elif isinstance(column, tuple):
