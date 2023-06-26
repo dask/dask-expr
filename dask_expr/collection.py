@@ -406,6 +406,25 @@ class FrameBase(DaskMethodsMixin):
         df = self.optimize(**optimize_kwargs) if optimize else self
         return new_dd_object(df.dask, df._name, df._meta, df.divisions)
 
+    def _can_align_without_repartition(self, other):
+        names = set()
+
+        left = self.expr
+        while isinstance(left, expr.Blockwise):
+            names.add(left._name)
+            left = left.frame
+
+        right = other.expr
+        while isinstance(right, expr.Blockwise):
+            if right._name in names:
+                return True
+            right = right.frame
+
+        if isinstance(right, expr.Expr) and isinstance(left, expr.Expr):
+            # If both originate from the same non-Blockwise expr.
+            return right._name == left._name
+        return False
+
 
 # Add operator attributes
 for op in [

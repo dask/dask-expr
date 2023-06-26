@@ -854,3 +854,18 @@ def test_assign_simplify_series(pdf):
     result = optimize(df.new, fuse=False)
     expected = optimize(df2[[]].assign(new=df2.x > 1).new, fuse=False)
     assert result._name == expected._name
+
+
+def test_can_align_without_repartition(pdf, df):
+    df2 = df.reset_index()
+    assert df._can_align_without_repartition(df2)
+
+    pdf["z"] = 1
+    df2 = from_pandas(pdf, npartitions=10)
+    assert not df._can_align_without_repartition(df2)
+
+    merged = df.merge(df2)
+    merged_first = merged.reset_index()
+    merged_second = merged.rename(columns={"x": "a"})
+    assert merged_first._can_align_without_repartition(merged_second)
+    assert not merged_first._can_align_without_repartition(df)
