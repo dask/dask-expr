@@ -21,6 +21,7 @@ from fsspec.utils import stringify_path
 from tlz import first
 
 from dask_expr import expr
+from dask_expr._util import _maybe_convert_to_list
 from dask_expr.concat import Concat
 from dask_expr.expr import Eval, no_default
 from dask_expr.merge import Merge
@@ -628,12 +629,7 @@ class DataFrame(FrameBase):
 
     def drop_duplicates(self, subset=None, ignore_index=False):
         # Fail early if subset is not valid, e.g. missing columns
-        if (
-            subset is not None
-            and not isinstance(subset, list)
-            and not hasattr(subset, "dtype")
-        ):
-            subset = [subset]
+        subset = _maybe_convert_to_list(subset)
         meta_nonempty(self._meta).drop_duplicates(subset=subset)
         return new_collection(
             DropDuplicates(self.expr, subset=subset, ignore_index=ignore_index)
@@ -644,13 +640,7 @@ class DataFrame(FrameBase):
             raise TypeError(
                 "You cannot set both the how and thresh arguments at the same time."
             )
-        if (
-            subset is not None
-            and not isinstance(subset, list)
-            and not hasattr(subset, "dtype")
-        ):
-            subset = [subset]
-
+        subset = _maybe_convert_to_list(subset)
         return new_collection(
             expr.DropnaFrame(self.expr, how=how, subset=subset, thresh=thresh)
         )
@@ -682,12 +672,7 @@ class DataFrame(FrameBase):
         return new_collection(expr.RenameFrame(self.expr, columns=columns))
 
     def explode(self, column):
-        if (
-            column is not None
-            and not isinstance(column, list)
-            and not hasattr(column, "dtype")
-        ):
-            column = [column]
+        column = _maybe_convert_to_list(column)
         return new_collection(expr.ExplodeFrame(self.expr, column=column))
 
     def to_parquet(self, path, **kwargs):
