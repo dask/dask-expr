@@ -1,6 +1,6 @@
 import pandas as pd
 import toolz
-from dask.dataframe import methods
+from dask.dataframe import hyperloglog, methods
 from dask.dataframe.core import (
     _concat,
     idxmaxmin_agg,
@@ -239,7 +239,7 @@ class Reduction(ApplyConcatApply):
     def _divisions(self):
         if self.ndim == 0:
             return (None, None)
-        return (self.frame.columns.min(), self.frame.columns.max())
+        return (min(self.frame.columns), max(self.frame.columns))
 
     def __str__(self):
         params = {param: self.operand(param) for param in self._parameters[1:]}
@@ -453,6 +453,29 @@ class Mode(ApplyConcatApply):
     @property
     def aggregate_kwargs(self):
         return {"dropna": self.dropna}
+
+
+class NuniqueApprox(Reduction):
+    _parameters = ["frame", "b"]
+    reduction_chunk = hyperloglog.compute_hll_array
+    reduction_combine = hyperloglog.reduce_state
+    reduction_aggregate = hyperloglog.estimate_count
+
+    @property
+    def _meta(self):
+        return 1.0
+
+    @property
+    def chunk_kwargs(self):
+        return {"b": self.b}
+
+    @property
+    def combine_kwargs(self):
+        return self.chunk_kwargs
+
+    @property
+    def aggregate_kwargs(self):
+        return self.chunk_kwargs
 
 
 class ReductionConstantDim(Reduction):

@@ -272,6 +272,8 @@ def test_to_timestamp(pdf, how):
         lambda df: df.x.combine_first(df.y),
         lambda df: df.x.to_frame(),
         lambda df: df.x.index.to_frame(),
+        lambda df: df.eval("z=x+y"),
+        lambda df: df.select_dtypes(include="integer"),
     ],
 )
 def test_blockwise(func, pdf, df):
@@ -681,6 +683,24 @@ def test_len(df, pdf):
     assert isinstance(expr.Lengths(df2.expr).optimize(), expr.Literal)
 
 
+def test_astype_simplify(df, pdf):
+    q = df.astype({"x": "float64", "y": "float64"})["x"]
+    result = optimize(q, fuse=False)
+    expected = df["x"].astype({"x": "float64"})
+    assert result._name == expected._name
+    assert_eq(q, pdf.astype({"x": "float64", "y": "float64"})["x"])
+
+    q = df.astype({"y": "float64"})["x"]
+    result = optimize(q, fuse=False)
+    expected = df["x"]
+    assert result._name == expected._name
+
+    q = df.astype("float64")["x"]
+    result = optimize(q, fuse=False)
+    expected = df["x"].astype("float64")
+    assert result._name == expected._name
+
+
 def test_drop_duplicates(df, pdf):
     assert_eq(df.drop_duplicates(), pdf.drop_duplicates())
     assert_eq(
@@ -738,6 +758,33 @@ def test_dir(df):
     assert "sum" in dir(df.index)
 
 
+@pytest.mark.parametrize(
+    "func, args",
+    [
+        ("replace", (1, 2)),
+        ("isin", ([1, 2],)),
+        ("clip", (0, 5)),
+        ("isna", ()),
+        ("round", ()),
+        ("abs", ()),
+        # ("map", (lambda x: x+1, )),  # add in when pandas 2.1 is out
+    ],
+)
+@pytest.mark.parametrize("indexer", ["x", ["x"]])
+def test_simplify_up_blockwise(df, pdf, func, args, indexer):
+    q = getattr(df, func)(*args)[indexer]
+    result = optimize(q, fuse=False)
+    expected = getattr(df[indexer], func)(*args)
+    assert result._name == expected._name
+
+    assert_eq(q, getattr(pdf, func)(*args)[indexer])
+
+    q = getattr(df, func)(*args)[["x", "y"]]
+    result = optimize(q, fuse=False)
+    expected = getattr(df, func)(*args)
+    assert result._name == expected._name
+
+
 def test_sample(df):
     result = df.sample(frac=0.5)
 
@@ -779,3 +826,41 @@ def test_align_unknown_partitions():
     df = from_pandas(pdf, npartitions=2, sort=False)
     with pytest.raises(ValueError, match="Not all divisions"):
         df.align(df)
+
+
+def test_nunique_approx(df):
+    result = df.nunique_approx().compute()
+    assert 99 < result < 101
+
+
+def test_assign_simplify(pdf):
+    df = from_pandas(pdf)
+    df2 = from_pandas(pdf)
+    df["new"] = df.x > 1
+    result = df[["x", "new"]].simplify()
+    expected = df2[["x"]].assign(new=df2.x > 1).simplify()
+    assert result._name == expected._name
+
+    pdf["new"] = pdf.x > 1
+    assert_eq(pdf[["x", "new"]], result)
+
+
+def test_assign_simplify_new_column_not_needed(pdf):
+    df = from_pandas(pdf)
+    df2 = from_pandas(pdf)
+    df["new"] = df.x > 1
+    result = df[["x"]].simplify()
+    expected = df2[["x"]].simplify()
+    assert result._name == expected._name
+
+    pdf["new"] = pdf.x > 1
+    assert_eq(result, pdf[["x"]])
+
+
+def test_assign_simplify_series(pdf):
+    df = from_pandas(pdf)
+    df2 = from_pandas(pdf)
+    df["new"] = df.x > 1
+    result = optimize(df.new, fuse=False)
+    expected = optimize(df2[[]].assign(new=df2.x > 1).new, fuse=False)
+    assert result._name == expected._name
