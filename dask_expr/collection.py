@@ -406,7 +406,7 @@ class FrameBase(DaskMethodsMixin):
         df = self.optimize(**optimize_kwargs) if optimize else self
         return new_dd_object(df.dask, df._name, df._meta, df.divisions)
 
-    def _can_align_without_repartition(self, other):
+    def _is_co_aligned(self, other):
         names = set()
 
         left = self.expr

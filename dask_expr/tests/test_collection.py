@@ -856,17 +856,18 @@ def test_assign_simplify_series(pdf):
     assert result._name == expected._name
 
 
-def test_can_align_without_repartition(pdf, df):
+def test__is_co_aligned(pdf, df):
     df2 = df.reset_index()
-    assert df._can_align_without_repartition(df2)
-    assert not df._can_align_without_repartition(df2.sum())
+    assert df._is_co_aligned(df2)
+    assert not df._is_co_aligned(df2.sum())
+    assert not df._is_co_aligned(df2.repartition(npartitions=2))
 
     pdf["z"] = 1
     df2 = from_pandas(pdf, npartitions=10)
-    assert not df._can_align_without_repartition(df2)
+    assert not df._is_co_aligned(df2)
 
     merged = df.merge(df2)
     merged_first = merged.reset_index()
     merged_second = merged.rename(columns={"x": "a"})
-    assert merged_first._can_align_without_repartition(merged_second)
-    assert not merged_first._can_align_without_repartition(df)
+    assert merged_first._is_co_aligned(merged_second)
+    assert not merged_first._is_co_aligned(df)
