@@ -11,7 +11,7 @@ import dask
 import pandas as pd
 import toolz
 from dask.base import normalize_token, tokenize
-from dask.core import ishashable
+from dask.core import flatten, ishashable
 from dask.dataframe import methods
 from dask.dataframe.core import (
     _get_divisions_map_partitions,
@@ -1716,6 +1716,25 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     return expr
 
 
+def non_blockwise_ancestors(expr):
+    """Traverse through tree to find ancestors that are not blockwise or are IO"""
+    stack = [expr]
+    while stack:
+        e = stack.pop()
+        if isinstance(e, IO):
+            yield e
+        elif isinstance(e, Blockwise):
+            stack.extend(e.dependencies())
+        else:
+            yield e
+
+
+def are_co_aligned(*exprs):
+    """Do inputs come from different parents, modulo blockwise?"""
+    ancestors = [set(non_blockwise_ancestors(e)) for e in exprs]
+    return len(set(flatten(ancestors, container=set))) == 1
+
+
 ## Utilites for Expr fusion
 
 
@@ -1919,7 +1938,7 @@ class Fused(Blockwise):
         return dask.core.get(graph, name)
 
 
-from dask_expr.io import BlockwiseIO
+from dask_expr.io import IO, BlockwiseIO
 from dask_expr.reductions import (
     All,
     Any,
