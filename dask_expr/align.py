@@ -37,12 +37,11 @@ class AlignDivisions(Expr):
             )
 
     def _lower(self):
-        #
-        # if not self.dfs:
-        #     return self._frame
-        #
-        # if all(df.divisions == self.dfs[0].divisions for df in self.dfs):
-        #     return self._frame
+        if not self.dfs:
+            return self._frame
+
+        if all(df.divisions == self.dfs[0].divisions for df in self.dfs):
+            return self._frame
 
         if not all(df.known_divisions for df in self.dfs):
             raise ValueError(

@@ -64,10 +64,9 @@ def _wrap_expr_op(self, other, op=None):
 
     if not isinstance(other, expr.Expr):
         return new_collection(getattr(self.expr, op)(other))
+    elif expr.are_co_aligned(self.expr, other):
+        return new_collection(getattr(self.expr, op)(other))
     else:
-        # TODO: Check whether we can align to avoid introducing unnecessary
-        # AlignDivision steps.
-        # return new_collection(getattr(self.expr, op)(other))
         return new_collection(
             getattr(AlignDivisions(self.expr, other), op)(
                 AlignDivisions(other, self.expr)
