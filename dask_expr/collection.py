@@ -21,6 +21,7 @@ from fsspec.utils import stringify_path
 from tlz import first
 
 from dask_expr import expr
+from dask_expr.align import AlignDivisions
 from dask_expr.concat import Concat
 from dask_expr.expr import Eval, no_default
 from dask_expr.merge import Merge
@@ -59,7 +60,18 @@ def _wrap_expr_op(self, other, op=None):
     assert op is not None
     if isinstance(other, FrameBase):
         other = other.expr
-    return new_collection(getattr(self.expr, op)(other))
+
+    if not isinstance(other, expr.Expr):
+        return new_collection(getattr(self.expr, op)(other))
+    else:
+        # TODO: Check whether we can align to avoid introducing unnecessary
+        # AlignDivision steps.
+        # return new_collection(getattr(self.expr, op)(other))
+        return new_collection(
+            getattr(AlignDivisions(self.expr, other), op)(
+                AlignDivisions(other, self.expr)
+            )
+        )
 
 
 def _wrap_unary_expr_op(self, op=None):
@@ -85,7 +97,7 @@ class FrameBase(DaskMethodsMixin):
         self._expr = expr
 
     @property
-    def expr(self):
+    def expr(self) -> expr.Expr:
         return self._expr
 
     @property
@@ -117,29 +129,32 @@ class FrameBase(DaskMethodsMixin):
 
     def __dask_graph__(self):
         out = self.expr
-        out = out.simplify()
+        out = out.simplify().lower()
         return out.__dask_graph__()
 
     def __dask_keys__(self):
         out = self.expr
-        out = out.simplify()
+        out = out.simplify().lower()
         return out.__dask_keys__()
 
     def simplify(self):
         return new_collection(self.expr.simplify())
+
+    def lower(self):
+        return new_collection(self.expr.lower())
 
     @property
     def dask(self):
         return self.__dask_graph__()
 
     def __dask_postcompute__(self):
-        state = self.simplify()
+        state = self.simplify().lower()
         if type(self) != type(state):
             return state.__dask_postcompute__()
         return _concat, ()
 
     def __dask_postpersist__(self):
-        state = self.simplify()
+        state = self.simplify().lower()
         return from_graph, (state._meta, state.divisions, state._name)
 
     def __getattr__(self, key):

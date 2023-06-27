@@ -276,6 +276,43 @@ class Expr:
     def _simplify_up(self, parent):
         return
 
+    def lower(self):
+        expr = self
+
+        while True:
+            # Simplify this node
+            out = expr._lower()
+            if out is None:
+                out = expr
+            if not isinstance(out, Expr):
+                return out
+            if out._name != expr._name:
+                expr = out
+                continue
+
+            # Simplify all of the children
+            new_operands = []
+            changed = False
+            for operand in expr.operands:
+                if isinstance(operand, Expr):
+                    new = operand.lower()
+                    if new._name != operand._name:
+                        changed = True
+                else:
+                    new = operand
+                new_operands.append(new)
+
+            if changed:
+                expr = type(expr)(*new_operands)
+                continue
+            else:
+                break
+
+        return expr
+
+    def _lower(self):
+        return
+
     def optimize(self, **kwargs):
         return optimize(self, **kwargs)
 
@@ -1383,7 +1420,9 @@ class Tail(Expr):
             return type(self.frame)(*operands)
         if not isinstance(self, BlockwiseTail):
             # Lower to Blockwise
-            return BlockwiseTail(Partitions(self.frame, [-1]), self.n)
+            return BlockwiseTail(
+                Partitions(self.frame, [self.frame.npartitions - 1]), self.n
+            )
         if isinstance(self.frame, Tail):
             return Tail(self.frame.frame, min(self.n, self.frame.n))
 
@@ -1670,6 +1709,7 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     optimize_blockwise_fusion
     """
     expr = expr.simplify()
+    expr = expr.lower()
 
     if fuse:
         expr = optimize_blockwise_fusion(expr)
