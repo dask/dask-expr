@@ -7,13 +7,11 @@ from dask_expr.repartition import RepartitionDivisions
 
 
 class AlignDivisions(Expr):
-    @property
-    def _meta(self):
-        return self._frame._meta
+    _parameters = ["frame"]
 
     @property
-    def _frame(self):
-        return self.operands[0]
+    def _meta(self):
+        return self.frame._meta
 
     @functools.cached_property
     def dfs(self):
@@ -32,16 +30,14 @@ class AlignDivisions(Expr):
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
-            return type(self)(
-                self._frame[parent.operand("columns")], *self.operands[1:]
-            )
+            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
 
     def _lower(self):
         if not self.dfs:
-            return self._frame
+            return self.frame
 
         if all(df.divisions == self.dfs[0].divisions for df in self.dfs):
-            return self._frame
+            return self.frame
 
         if not all(df.known_divisions for df in self.dfs):
             raise ValueError(
@@ -51,7 +47,7 @@ class AlignDivisions(Expr):
             )
 
         return RepartitionDivisions(
-            self._frame, new_divisions=self.divisions, force=True
+            self.frame, new_divisions=self.divisions, force=True
         )
 
 
