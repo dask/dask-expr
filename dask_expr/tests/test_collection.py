@@ -898,3 +898,13 @@ def test_are_co_aligned(pdf, df):
     merged_second = merged.rename(columns={"x": "a"})
     assert are_co_aligned(merged_first.expr, merged_second.expr)
     assert not are_co_aligned(merged_first.expr, df.expr)
+
+
+def test_op_align():
+    pdf = pd.DataFrame({"x": [1, 2, 3], "y": 1})
+    df = from_pandas(pdf, npartitions=2)
+
+    pdf2 = pd.DataFrame({"x": [1, 2, 3, 4, 5, 6], "y": 1})
+    df2 = from_pandas(pdf2, npartitions=2)
+
+    assert_eq(df - df2, pdf - pdf2)
