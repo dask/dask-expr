@@ -280,7 +280,7 @@ class Expr:
         expr = self
 
         while True:
-            # Simplify this node
+            # Lower this node
             out = expr._lower()
             if out is None:
                 out = expr
@@ -290,7 +290,7 @@ class Expr:
                 expr = out
                 continue
 
-            # Simplify all of the children
+            # Lower all children
             new_operands = []
             changed = False
             for operand in expr.operands:
@@ -1708,8 +1708,7 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     simplify
     optimize_blockwise_fusion
     """
-    expr = expr.simplify()
-    expr = expr.lower()
+    expr = expr.simplify().lower()
 
     if fuse:
         expr = optimize_blockwise_fusion(expr)
