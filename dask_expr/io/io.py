@@ -82,7 +82,7 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
             )
         return self._pd_length_stats
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, allow_group: tuple):
         if isinstance(parent, Lengths):
             _lengths = self._get_lengths()
             if _lengths:

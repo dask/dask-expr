@@ -28,8 +28,8 @@ class Repartition(Expr):
             return self.simplify()._divisions()
         return self.new_divisions
 
-    def _simplify_down(self):
-        if type(self) != Repartition:
+    def _simplify_down(self, allow_group: tuple):
+        if type(self) != Repartition or "lower" not in allow_group:
             # This simplify logic should not be inherited
             return None
         if self.n is not None:
@@ -83,9 +83,9 @@ class Repartition(Expr):
         else:
             raise NotImplementedError()
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, allow_group: tuple):
         # Reorder with column projection
-        if isinstance(parent, Projection):
+        if isinstance(parent, Projection) and "abstract" in allow_group:
             return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
 
 

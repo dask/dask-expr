@@ -46,7 +46,9 @@ class Concat(Expr):
 
         return [None] * (sum(df.npartitions for df in dfs) + 1)
 
-    def _simplify_down(self):
+    def _simplify_down(self, allow_group: tuple):
+        if "lower" not in allow_group:
+            return
         dfs = self._frames
         cast_dfs = []
         for df in dfs:
@@ -83,8 +85,8 @@ class Concat(Expr):
             *cast_dfs,
         )
 
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
+    def _simplify_up(self, parent, allow_group: tuple):
+        if isinstance(parent, Projection) and "abstract" in allow_group:
             columns = parent.columns
             columns_frame = [
                 sorted(set(frame.columns).intersection(columns))
@@ -132,5 +134,5 @@ class StackPartition(Concat):
                 i += 1
         return dsk
 
-    def _simplify_down(self):
+    def _simplify_down(self, allow_group: tuple):
         return

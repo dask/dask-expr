@@ -91,13 +91,14 @@ class ToParquet(Expr):
     def _divisions(self):
         return (None, None)
 
-    def _simplify_down(self):
-        return ToParquetBarrier(
-            ToParquetData(
-                *self.operands,
-            ),
-            *self.operands[1:],
-        )
+    def _simplify_down(self, allow_group: tuple):
+        if "lower" in allow_group:
+            return ToParquetBarrier(
+                ToParquetData(
+                    *self.operands,
+                ),
+                *self.operands[1:],
+            )
 
 
 class ToParquetData(Blockwise):
@@ -427,7 +428,10 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         else:
             return _convert_to_list(columns_operand)
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, allow_group: tuple):
+        if "abstract" not in allow_group:
+            return
+
         if isinstance(parent, Index):
             # Column projection
             operands = list(self.operands)

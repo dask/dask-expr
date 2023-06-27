@@ -126,8 +126,8 @@ class FrameBase(DaskMethodsMixin):
         out = out.simplify()
         return out.__dask_keys__()
 
-    def simplify(self):
-        return new_collection(self.expr.simplify())
+    def simplify(self, **kwargs):
+        return new_collection(self.expr.simplify(**kwargs))
 
     @property
     def dask(self):
