@@ -874,3 +874,19 @@ def test_assign_simplify_series(pdf):
     result = df.new.simplify()
     expected = df2[[]].assign(new=df2.x > 1).new.simplify()
     assert result._name == expected._name
+
+
+def test_simplify_phases(df):
+    df2 = df[["x", "y"]].shuffle("x")["x"]
+    df2_general_tree = df2.simplify(phases=["general"]).tree_repr()
+    df2_lower_tree = df2.simplify(phases=["lower"]).tree_repr()
+
+    # Only "lower" simplfication will convert
+    # `Shuffle` to `DiskShuffle`
+    assert " Shuffle: " in df2_general_tree
+    assert " Shuffle: " not in df2_lower_tree
+
+    # Only "general" simplfication will optimize
+    # column projection from ['x', 'y'] to ['x']
+    assert "['x', 'y']" not in df2_general_tree
+    assert "['x', 'y']" in df2_lower_tree

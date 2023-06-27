@@ -211,7 +211,8 @@ class Expr:
 
     def simplify(
         self,
-        phases: tuple = (
+        phases: list
+        | tuple = (
             "general",
             (
                 "general",
@@ -240,9 +241,8 @@ class Expr:
         expr = self
         for phase in phases:
             allow_group = (phase,) if isinstance(phase, str) else phase
-            assert isinstance(
-                allow_group, tuple
-            ), "`phases` must be tuple[tuple] or tuple[str]"
+            if not isinstance(allow_group, tuple):
+                raise TypeError("Each element of `phases` must be str or tuple")
             expr = expr._simplify(allow_group)
             if not isinstance(expr, Expr):
                 break
