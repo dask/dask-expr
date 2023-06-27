@@ -101,7 +101,7 @@ class Shuffle(Expr):
             raise ValueError(f"{backend} not supported")
 
     def _simplify_up(self, parent, allow_group: tuple):
-        if "abstract" not in allow_group:
+        if "general" not in allow_group:
             return
         if isinstance(parent, Projection):
             # Move the column projection to come

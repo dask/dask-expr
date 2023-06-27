@@ -86,7 +86,7 @@ class Concat(Expr):
         )
 
     def _simplify_up(self, parent, allow_group: tuple):
-        if isinstance(parent, Projection) and "abstract" in allow_group:
+        if isinstance(parent, Projection) and "general" in allow_group:
             columns = parent.columns
             columns_frame = [
                 sorted(set(frame.columns).intersection(columns))

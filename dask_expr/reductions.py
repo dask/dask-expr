@@ -176,7 +176,7 @@ class DropDuplicates(Unique):
         return {"ignore_index": self.ignore_index, **self._subset_kwargs()}
 
     def _simplify_up(self, parent, allow_group: tuple):
-        if self.subset is not None and "abstract" in allow_group:
+        if self.subset is not None and "general" in allow_group:
             columns = set(parent.columns).union(self.subset)
             if columns == set(self.frame.columns):
                 # Don't add unnecessary Projections, protects against loops
@@ -252,7 +252,7 @@ class Reduction(ApplyConcatApply):
         return f"{base}.{self.__class__.__name__.lower()}({s})"
 
     def _simplify_up(self, parent, allow_group: tuple):
-        if isinstance(parent, Projection) and "abstract" in allow_group:
+        if isinstance(parent, Projection) and "general" in allow_group:
             return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
 
 
@@ -347,7 +347,7 @@ class Len(Reduction):
     def _simplify_down(self, allow_group: tuple):
         from dask_expr.io.io import IO
 
-        if "abstract" not in allow_group:
+        if "general" not in allow_group:
             return
 
         # We introduce Index nodes sometimes.  We special case around them.
@@ -376,7 +376,7 @@ class Size(Reduction):
     reduction_aggregate = sum
 
     def _simplify_down(self, allow_group: tuple):
-        if "abstract" not in allow_group:
+        if "general" not in allow_group:
             return
         if is_dataframe_like(self.frame) and len(self.frame.columns) > 1:
             return len(self.frame.columns) * Len(self.frame)

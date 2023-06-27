@@ -85,7 +85,7 @@ class Repartition(Expr):
 
     def _simplify_up(self, parent, allow_group: tuple):
         # Reorder with column projection
-        if isinstance(parent, Projection) and "abstract" in allow_group:
+        if isinstance(parent, Projection) and "general" in allow_group:
             return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
 
 

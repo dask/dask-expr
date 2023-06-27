@@ -218,7 +218,7 @@ class GroupbyAggregation(ApplyConcatApply):
 
     def _simplify_down(self, allow_group: tuple):
         # Use agg-spec information to add column projection
-        if "abstract" not in allow_group:
+        if "general" not in allow_group:
             return
         column_projection = None
         if isinstance(self.arg, dict):

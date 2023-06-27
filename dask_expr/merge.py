@@ -165,7 +165,7 @@ class Merge(Expr):
         return BlockwiseMerge(left, right, **self.kwargs)
 
     def _simplify_up(self, parent, allow_group: tuple):
-        if isinstance(parent, Projection) and "abstract" in allow_group:
+        if isinstance(parent, Projection) and "general" in allow_group:
             # Reorder the column projection to
             # occur before the Merge
             projection = parent.operand("columns")

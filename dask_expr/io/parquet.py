@@ -429,7 +429,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             return _convert_to_list(columns_operand)
 
     def _simplify_up(self, parent, allow_group: tuple):
-        if "abstract" not in allow_group:
+        if "general" not in allow_group:
             return
 
         if isinstance(parent, Index):
