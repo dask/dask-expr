@@ -276,6 +276,43 @@ class Expr:
     def _simplify_up(self, parent):
         return
 
+    def lower(self):
+        expr = self
+
+        while True:
+            # Lower this node
+            out = expr._lower()
+            if out is None:
+                out = expr
+            if not isinstance(out, Expr):
+                return out
+            if out._name != expr._name:
+                expr = out
+                continue
+
+            # Lower all children
+            new_operands = []
+            changed = False
+            for operand in expr.operands:
+                if isinstance(operand, Expr):
+                    new = operand.lower()
+                    if new._name != operand._name:
+                        changed = True
+                else:
+                    new = operand
+                new_operands.append(new)
+
+            if changed:
+                expr = type(expr)(*new_operands)
+                continue
+            else:
+                break
+
+        return expr
+
+    def _lower(self):
+        return
+
     def optimize(self, **kwargs):
         return optimize(self, **kwargs)
 
@@ -1671,7 +1708,7 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     simplify
     optimize_blockwise_fusion
     """
-    expr = expr.simplify()
+    expr = expr.simplify().lower()
 
     if fuse:
         expr = optimize_blockwise_fusion(expr)
