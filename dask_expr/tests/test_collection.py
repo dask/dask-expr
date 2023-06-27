@@ -863,6 +863,9 @@ def test_are_co_aligned(pdf, df):
     assert not are_co_aligned(df.expr, df2.sum().expr)
     assert not are_co_aligned(df.expr, df2.repartition(npartitions=2).expr)
 
+    assert are_co_aligned(df.expr, df.sum().expr)
+    assert are_co_aligned((df + df.sum()).expr, df.sum().expr)
+
     pdf["z"] = 1
     df2 = from_pandas(pdf, npartitions=10)
     assert not are_co_aligned(df.expr, df2.expr)
