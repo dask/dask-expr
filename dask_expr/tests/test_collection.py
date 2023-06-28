@@ -884,8 +884,8 @@ def test_assign_simplify_series(pdf):
 
 def test_simplify_phases(df):
     df2 = df[["x", "y"]].shuffle("x")["x"]
-    df2_general_tree = df2.simplify(phases=["general"]).tree_repr()
-    df2_lower_tree = df2.simplify(phases=["lower"]).tree_repr()
+    df2_general_tree = df2.simplify(phases=[("general",)]).tree_repr()
+    df2_lower_tree = df2.simplify(phases=[("lower",)]).tree_repr()
 
     # Only "lower" simplfication will convert
     # `Shuffle` to `DiskShuffle`

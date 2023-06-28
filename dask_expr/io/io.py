@@ -5,6 +5,7 @@ import math
 
 from dask.dataframe.io.io import sorted_division_locations
 
+from dask_expr._util import simplify_up_dispatch
 from dask_expr.expr import Blockwise, Expr, Lengths, Literal, PartitionsFiltered
 from dask_expr.reductions import Len
 
@@ -107,3 +108,17 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
         return "df"
 
     __repr__ = __str__
+
+
+@simplify_up_dispatch.register(FromPandas, "test")
+def _simplify_up_frompandas_test(obj, parent):
+    print(f"PARENT = {parent}")
+    if isinstance(parent, Lengths):
+        _lengths = obj._get_lengths()
+        if _lengths:
+            return Literal(_lengths)
+
+    if isinstance(parent, Len):
+        _lengths = obj._get_lengths()
+        if _lengths:
+            return Literal(sum(_lengths))

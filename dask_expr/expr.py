@@ -26,6 +26,8 @@ from dask.dataframe.dispatch import meta_nonempty
 from dask.utils import M, apply, funcname, import_required, is_arraylike
 from tlz import merge_sorted, unique
 
+from dask_expr._util import simplify_down_dispatch, simplify_up_dispatch
+
 replacement_rules = []
 
 no_default = "__no_default__"
@@ -40,7 +42,7 @@ class Expr:
 
     _parameters = []
     _defaults = {}
-    _simplified_cache = None
+    _simplify_cache = None
 
     def __init__(self, *args, **kwargs):
         operands = list(args)
@@ -51,6 +53,20 @@ class Expr:
                 operands.append(type(self)._defaults[parameter])
         assert not kwargs
         self.operands = operands
+
+    def simplify_down(self, tag):
+        try:
+            return simplify_down_dispatch(self, tag=tag)
+        except TypeError:
+            pass
+        return
+
+    def simplify_up(self, parent, tag):
+        try:
+            return simplify_up_dispatch(self, parent, tag=tag)
+        except TypeError:
+            pass
+        return
 
     @functools.cached_property
     def ndim(self):
@@ -213,7 +229,7 @@ class Expr:
         self,
         phases: list
         | tuple = (
-            "general",
+            ("general",),
             (
                 "general",
                 "lower",
@@ -239,76 +255,77 @@ class Expr:
 
         # Loop over all phases
         expr = self
-        for phase in phases:
-            allow_group = (phase,) if isinstance(phase, str) else phase
-            if not isinstance(allow_group, tuple):
+        for opt_group in phases:
+            if not isinstance(opt_group, tuple):
                 raise TypeError("Each element of `phases` must be str or tuple")
-            expr = expr._simplify(allow_group)
+            expr = expr._simplify(opt_group)
             if not isinstance(expr, Expr):
                 break
 
         return expr
 
-    def _simplify(self, allow_group: tuple):
+    def _simplify(self, opt_group: tuple):
         # Used by ``simplify`` to rewrite the expr graph
 
         # Use chached result if available
-        key = tuple(sorted(allow_group))
-        if (self._simplified_cache or {}).get(key) is not None:
-            return self._simplified_cache[key]
+        if (self._simplify_cache or {}).get(opt_group) is not None:
+            return self._simplify_cache[opt_group]
 
         expr = self
 
-        while True:
-            _continue = False
+        for opt in opt_group:
+            allow_group = (opt,)
 
-            # Simplify this node
-            out = expr._simplify_down(allow_group)
-            if out is None:
-                out = expr
-            if not isinstance(out, Expr):
-                self._simplified_cache = {key: out}
-                return out
-            if out._name != expr._name:
-                expr = out
-                continue
+            while True:
+                _continue = False
 
-            # Allow children to simplify their parents
-            for child in expr.dependencies():
-                out = child._simplify_up(expr, allow_group)
+                # Simplify this node
+                out = expr._simplify_down(allow_group)
                 if out is None:
                     out = expr
                 if not isinstance(out, Expr):
-                    self._simplified_cache = {key: out}
+                    self._simplify_cache = {opt_group: out}
                     return out
-                if out is not expr and out._name != expr._name:
+                if out._name != expr._name:
                     expr = out
-                    _continue = True
+                    continue
+
+                # Allow children to simplify their parents
+                for child in expr.dependencies():
+                    out = child._simplify_up(expr, allow_group)
+                    if out is None:
+                        out = expr
+                    if not isinstance(out, Expr):
+                        self._simplify_cache = {opt_group: out}
+                        return out
+                    if out is not expr and out._name != expr._name:
+                        expr = out
+                        _continue = True
+                        break
+
+                if _continue:
+                    continue
+
+                # Simplify all of the children
+                new_operands = []
+                changed = False
+                for operand in expr.operands:
+                    if isinstance(operand, Expr):
+                        new = operand._simplify(opt_group)
+                        if new._name != operand._name:
+                            changed = True
+                    else:
+                        new = operand
+                    new_operands.append(new)
+
+                if changed:
+                    expr = type(expr)(*new_operands)
+                    continue
+                else:
                     break
 
-            if _continue:
-                continue
-
-            # Simplify all of the children
-            new_operands = []
-            changed = False
-            for operand in expr.operands:
-                if isinstance(operand, Expr):
-                    new = operand._simplify(allow_group)
-                    if new._name != operand._name:
-                        changed = True
-                else:
-                    new = operand
-                new_operands.append(new)
-
-            if changed:
-                expr = type(expr)(*new_operands)
-                continue
-            else:
-                break
-
         # Cache result
-        self._simplified_cache = {key: expr}
+        self._simplify_cache = {opt_group: expr}
         return expr
 
     def _simplify_down(self, allow_group: tuple):
