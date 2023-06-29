@@ -20,6 +20,7 @@ from dask.dataframe.core import (
     is_dataframe_like,
     is_index_like,
     is_series_like,
+    make_meta,
 )
 from dask.dataframe.dispatch import meta_nonempty
 from dask.utils import M, apply, funcname, import_required, is_arraylike
@@ -779,7 +780,7 @@ class Literal(Expr):
 
     @property
     def _meta(self):
-        return self.value
+        return make_meta(self.value)
 
     def _task(self, index: int):
         assert index == 0
