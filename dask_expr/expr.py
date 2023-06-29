@@ -1716,6 +1716,25 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     return expr
 
 
+def is_broadcastable(dfs, s):
+    """
+    This Series is broadcastable against another dataframe in the sequence
+    """
+
+    def compare(s, df):
+        try:
+            return s.divisions == (min(df.columns), max(df.columns))
+        except TypeError:
+            return False
+
+    return (
+        s.ndim <= 1
+        and s.npartitions == 1
+        and s.known_divisions
+        and any(compare(s, df) for df in dfs if df.ndim == 2)
+    )
+
+
 def non_blockwise_ancestors(expr):
     """Traverse through tree to find ancestors that are not blockwise or are IO"""
     stack = [expr]
@@ -1724,13 +1743,21 @@ def non_blockwise_ancestors(expr):
         if isinstance(e, IO):
             yield e
         elif isinstance(e, Blockwise):
-            stack.extend(e.dependencies())
+            dependencies = e.dependencies()
+            stack.extend(
+                [
+                    expr
+                    for expr in dependencies
+                    if not is_broadcastable(dependencies, expr)
+                ]
+            )
         else:
             yield e
 
 
 def are_co_aligned(*exprs):
     """Do inputs come from different parents, modulo blockwise?"""
+    exprs = [expr for expr in exprs if not is_broadcastable(exprs, expr)]
     ancestors = [set(non_blockwise_ancestors(e)) for e in exprs]
     return len(set(flatten(ancestors, container=set))) == 1
 
