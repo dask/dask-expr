@@ -126,8 +126,8 @@ class FrameBase(DaskMethodsMixin):
         out = out.simplify()
         return out.__dask_keys__()
 
-    def simplify(self, **kwargs):
-        return new_collection(self.expr.simplify(**kwargs))
+    def simplify(self, phases: list[tuple[str]] | tuple[str] | None = None):
+        return new_collection(self.expr.simplify(phases=phases))
 
     @property
     def dask(self):

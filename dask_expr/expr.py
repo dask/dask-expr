@@ -208,17 +208,7 @@ class Expr:
 
         return {(self._name, i): self._task(i) for i in range(self.npartitions)}
 
-    def simplify(
-        self,
-        phases: list
-        | tuple = (
-            ("general",),
-            (
-                "general",
-                "lower",
-            ),
-        ),
-    ):
+    def simplify(self, phases: list[tuple[str]] | tuple[str] | None = None):
         """Simplify expression
 
         This leverages the ``_simplify_up`` and ``_simplify_down``
@@ -236,6 +226,15 @@ class Expr:
             output expression
         """
 
+        # Handle default
+        phases = phases or (
+            ("general",),
+            (
+                "general",
+                "lower",
+            ),
+        )
+
         # Loop over all phases
         expr = self
         for opt_group in phases:
@@ -247,7 +246,7 @@ class Expr:
 
         return expr
 
-    def _simplify(self, opt_group: tuple):
+    def _simplify(self, opt_group: tuple[str]):
         # Used by ``simplify`` to rewrite the expr graph
 
         # Use cached result if available
@@ -308,19 +307,7 @@ class Expr:
         self._simplify_cache = {opt_group: expr}
         return expr
 
-    def _simplify_down_general(self):
-        return None
-
-    def _simplify_down_lower(self):
-        return None
-
-    def _simplify_up_general(self, parent):
-        return None
-
-    def _simplify_up_lower(self, parent):
-        return None
-
-    def _simplify_down(self, opt_group):
+    def _simplify_down(self, opt_group: tuple(str)):
         for opt in opt_group:
             try:
                 out = getattr(self, f"_simplify_down_{opt}")()
@@ -332,7 +319,7 @@ class Expr:
                 return out
         return self
 
-    def _simplify_up(self, parent, opt_group):
+    def _simplify_up(self, parent: Expr, opt_group: tuple[str]):
         for opt in opt_group:
             try:
                 out = getattr(self, f"_simplify_up_{opt}")(parent)
@@ -343,6 +330,18 @@ class Expr:
             else:
                 return out
         return parent
+
+    def _simplify_down_general(self):
+        return None
+
+    def _simplify_down_lower(self):
+        return None
+
+    def _simplify_up_general(self, parent: Expr):
+        return None
+
+    def _simplify_up_lower(self, parent: Expr):
+        return None
 
     def optimize(self, **kwargs):
         return optimize(self, **kwargs)
