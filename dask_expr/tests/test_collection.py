@@ -911,3 +911,15 @@ def test_op_align():
     df2 = from_pandas(pdf2, npartitions=2)
 
     assert_eq(df - df2, pdf - pdf2)
+
+
+def test_can_co_align(df, pdf):
+    q = (df.x + df.y).optimize(fuse=False)
+    expected = df.x + df.y
+    assert q._name == expected._name
+
+    pdf["z"] = 100
+    df2 = from_pandas(pdf)
+    q = (df.x + df2.sum()).optimize(fuse=False)
+    expected = df.x + df2.sum()
+    assert q._name == expected._name
