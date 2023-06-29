@@ -239,7 +239,7 @@ class Expr:
         expr = self
         for opt_group in phases:
             if not isinstance(opt_group, tuple):
-                raise TypeError("Each element of `phases` must be str or tuple")
+                raise TypeError("Each element of `phases` must be `tuple[str]`")
             expr = expr._simplify(opt_group)
             if not isinstance(expr, Expr):
                 break
