@@ -218,7 +218,7 @@ class Expr:
         ----------
         phases: Optional
             Specific optimization phases to perform. Default is
-            ``(("general",), ("general", "lower"))``.
+            ``(("general",), ("lower", "general"))``.
 
         Returns
         -------
@@ -230,8 +230,8 @@ class Expr:
         phases = phases or (
             ("general",),
             (
-                "general",
                 "lower",
+                "general",
             ),
         )
 
