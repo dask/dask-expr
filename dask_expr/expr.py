@@ -20,13 +20,10 @@ from dask.dataframe.core import (
     is_dataframe_like,
     is_index_like,
     is_series_like,
-    make_meta,
 )
 from dask.dataframe.dispatch import meta_nonempty
 from dask.utils import M, apply, funcname, import_required, is_arraylike
 from tlz import merge_sorted, unique
-
-from dask_expr._util import simplify_down_dispatch, simplify_up_dispatch
 
 replacement_rules = []
 
@@ -53,20 +50,6 @@ class Expr:
                 operands.append(type(self)._defaults[parameter])
         assert not kwargs
         self.operands = operands
-
-    def simplify_down(self, tag):
-        try:
-            return simplify_down_dispatch(self, tag=tag)
-        except TypeError:
-            pass
-        return
-
-    def simplify_up(self, parent, tag):
-        try:
-            return simplify_up_dispatch(self, parent, tag=tag)
-        except TypeError:
-            pass
-        return
 
     @functools.cached_property
     def ndim(self):
@@ -267,72 +250,99 @@ class Expr:
     def _simplify(self, opt_group: tuple):
         # Used by ``simplify`` to rewrite the expr graph
 
-        # Use chached result if available
+        # Use cached result if available
         if (self._simplify_cache or {}).get(opt_group) is not None:
             return self._simplify_cache[opt_group]
 
         expr = self
 
-        for opt in opt_group:
-            allow_group = (opt,)
+        while True:
+            _continue = False
 
-            while True:
-                _continue = False
+            # Simplify this node
+            out = expr._simplify_down(opt_group)
+            if out is None:
+                out = expr
+            if not isinstance(out, Expr):
+                self._simplify_cache = {opt_group: out}
+                return out
+            if out._name != expr._name:
+                expr = out
+                continue
 
-                # Simplify this node
-                out = expr._simplify_down(allow_group)
+            # Allow children to simplify their parents
+            for child in expr.dependencies():
+                out = child._simplify_up(expr, opt_group)
                 if out is None:
                     out = expr
                 if not isinstance(out, Expr):
                     self._simplify_cache = {opt_group: out}
                     return out
-                if out._name != expr._name:
+                if out is not expr and out._name != expr._name:
                     expr = out
-                    continue
-
-                # Allow children to simplify their parents
-                for child in expr.dependencies():
-                    out = child._simplify_up(expr, allow_group)
-                    if out is None:
-                        out = expr
-                    if not isinstance(out, Expr):
-                        self._simplify_cache = {opt_group: out}
-                        return out
-                    if out is not expr and out._name != expr._name:
-                        expr = out
-                        _continue = True
-                        break
-
-                if _continue:
-                    continue
-
-                # Simplify all of the children
-                new_operands = []
-                changed = False
-                for operand in expr.operands:
-                    if isinstance(operand, Expr):
-                        new = operand._simplify(opt_group)
-                        if new._name != operand._name:
-                            changed = True
-                    else:
-                        new = operand
-                    new_operands.append(new)
-
-                if changed:
-                    expr = type(expr)(*new_operands)
-                    continue
-                else:
+                    _continue = True
                     break
+
+            if _continue:
+                continue
+
+            # Simplify all of the children
+            new_operands = []
+            changed = False
+            for operand in expr.operands:
+                if isinstance(operand, Expr):
+                    new = operand._simplify(opt_group)
+                    if new._name != operand._name:
+                        changed = True
+                else:
+                    new = operand
+                new_operands.append(new)
+
+            if changed:
+                expr = type(expr)(*new_operands)
+                continue
+            else:
+                break
 
         # Cache result
         self._simplify_cache = {opt_group: expr}
         return expr
 
-    def _simplify_down(self, allow_group: tuple):
-        return
+    def _simplify_down_general(self):
+        return None
 
-    def _simplify_up(self, parent, allow_group: tuple):
-        return
+    def _simplify_down_lower(self):
+        return None
+
+    def _simplify_up_general(self, parent):
+        return None
+
+    def _simplify_up_lower(self, parent):
+        return None
+
+    def _simplify_down(self, opt_group):
+        for opt in opt_group:
+            try:
+                out = getattr(self, f"_simplify_down_{opt}")()
+            except AttributeError:
+                out = None
+            if out is None:
+                continue
+            else:
+                return out
+        return self
+
+    def _simplify_up(self, parent, opt_group):
+        for opt in opt_group:
+            try:
+                out = getattr(self, f"_simplify_up_{opt}")(parent)
+            except AttributeError:
+                out = None
+            if out is None:
+                continue
+            else:
+                return out
+        return parent
 
     def optimize(self, **kwargs):
         return optimize(self, **kwargs)
@@ -770,7 +780,7 @@ class Literal(Expr):
 
     @property
     def _meta(self):
-        return make_meta(self.value)
+        return self.value
 
     def _task(self, index: int):
         assert index == 0
@@ -870,12 +880,8 @@ class Blockwise(Expr):
         else:
             return (self.operation,) + tuple(args)
 
-    def _simplify_up(self, parent, allow_group: tuple):
-        if (
-            self._projection_passthrough
-            and isinstance(parent, Projection)
-            and "general" in allow_group
-        ):
+    def _simplify_up_general(self, parent):
+        if self._projection_passthrough and isinstance(parent, Projection):
             return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
 
 
@@ -979,8 +985,8 @@ class DropnaFrame(Blockwise):
     _keyword_only = ["how", "subset", "thresh"]
     operation = M.dropna
 
-    def _simplify_up(self, parent, allow_group: tuple):
-        if self.subset is not None and "general" in allow_group:
+    def _simplify_up_general(self, parent):
+        if self.subset is not None:
             columns = set(parent.columns).union(self.subset)
             if columns == set(self.frame.columns):
                 # Don't add unnecessary Projections
@@ -1010,11 +1016,9 @@ class RenameFrame(Blockwise):
     _keyword_only = ["columns"]
     operation = M.rename
 
-    def _simplify_up(self, parent, allow_group: tuple):
-        if (
-            isinstance(parent, Projection)
-            and isinstance(self.operand("columns"), Mapping)
-            and "general" in allow_group
+    def _simplify_up_general(self, parent):
+        if isinstance(parent, Projection) and isinstance(
+            self.operand("columns"), Mapping
         ):
             reverse_mapping = {val: key for key, val in self.operand("columns").items()}
             if is_series_like(parent._meta):
@@ -1081,8 +1085,8 @@ class Clip(Elemwise):
     _defaults = {"lower": None, "upper": None}
     operation = M.clip
 
-    def _simplify_up(self, parent, allow_group: tuple):
-        if isinstance(parent, Projection) and "general" in allow_group:
+    def _simplify_up_general(self, parent):
+        if isinstance(parent, Projection):
             if self.frame.columns == parent.columns:
                 # Don't introduce unnecessary projections
                 return
@@ -1113,8 +1117,8 @@ class AsType(Elemwise):
     _parameters = ["frame", "dtypes"]
     operation = M.astype
 
-    def _simplify_up(self, parent, allow_group: tuple):
-        if isinstance(parent, Projection) and "general" in allow_group:
+    def _simplify_up_general(self, parent):
+        if isinstance(parent, Projection):
             dtypes = self.operand("dtypes")
             if isinstance(dtypes, dict):
                 dtypes = {
@@ -1193,8 +1197,8 @@ class ExplodeSeries(Blockwise):
 class ExplodeFrame(ExplodeSeries):
     _parameters = ["frame", "column"]
 
-    def _simplify_up(self, parent, allow_group: tuple):
-        if isinstance(parent, Projection) and "general" in allow_group:
+    def _simplify_up_general(self, parent):
+        if isinstance(parent, Projection):
             columns = set(parent.columns).union(self.column)
             if columns == set(self.frame.columns):
                 # Don't add unnecessary Projections, protects against loops
@@ -1215,8 +1219,8 @@ class Assign(Elemwise):
     def _node_label_args(self):
         return [self.frame, self.key, self.value]
 
-    def _simplify_up(self, parent, allow_group: tuple):
-        if isinstance(parent, Projection) and "general" in allow_group:
+    def _simplify_up_general(self, parent):
+        if isinstance(parent, Projection):
             if self.key not in parent.columns:
                 return type(parent)(self.frame, *parent.operands[1:])
 
@@ -1246,12 +1250,11 @@ class Filter(Blockwise):
     _parameters = ["frame", "predicate"]
     operation = operator.getitem
 
-    def _simplify_up(self, parent, allow_group: tuple):
-        if "general" in allow_group:
-            if isinstance(parent, Projection):
-                return self.frame[parent.operand("columns")][self.predicate]
-            if isinstance(parent, Index):
-                return self.frame.index[self.predicate]
+    def _simplify_up_general(self, parent):
+        if isinstance(parent, Projection):
+            return self.frame[parent.operand("columns")][self.predicate]
+        if isinstance(parent, Index):
+            return self.frame.index[self.predicate]
 
 
 class Projection(Elemwise):
@@ -1295,9 +1298,7 @@ class Projection(Elemwise):
             return (None, None)
         return super()._divisions()
 
-    def _simplify_down(self, allow_group: tuple):
-        if "general" not in allow_group:
-            return
+    def _simplify_down_general(self):
         if (
             str(self.frame.columns) == str(self.columns)
             and self._meta.ndim == self.frame._meta.ndim
@@ -1354,8 +1355,8 @@ class Lengths(Expr):
     def _divisions(self):
         return (None, None)
 
-    def _simplify_down(self, allow_group: tuple):
-        if isinstance(self.frame, Elemwise) and "general" in allow_group:
+    def _simplify_down_general(self):
+        if isinstance(self.frame, Elemwise):
             child = max(self.frame.dependencies(), key=lambda expr: expr.npartitions)
             return Lengths(child)
 
@@ -1397,18 +1398,20 @@ class Head(Expr):
     def _task(self, index: int):
         raise NotImplementedError()
 
-    def _simplify_down(self, allow_group: tuple):
-        if isinstance(self.frame, Elemwise) and "general" in allow_group:
+    def _simplify_down_general(self):
+        if isinstance(self.frame, Elemwise):
             operands = [
                 Head(op, self.n) if isinstance(op, Expr) else op
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
-        if not isinstance(self, BlockwiseHead) and "lower" in allow_group:
+        if isinstance(self.frame, Head):
+            return Head(self.frame.frame, min(self.n, self.frame.n))
+
+    def _simplify_down_lower(self):
+        if not isinstance(self, BlockwiseHead):
             # Lower to Blockwise
             return BlockwiseHead(Partitions(self.frame, [0]), self.n)
-        if isinstance(self.frame, Head) and "general" in allow_group:
-            return Head(self.frame.frame, min(self.n, self.frame.n))
 
 
 class BlockwiseHead(Head, Blockwise):
@@ -1441,20 +1444,22 @@ class Tail(Expr):
     def _task(self, index: int):
         raise NotImplementedError()
 
-    def _simplify_down(self, allow_group: tuple):
-        if isinstance(self.frame, Elemwise) and "general" in allow_group:
+    def _simplify_down_general(self):
+        if isinstance(self.frame, Elemwise):
             operands = [
                 Tail(op, self.n) if isinstance(op, Expr) else op
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
-        if not isinstance(self, BlockwiseTail) and "lower" in allow_group:
+        if isinstance(self.frame, Tail):
+            return Tail(self.frame.frame, min(self.n, self.frame.n))
+
+    def _simplify_down_lower(self):
+        if not isinstance(self, BlockwiseTail):
             # Lower to Blockwise
             return BlockwiseTail(
                 Partitions(self.frame, [self.frame.npartitions - 1]), self.n
             )
-        if isinstance(self.frame, Tail) and "general" in allow_group:
-            return Tail(self.frame.frame, min(self.n, self.frame.n))
 
 
 class BlockwiseTail(Tail, Blockwise):
@@ -1477,8 +1482,8 @@ class Binop(Elemwise):
     def __str__(self):
         return f"{self.left} {self._operator_repr} {self.right}"
 
-    def _simplify_up(self, parent, allow_group: tuple):
-        if isinstance(parent, Projection) and "general" in allow_group:
+    def _simplify_up_general(self, parent):
+        if isinstance(parent, Projection):
             if isinstance(self.left, Expr):
                 left = self.left[
                     parent.operand("columns")
@@ -1499,10 +1504,9 @@ class Add(Binop):
     operation = operator.add
     _operator_repr = "+"
 
-    def _simplify_down(self, allow_group: tuple):
+    def _simplify_down_general(self):
         if (
-            "general" in allow_group
-            and isinstance(self.left, Expr)
+            isinstance(self.left, Expr)
             and isinstance(self.right, Expr)
             and self.left._name == self.right._name
         ):
@@ -1518,10 +1522,9 @@ class Mul(Binop):
     operation = operator.mul
     _operator_repr = "*"
 
-    def _simplify_down(self, allow_group: tuple):
+    def _simplify_down_general(self):
         if (
-            "general" in allow_group
-            and isinstance(self.right, Mul)
+            isinstance(self.right, Mul)
             and isinstance(self.left, numbers.Number)
             and isinstance(self.right.left, numbers.Number)
         ):
@@ -1584,8 +1587,8 @@ class Unaryop(Elemwise):
     def __str__(self):
         return f"{self._operator_repr} {self.frame}"
 
-    def _simplify_up(self, parent, allow_group: tuple):
-        if isinstance(parent, Projection) and "general" in allow_group:
+    def _simplify_up_general(self, parent):
+        if isinstance(parent, Projection):
             if isinstance(self.frame, Expr):
                 frame = self.frame[
                     parent.operand("columns")
@@ -1632,9 +1635,7 @@ class Partitions(Expr):
     def _task(self, index: int):
         return (self.frame._name, self.partitions[index])
 
-    def _simplify_down(self, allow_group: tuple):
-        if "general" not in allow_group:
-            return
+    def _simplify_down_general(self):
         if isinstance(self.frame, Blockwise) and not isinstance(
             self.frame, (BlockwiseIO, Fused)
         ):

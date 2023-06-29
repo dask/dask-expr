@@ -81,11 +81,9 @@ class Shuffle(Expr):
     def _node_label_args(self):
         return [self.frame, self.partitioning_index]
 
-    def _simplify_down(self, allow_group: tuple):
+    def _simplify_down_lower(self):
         # Use `backend` to decide how to compose a
         # shuffle operation from concerete expressions
-        if "lower" not in allow_group:
-            return
         backend = self.backend or get_default_shuffle_method()
         if hasattr(backend, "from_abstract_shuffle"):
             return backend.from_abstract_shuffle(self)
@@ -100,9 +98,7 @@ class Shuffle(Expr):
         else:
             raise ValueError(f"{backend} not supported")
 
-    def _simplify_up(self, parent, allow_group: tuple):
-        if "general" not in allow_group:
-            return
+    def _simplify_up_general(self, parent):
         if isinstance(parent, Projection):
             # Move the column projection to come
             # before the abstract Shuffle
@@ -188,7 +184,7 @@ class ShuffleBackend(Shuffle):
         """Create an Expr tree that uses this ShuffleBackend class"""
         raise NotImplementedError()
 
-    def _simplify_down(self, allow_group: tuple):
+    def _simplify_down_lower(self):
         return None
 
 

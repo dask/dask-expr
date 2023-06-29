@@ -216,10 +216,8 @@ class GroupbyAggregation(ApplyConcatApply):
             **_as_dict("dropna", self.dropna),
         }
 
-    def _simplify_down(self, allow_group: tuple):
+    def _simplify_down_general(self):
         # Use agg-spec information to add column projection
-        if "general" not in allow_group:
-            return
         column_projection = None
         if isinstance(self.arg, dict):
             column_projection = (
@@ -305,41 +303,39 @@ class Std(SingleAggregation):
 
     @functools.cached_property
     def _meta(self):
-        return self.simplify()._meta
+        return self._simplify_down_lower()._meta
 
-    def _simplify_down(self, allow_group: tuple):
-        if "lower" in allow_group:
-            v = Var(*self.operands)
-            return MapPartitions(
-                v,
-                func=np.sqrt,
-                meta=v._meta,
-                enforce_metadata=True,
-                transform_divisions=True,
-                clear_divisions=True,
-            )
+    def _simplify_down_lower(self):
+        v = Var(*self.operands)
+        return MapPartitions(
+            v,
+            func=np.sqrt,
+            meta=v._meta,
+            enforce_metadata=True,
+            transform_divisions=True,
+            clear_divisions=True,
+        )
 
 
 class Mean(SingleAggregation):
     @functools.cached_property
     def _meta(self):
-        return self.simplify()._meta
+        return self._simplify_down_lower()._meta
 
-    def _simplify_down(self, allow_group: tuple):
-        if "lower" in allow_group:
-            s = Sum(*self.operands)
-            # Drop chunk/aggregate_kwargs for count
-            c = Count(
-                *[
-                    self.operand(param)
-                    if param not in ("chunk_kwargs", "aggregate_kwargs")
-                    else {}
-                    for param in self._parameters
-                ]
-            )
-            if is_dataframe_like(s._meta):
-                c = c[s.columns]
-            return s / c
+    def _simplify_down_lower(self):
+        s = Sum(*self.operands)
+        # Drop chunk/aggregate_kwargs for count
+        c = Count(
+            *[
+                self.operand(param)
+                if param not in ("chunk_kwargs", "aggregate_kwargs")
+                else {}
+                for param in self._parameters
+            ]
+        )
+        if is_dataframe_like(s._meta):
+            c = c[s.columns]
+        return s / c
 
 
 ###

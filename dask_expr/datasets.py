@@ -70,7 +70,7 @@ class Timeseries(PartitionsFiltered, BlockwiseIO):
             self.kwargs,
         )
 
-    def _simplify_up(self, parent, allow_group: tuple):
+    def _simplify_up_general(self, parent):
         if isinstance(parent, Projection) and len(self.dtypes) > 1:
             dtypes = {col: self.operand("dtypes")[col] for col in parent.columns}
             out = Timeseries(

@@ -74,10 +74,7 @@ class Merge(Expr):
         npartitions = max(npartitions_left, npartitions_right)
         return (None,) * (npartitions + 1)
 
-    def _simplify_down(self, allow_group: tuple):
-        if "lower" not in allow_group:
-            return
-
+    def _simplify_down_lower(self):
         # Lower from an abstract expression
         left = self.left
         right = self.right
@@ -164,8 +161,8 @@ class Merge(Expr):
         # Blockwise merge
         return BlockwiseMerge(left, right, **self.kwargs)
 
-    def _simplify_up(self, parent, allow_group: tuple):
-        if isinstance(parent, Projection) and "general" in allow_group:
+    def _simplify_up_general(self, parent):
+        if isinstance(parent, Projection):
             # Reorder the column projection to
             # occur before the Merge
             projection = parent.operand("columns")
@@ -221,7 +218,7 @@ class BlockwiseMerge(Merge, Blockwise):
     Merge
     """
 
-    def _simplify_down(self, allow_group: tuple):
+    def _simplify_down_lower(self):
         return None
 
     def _broadcast_dep(self, dep: Expr):

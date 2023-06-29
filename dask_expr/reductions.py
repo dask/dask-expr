@@ -146,7 +146,7 @@ class Unique(ApplyConcatApply):
         df = _concat(inputs)
         return cls.aggregate_func(df, **kwargs)
 
-    def _simplify_up(self, parent, allow_group: tuple):
+    def _simplify_up_general(self, parent):
         return
 
     def __dask_postcompute__(self):
@@ -175,8 +175,8 @@ class DropDuplicates(Unique):
     def chunk_kwargs(self):
         return {"ignore_index": self.ignore_index, **self._subset_kwargs()}
 
-    def _simplify_up(self, parent, allow_group: tuple):
-        if self.subset is not None and "general" in allow_group:
+    def _simplify_up_general(self, parent):
+        if self.subset is not None:
             columns = set(parent.columns).union(self.subset)
             if columns == set(self.frame.columns):
                 # Don't add unnecessary Projections, protects against loops
@@ -251,8 +251,8 @@ class Reduction(ApplyConcatApply):
             base = "(" + base + ")"
         return f"{base}.{self.__class__.__name__.lower()}({s})"
 
-    def _simplify_up(self, parent, allow_group: tuple):
-        if isinstance(parent, Projection) and "general" in allow_group:
+    def _simplify_up_general(self, parent):
+        if isinstance(parent, Projection):
             return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
 
 
@@ -344,11 +344,8 @@ class Len(Reduction):
     reduction_chunk = staticmethod(len)
     reduction_aggregate = sum
 
-    def _simplify_down(self, allow_group: tuple):
+    def _simplify_down_general(self):
         from dask_expr.io.io import IO
-
-        if "general" not in allow_group:
-            return
 
         # We introduce Index nodes sometimes.  We special case around them.
         if isinstance(self.frame, Index) and isinstance(self.frame.frame, Elemwise):
@@ -367,7 +364,7 @@ class Len(Reduction):
         if len(self.frame.columns):
             return Len(self.frame.index)
 
-    def _simplify_up(self, parent, allow_group: tuple):
+    def _simplify_up_general(self, parent):
         return
 
 
@@ -375,15 +372,13 @@ class Size(Reduction):
     reduction_chunk = staticmethod(lambda df: df.size)
     reduction_aggregate = sum
 
-    def _simplify_down(self, allow_group: tuple):
-        if "general" not in allow_group:
-            return
+    def _simplify_down_general(self):
         if is_dataframe_like(self.frame) and len(self.frame.columns) > 1:
             return len(self.frame.columns) * Len(self.frame)
         else:
             return Len(self.frame)
 
-    def _simplify_up(self, parent, allow_group: tuple):
+    def _simplify_up_general(self, parent):
         return
 
 
@@ -403,12 +398,11 @@ class Mean(Reduction):
             self.frame._meta.sum(skipna=self.skipna, numeric_only=self.numeric_only) / 2
         )
 
-    def _simplify_down(self, allow_group: tuple):
-        if "lower" in allow_group:
-            return (
-                self.frame.sum(skipna=self.skipna, numeric_only=self.numeric_only)
-                / self.frame.count()
-            )
+    def _simplify_down_lower(self):
+        return (
+            self.frame.sum(skipna=self.skipna, numeric_only=self.numeric_only)
+            / self.frame.count()
+        )
 
 
 class Count(Reduction):
@@ -557,7 +551,7 @@ class ValueCounts(ReductionConstantDim):
     def aggregate_kwargs(self):
         return {**self.chunk_kwargs, "normalize": self.normalize}
 
-    def _simplify_up(self, parent, allow_group: tuple):
+    def _simplify_up_general(self, parent):
         # We are already a Series
         return
 
