@@ -886,15 +886,16 @@ def test_assign_simplify_series(pdf):
 def test_are_co_aligned(pdf, df):
     df2 = df.reset_index()
     assert are_co_aligned(df.expr, df2.expr)
-    assert not are_co_aligned(df.expr, df2.sum().expr)
+    assert are_co_aligned(df.expr, df2.sum().expr)
     assert not are_co_aligned(df.expr, df2.repartition(npartitions=2).expr)
 
     assert are_co_aligned(df.expr, df.sum().expr)
     assert are_co_aligned((df + df.sum()).expr, df.sum().expr)
 
-    pdf["z"] = 1
-    df2 = from_pandas(pdf, npartitions=10)
-    assert not are_co_aligned(df.expr, df2.expr)
+    pdf = pdf.assign(z=1)
+    df3 = from_pandas(pdf, npartitions=10)
+    assert not are_co_aligned(df.expr, df3.expr)
+    assert are_co_aligned(df.expr, df3.sum().expr)
 
     merged = df.merge(df2)
     merged_first = merged.reset_index()
