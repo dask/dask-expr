@@ -7,6 +7,7 @@ from numbers import Number
 import numpy as np
 import pandas as pd
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
+from dask.dataframe.accessor import CachedAccessor
 from dask.dataframe.core import (
     _concat,
     _Frame,
@@ -22,6 +23,7 @@ from tlz import first
 
 from dask_expr import expr
 from dask_expr._util import _convert_to_list
+from dask_expr.categorical import CategoricalAccessor
 from dask_expr.concat import Concat
 from dask_expr.expr import Eval, no_default
 from dask_expr.merge import Merge
@@ -744,6 +746,8 @@ class Series(FrameBase):
 
     def explode(self):
         return new_collection(expr.ExplodeSeries(self.expr))
+
+    cat = CachedAccessor("cat", CategoricalAccessor)
 
 
 class Index(Series):
