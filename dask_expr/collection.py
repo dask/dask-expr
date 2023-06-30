@@ -7,6 +7,7 @@ from numbers import Number
 import numpy as np
 import pandas as pd
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
+from dask.dataframe import methods
 from dask.dataframe.core import (
     _concat,
     _Frame,
@@ -16,12 +17,13 @@ from dask.dataframe.core import (
     new_dd_object,
 )
 from dask.dataframe.dispatch import meta_nonempty
+from dask.dataframe.utils import has_known_categories
 from dask.utils import IndexCallable, random_state_data, typename
 from fsspec.utils import stringify_path
 from tlz import first
 
 from dask_expr import expr
-from dask_expr._util import _convert_to_list
+from dask_expr._util import _convert_to_list, is_scalar
 from dask_expr.concat import Concat
 from dask_expr.expr import Eval, no_default
 from dask_expr.merge import Merge
@@ -32,6 +34,7 @@ from dask_expr.reductions import (
     MemoryUsageIndex,
     NLargest,
     NSmallest,
+    PivotTable,
     Unique,
     ValueCounts,
 )
@@ -686,6 +689,25 @@ class DataFrame(FrameBase):
 
     def eval(self, expr, **kwargs):
         return new_collection(Eval(self.expr, _expr=expr, expr_kwargs=kwargs))
+
+    def pivot_table(self, index, columns, values, aggfunc="mean"):
+        if not is_scalar(index) or index not in self._meta.columns:
+            raise ValueError("'index' must be the name of an existing column")
+        if not is_scalar(columns) or columns not in self._meta.columns:
+            raise ValueError("'columns' must be the name of an existing column")
+        if not methods.is_categorical_dtype(self._meta[columns]):
+            raise ValueError("'columns' must be category dtype")
+        if not has_known_categories(self._meta[columns]):
+            raise ValueError("'columns' must be category dtype")
+
+        if not (is_scalar(values) or all(is_scalar(x) for x in values)):
+            raise ValueError("'values' must refer to an existing column or columns")
+
+        return new_collection(
+            PivotTable(
+                self.expr, index=index, columns=columns, values=values, aggfunc=aggfunc
+            )
+        )
 
 
 class Series(FrameBase):

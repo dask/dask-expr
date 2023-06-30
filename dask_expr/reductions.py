@@ -1,3 +1,5 @@
+import functools
+
 import pandas as pd
 import toolz
 from dask.dataframe import hyperloglog, methods
@@ -186,6 +188,80 @@ class DropDuplicates(Unique):
                 type(self)(self.frame[sorted(columns)], *self.operands[1:]),
                 *parent.operands[1:],
             )
+
+
+class PivotTable(ApplyConcatApply):
+    _parameters = ["frame", "columns", "index", "values", "aggfunc"]
+    _defaults = {"columns": None, "index": None, "values": None, "aggfunc": "mean"}
+
+    @functools.cached_property
+    def _meta(self):
+        return self.frame._meta
+
+    def _simplify_down(self):
+        args = [
+            self.frame,
+            self.operand("columns"),
+            self.operand("index"),
+            self.operand("values"),
+        ]
+        if self.aggfunc == "sum":
+            return PivotTableSum(*args)
+        elif self.aggfunc == "mean":
+            return PivotTableSum(*args) / PivotTableCount(*args)
+        elif self.aggfunc == "count":
+            return PivotTableCount(*args)
+        elif self.aggfunc == "first":
+            return PivotTableFirst(*args)
+        elif self.aggfucn == "last":
+            return PivotTableLast(*args)
+        else:
+            raise NotImplementedError(f"{self.aggfunc=} is not implemented")
+
+
+class PivotTableAbstract(PivotTable):
+    _parameters = ["frame", "columns", "index", "values"]
+    _defaults = {"columns": None, "index": None, "values": None}
+
+    def _simplify_down(self):
+        return
+
+    @property
+    def chunk_kwargs(self):
+        return {
+            "index": self.operand("index"),
+            "columns": self.operand("columns"),
+            "values": self.operand("values"),
+        }
+
+    @classmethod
+    def combine(cls, inputs: list, **kwargs):
+        return _concat(inputs)
+
+    @classmethod
+    def aggregate(cls, inputs: list, **kwargs):
+        df = _concat(inputs)
+        return cls.aggregate_func(df, **kwargs)
+
+
+class PivotTableSum(PivotTableAbstract):
+    chunk = staticmethod(methods.pivot_sum)
+    aggregate_func = staticmethod(methods.pivot_agg)
+
+
+class PivotTableCount(PivotTableAbstract):
+    chunk = staticmethod(methods.pivot_count)
+    aggregate_func = staticmethod(methods.pivot_agg)
+
+
+class PivotTableFirst(PivotTableAbstract):
+    chunk = staticmethod(methods.pivot_first)
+    aggregate_func = staticmethod(methods.pivot_agg_first)
+
+
+class PivotTableLast(PivotTableAbstract):
+    chunk = staticmethod(methods.pivot_last)
+    aggregate_func = staticmethod(methods.pivot_agg_last)
 
 
 class Reduction(ApplyConcatApply):
