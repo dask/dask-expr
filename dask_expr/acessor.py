@@ -1,5 +1,7 @@
 from dask.dataframe.accessor import _bind_method, _bind_property, maybe_wrap_pandas
 
+from dask_expr.expr import Blockwise
+
 
 class Accessor:
     """
@@ -50,30 +52,29 @@ class Accessor:
         out = getattr(getattr(obj, accessor, obj), attr)(*args, **kwargs)
         return maybe_wrap_pandas(obj, out)
 
-    def _property_map(self, attr):
-        # TODO: Make an expression
-        meta = self._delegate_property(self._series._meta, self._accessor_name, attr)
-        token = f"{self._accessor_name}-{attr}"
-        return self._series.map_partitions(
-            self._delegate_property, self._accessor_name, attr, token=token, meta=meta
+    def _function_map(self, attr, *args, **kwargs):
+        from dask_expr.collection import new_collection
+
+        return new_collection(
+            FunctionMap(self._series.expr, self._accessor_name, attr, args, kwargs)
         )
 
-    def _function_map(self, attr, *args, **kwargs):
-        # TODO: make an expression
-        if "meta" in kwargs:
-            meta = kwargs.pop("meta")
-        else:
-            meta = self._delegate_method(
-                self._series._meta_nonempty, self._accessor_name, attr, args, kwargs
-            )
-        token = f"{self._accessor_name}-{attr}"
-        return self._series.map_partitions(
-            self._delegate_method,
-            self._accessor_name,
-            attr,
-            args,
-            kwargs,
-            catch_deprecation_warnings=True,
-            meta=meta,
-            token=token,
-        )
+
+class PropertyMap(Blockwise):
+    _parameters = [
+        "frame",
+        "accessor",
+        "attr",
+    ]
+
+    def operation(self, obj, accessor, attr):
+        out = getattr(getattr(obj, accessor, obj), attr)
+        return maybe_wrap_pandas(obj, out)
+
+
+class FunctionMap(Blockwise):
+    _parameters = ["frame", "accessor", "attr", "args", "kwargs"]
+
+    def operation(self, obj, accessor, attr, args, kwargs):
+        out = getattr(getattr(obj, accessor, obj), attr)(*args, **kwargs)
+        return maybe_wrap_pandas(obj, out)
