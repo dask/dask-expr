@@ -10,6 +10,7 @@ from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
 from dask.dataframe.core import (
     _concat,
     _Frame,
+    check_divisions,
     is_dataframe_like,
     is_index_like,
     is_series_like,
@@ -37,6 +38,7 @@ from dask_expr.reductions import (
     ValueCounts,
 )
 from dask_expr.repartition import Repartition
+from dask_expr.shuffle import SetIndex
 
 #
 # Utilities to wrap Expr API
@@ -687,6 +689,21 @@ class DataFrame(FrameBase):
 
     def eval(self, expr, **kwargs):
         return new_collection(Eval(self.expr, _expr=expr, expr_kwargs=kwargs))
+
+    def set_index(self, other, drop=True, sorted=False, divisions=None):
+        if isinstance(other, Series):
+            if other._name == self.index._name:
+                return self
+        else:
+            if other == self.index.name:
+                return self
+
+        if divisions is not None:
+            check_divisions(divisions)
+        other = other.expr if isinstance(other, Series) else other
+        return new_collection(
+            SetIndex(self.expr, other, drop, sorted, user_divisions=divisions)
+        )
 
 
 class Series(FrameBase):

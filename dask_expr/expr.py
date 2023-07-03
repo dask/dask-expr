@@ -23,6 +23,7 @@ from dask.dataframe.core import (
     make_meta,
 )
 from dask.dataframe.dispatch import meta_nonempty
+from dask.dataframe.shuffle import set_partitions_pre
 from dask.utils import M, apply, funcname, import_required, is_arraylike
 from tlz import merge_sorted, unique
 
@@ -1140,6 +1141,38 @@ class ExplodeFrame(ExplodeSeries):
                 type(self)(self.frame[sorted(columns)], *self.operands[1:]),
                 *parent.operands[1:],
             )
+
+
+class _SetPartitionsPreSetIndex(Blockwise):
+    _parameters = ["frame", "new_divisions", "ascending", "na_position"]
+    _defaults = {"ascending": True, "na_position": "last"}
+    operation = staticmethod(set_partitions_pre)
+
+    @property
+    def _meta(self):
+        return self.frame._meta._constructor([0])
+
+
+class _SetIndexPostScalar(Blockwise):
+    _parameters = ["frame", "index_name", "drop"]
+
+    def operation(self, df, index_name, drop):
+        df2 = df.set_index(index_name, drop=drop)
+        return df2
+
+
+class _SetIndexPostSeries(Blockwise):
+    _parameters = ["frame", "index_name"]
+
+    def operation(self, df, index_name):
+        df2 = df.set_index("_index", drop=True)
+        df2.index.name = index_name
+        return df2
+
+
+class SortIndexBlockwise(Blockwise):
+    _parameters = ["frame"]
+    operation = M.sort_index
 
 
 class Assign(Elemwise):
