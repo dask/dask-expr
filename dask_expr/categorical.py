@@ -1,10 +1,14 @@
+import functools
+
 from dask.dataframe.utils import (
     AttributeNotImplementedError,
     clear_known_categories,
     has_known_categories,
 )
+from dask.utils import M
 
 from dask_expr.acessor import Accessor, PropertyMap
+from dask_expr.expr import Blockwise
 
 
 class CategoricalAccessor(Accessor):
@@ -75,9 +79,10 @@ class CategoricalAccessor(Accessor):
         """Ensure the categories in this series are unknown"""
         if not self.known:
             return self._series
-        out = self._series.copy()
-        out._meta = clear_known_categories(out._meta)
-        return out
+
+        from dask_expr import new_collection
+
+        return new_collection(AsUnknown(self._series.expr))
 
     @property
     def ordered(self):
@@ -113,3 +118,12 @@ class CategoricalAccessor(Accessor):
         from dask_expr.collection import new_collection
 
         return new_collection(PropertyMap(self._series.expr, "cat", "codes"))
+
+
+class AsUnknown(Blockwise):
+    _parameters = ["frame"]
+    operation = M.copy
+
+    @functools.cached_property
+    def _meta(self):
+        return clear_known_categories(self.frame._meta)
