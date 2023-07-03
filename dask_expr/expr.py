@@ -11,7 +11,7 @@ import dask
 import pandas as pd
 import toolz
 from dask.base import normalize_token, tokenize
-from dask.core import ishashable
+from dask.core import flatten, ishashable
 from dask.dataframe import methods
 from dask.dataframe.core import (
     _get_divisions_map_partitions,
@@ -23,6 +23,7 @@ from dask.dataframe.core import (
     make_meta,
 )
 from dask.dataframe.dispatch import meta_nonempty
+from dask.dataframe.utils import drop_by_shallow_copy
 from dask.utils import M, apply, funcname, import_required, is_arraylike
 from tlz import merge_sorted, unique
 
@@ -942,6 +943,30 @@ class CombineFirst(Blockwise):
     _parameters = ["frame", "other"]
     operation = M.combine_first
 
+    @functools.cached_property
+    def _meta(self):
+        return make_meta(
+            self.operation(
+                meta_nonempty(self.frame._meta),
+                meta_nonempty(self.other._meta),
+            ),
+        )
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            columns = parent.columns
+            frame_columns = sorted(set(columns).intersection(self.frame.columns))
+            other_columns = sorted(set(columns).intersection(self.other.columns))
+            if (
+                self.frame.columns == frame_columns
+                and self.other.columns == other_columns
+            ):
+                return
+            return type(parent)(
+                type(self)(self.frame[frame_columns], self.other[other_columns]),
+                *parent.operands[1:],
+            )
+
 
 class RenameFrame(Blockwise):
     _parameters = ["frame", "columns"]
@@ -1140,6 +1165,12 @@ class ExplodeFrame(ExplodeSeries):
                 type(self)(self.frame[sorted(columns)], *self.operands[1:]),
                 *parent.operands[1:],
             )
+
+
+class Drop(Elemwise):
+    _parameters = ["frame", "columns", "errors"]
+    _defaults = {"errors": "raise"}
+    operation = staticmethod(drop_by_shallow_copy)
 
 
 class Assign(Elemwise):
@@ -1679,6 +1710,41 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     return expr
 
 
+def is_broadcastable(dfs, s):
+    """
+    This Series is broadcastable against another dataframe in the sequence
+    """
+
+    return s.ndim <= 1 and s.npartitions == 1 and s.known_divisions
+
+
+def non_blockwise_ancestors(expr):
+    """Traverse through tree to find ancestors that are not blockwise or are IO"""
+    stack = [expr]
+    while stack:
+        e = stack.pop()
+        if isinstance(e, IO):
+            yield e
+        elif isinstance(e, Blockwise):
+            dependencies = e.dependencies()
+            stack.extend(
+                [
+                    expr
+                    for expr in dependencies
+                    if not is_broadcastable(dependencies, expr)
+                ]
+            )
+        else:
+            yield e
+
+
+def are_co_aligned(*exprs):
+    """Do inputs come from different parents, modulo blockwise?"""
+    exprs = [expr for expr in exprs if not is_broadcastable(exprs, expr)]
+    ancestors = [set(non_blockwise_ancestors(e)) for e in exprs]
+    return len(set(flatten(ancestors, container=set))) == 1
+
+
 ## Utilites for Expr fusion
 
 
@@ -1882,7 +1948,7 @@ class Fused(Blockwise):
         return dask.core.get(graph, name)
 
 
-from dask_expr.io import BlockwiseIO
+from dask_expr.io import IO, BlockwiseIO
 from dask_expr.reductions import (
     All,
     Any,
