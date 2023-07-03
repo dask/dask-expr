@@ -25,7 +25,7 @@ from dask_expr import expr
 from dask_expr._util import _convert_to_list
 from dask_expr.concat import Concat
 from dask_expr.expr import Eval, no_default
-from dask_expr.merge import Merge
+from dask_expr.merge import JoinRecursive, Merge
 from dask_expr.quantiles import RepartitionQuantiles
 from dask_expr.reductions import (
     DropDuplicates,
@@ -567,12 +567,24 @@ class DataFrame(FrameBase):
         rsuffix="",
         shuffle_backend=None,
     ):
-        if not is_dataframe_like(other._meta) and hasattr(other._meta, "name"):
+        if (
+            not isinstance(other, list)
+            and not is_dataframe_like(other._meta)
+            and hasattr(other._meta, "name")
+        ):
             other = new_collection(expr.ToFrame(other.expr))
 
-        if not is_dataframe_like(other._meta):
-            # TODO: Implement multi-join
-            raise NotImplementedError
+        if not isinstance(other, FrameBase):
+            if not isinstance(other, list) or not all(
+                isinstance(o, FrameBase) for o in other
+            ):
+                raise ValueError("other must be DataFrame or list of DataFrames")
+            if how not in ("outer", "left"):
+                raise ValueError("merge_multi only supports left or outer joins")
+
+            return new_collection(
+                JoinRecursive([self.expr] + [o.expr for o in other], how=how)
+            )
 
         return self.merge(
             right=other,
@@ -677,6 +689,13 @@ class DataFrame(FrameBase):
     def explode(self, column):
         column = _convert_to_list(column)
         return new_collection(expr.ExplodeFrame(self.expr, column=column))
+
+    def drop(self, labels=None, columns=None, errors="raise"):
+        if columns is None:
+            columns = labels
+        if columns is None:
+            raise TypeError("must either specify 'columns' or 'labels'")
+        return new_collection(expr.Drop(self.expr, columns=columns, errors=errors))
 
     def to_parquet(self, path, **kwargs):
         from dask_expr.io.parquet import to_parquet
@@ -818,10 +837,10 @@ def optimize(collection, fuse=True):
     return new_collection(expr.optimize(collection.expr, fuse=fuse))
 
 
-def from_pandas(*args, **kwargs):
+def from_pandas(data, *args, **kwargs):
     from dask_expr.io.io import FromPandas
 
-    return new_collection(FromPandas(*args, **kwargs))
+    return new_collection(FromPandas(data.copy(), *args, **kwargs))
 
 
 def from_graph(*args, **kwargs):
