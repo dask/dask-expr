@@ -12,6 +12,7 @@ from dask.dataframe.shuffle import (
     ensure_cleanup_on_exception,
     maybe_buffered_partd,
     partitioning_index,
+    set_partitions_pre,
     shuffle_group,
     shuffle_group_2,
     shuffle_group_get,
@@ -25,9 +26,6 @@ from dask_expr.expr import (
     PartitionsFiltered,
     Projection,
     SortIndexBlockwise,
-    _SetIndexPostScalar,
-    _SetIndexPostSeries,
-    _SetPartitionsPreSetIndex,
 )
 from dask_expr.reductions import (
     All,
@@ -687,3 +685,30 @@ class SetPartition(SetIndex):
             )
 
         return SortIndexBlockwise(index_set)
+
+
+class _SetPartitionsPreSetIndex(Blockwise):
+    _parameters = ["frame", "new_divisions", "ascending", "na_position"]
+    _defaults = {"ascending": True, "na_position": "last"}
+    operation = staticmethod(set_partitions_pre)
+
+    @property
+    def _meta(self):
+        return self.frame._meta._constructor([0])
+
+
+class _SetIndexPostScalar(Blockwise):
+    _parameters = ["frame", "index_name", "drop"]
+
+    def operation(self, df, index_name, drop):
+        df2 = df.set_index(index_name, drop=drop)
+        return df2
+
+
+class _SetIndexPostSeries(Blockwise):
+    _parameters = ["frame", "index_name"]
+
+    def operation(self, df, index_name):
+        df2 = df.set_index("_index", drop=True)
+        df2.index.name = index_name
+        return df2

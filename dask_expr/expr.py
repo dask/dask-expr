@@ -23,7 +23,6 @@ from dask.dataframe.core import (
     make_meta,
 )
 from dask.dataframe.dispatch import meta_nonempty
-from dask.dataframe.shuffle import set_partitions_pre
 from dask.dataframe.utils import clear_known_categories, drop_by_shallow_copy
 from dask.utils import M, apply, funcname, import_required, is_arraylike
 from tlz import merge_sorted, unique
@@ -1196,33 +1195,6 @@ class Drop(Elemwise):
     _parameters = ["frame", "columns", "errors"]
     _defaults = {"errors": "raise"}
     operation = staticmethod(drop_by_shallow_copy)
-
-
-class _SetPartitionsPreSetIndex(Blockwise):
-    _parameters = ["frame", "new_divisions", "ascending", "na_position"]
-    _defaults = {"ascending": True, "na_position": "last"}
-    operation = staticmethod(set_partitions_pre)
-
-    @property
-    def _meta(self):
-        return self.frame._meta._constructor([0])
-
-
-class _SetIndexPostScalar(Blockwise):
-    _parameters = ["frame", "index_name", "drop"]
-
-    def operation(self, df, index_name, drop):
-        df2 = df.set_index(index_name, drop=drop)
-        return df2
-
-
-class _SetIndexPostSeries(Blockwise):
-    _parameters = ["frame", "index_name"]
-
-    def operation(self, df, index_name):
-        df2 = df.set_index("_index", drop=True)
-        df2.index.name = index_name
-        return df2
 
 
 class SortIndexBlockwise(Blockwise):
