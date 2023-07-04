@@ -133,3 +133,6 @@ def test_shuffle_reductions_after_projection(df):
 def test_set_index(df, pdf):
     assert_eq(df.set_index("x"), pdf.set_index("x"))
     assert_eq(df.set_index(df.x), pdf.set_index(pdf.x))
+
+    with pytest.raises(TypeError, match="can't be of type DataFrame"):
+        df.set_index(df)

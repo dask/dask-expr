@@ -710,6 +710,8 @@ class DataFrame(FrameBase):
         return new_collection(Eval(self.expr, _expr=expr, expr_kwargs=kwargs))
 
     def set_index(self, other, drop=True, sorted=False, divisions=None):
+        if isinstance(other, DataFrame):
+            raise TypeError("other can't be of type DataFrame")
         if isinstance(other, Series):
             if other._name == self.index._name:
                 return self
