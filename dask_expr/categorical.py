@@ -120,7 +120,7 @@ class CategoricalAccessor(Accessor):
         return new_collection(PropertyMap(self._series.expr, "cat", "codes"))
 
 
-class AsUnknown(Blockwise):
+class AsUnknown(Elemwise):
     _parameters = ["frame"]
     operation = M.copy
 
