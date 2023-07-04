@@ -60,7 +60,7 @@ class Accessor:
         )
 
 
-class PropertyMap(Blockwise):
+class PropertyMap(Elemwise):
     _parameters = [
         "frame",
         "accessor",
