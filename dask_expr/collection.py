@@ -713,9 +713,8 @@ class DataFrame(FrameBase):
         if isinstance(other, Series):
             if other._name == self.index._name:
                 return self
-        else:
-            if other == self.index.name:
-                return self
+        elif other == self.index.name:
+            return self
 
         if divisions is not None:
             check_divisions(divisions)
