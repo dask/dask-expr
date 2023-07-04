@@ -11,7 +11,7 @@ import dask
 import pandas as pd
 import toolz
 from dask.base import normalize_token, tokenize
-from dask.core import ishashable
+from dask.core import flatten, ishashable
 from dask.dataframe import methods
 from dask.dataframe.core import (
     _get_divisions_map_partitions,
@@ -23,6 +23,7 @@ from dask.dataframe.core import (
     make_meta,
 )
 from dask.dataframe.dispatch import meta_nonempty
+from dask.dataframe.utils import clear_known_categories, drop_by_shallow_copy
 from dask.utils import M, apply, funcname, import_required, is_arraylike
 from tlz import merge_sorted, unique
 
@@ -96,7 +97,7 @@ class Expr:
                 elif is_arraylike(op):
                     op = "<array>"
 
-                elif repr(op) != repr(default):
+                if repr(op) != repr(default):
                     if param:
                         header += f" {param}={repr(op)}"
                     else:
@@ -479,20 +480,24 @@ class Expr:
         from dask_expr.collection import new_collection
         from dask_expr.repartition import Repartition
 
-        dfs = [self, other]
-        if not all(df.known_divisions for df in dfs):
-            raise ValueError(
-                "Not all divisions are known, can't align "
-                "partitions. Please use `set_index` "
-                "to set the index."
-            )
+        if are_co_aligned(self, other):
+            left = self
 
-        divisions = list(unique(merge_sorted(*[df.divisions for df in dfs])))
-        if len(divisions) == 1:  # single value for index
-            divisions = (divisions[0], divisions[0])
+        else:
+            dfs = [self, other]
+            if not all(df.known_divisions for df in dfs):
+                raise ValueError(
+                    "Not all divisions are known, can't align "
+                    "partitions. Please use `set_index` "
+                    "to set the index."
+                )
 
-        left = Repartition(self, new_divisions=divisions, force=True)
-        other = Repartition(other, new_divisions=divisions, force=True)
+            divisions = list(unique(merge_sorted(*[df.divisions for df in dfs])))
+            if len(divisions) == 1:  # single value for index
+                divisions = (divisions[0], divisions[0])
+
+            left = Repartition(self, new_divisions=divisions, force=True)
+            other = Repartition(other, new_divisions=divisions, force=True)
         aligned = _Align(left, other, join=join, fill_value=fill_value)
 
         return new_collection(AlignGetitem(aligned, position=0)), new_collection(
@@ -979,6 +984,30 @@ class CombineFirst(Blockwise):
     _parameters = ["frame", "other"]
     operation = M.combine_first
 
+    @functools.cached_property
+    def _meta(self):
+        return make_meta(
+            self.operation(
+                meta_nonempty(self.frame._meta),
+                meta_nonempty(self.other._meta),
+            ),
+        )
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            columns = parent.columns
+            frame_columns = sorted(set(columns).intersection(self.frame.columns))
+            other_columns = sorted(set(columns).intersection(self.other.columns))
+            if (
+                self.frame.columns == frame_columns
+                and self.other.columns == other_columns
+            ):
+                return
+            return type(parent)(
+                type(self)(self.frame[frame_columns], self.other[other_columns]),
+                *parent.operands[1:],
+            )
+
 
 class RenameFrame(Blockwise):
     _parameters = ["frame", "columns"]
@@ -1086,6 +1115,26 @@ class AsType(Elemwise):
     _parameters = ["frame", "dtypes"]
     operation = M.astype
 
+    @functools.cached_property
+    def _meta(self):
+        def _cat_dtype_without_categories(dtype):
+            return (
+                isinstance(pd.api.types.pandas_dtype(dtype), pd.CategoricalDtype)
+                and getattr(dtype, "categories", None) is None
+            )
+
+        meta = super()._meta
+        dtypes = self.operand("dtypes")
+        if hasattr(dtypes, "items"):
+            set_unknown = [
+                k for k, v in dtypes.items() if _cat_dtype_without_categories(v)
+            ]
+            meta = clear_known_categories(meta, cols=set_unknown)
+
+        elif _cat_dtype_without_categories(dtypes):
+            meta = clear_known_categories(meta)
+        return meta
+
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
             dtypes = self.operand("dtypes")
@@ -1179,11 +1228,24 @@ class ExplodeFrame(ExplodeSeries):
             )
 
 
+class Drop(Elemwise):
+    _parameters = ["frame", "columns", "errors"]
+    _defaults = {"errors": "raise"}
+    operation = staticmethod(drop_by_shallow_copy)
+
+
 class Assign(Elemwise):
     """Column Assignment"""
 
     _parameters = ["frame", "key", "value"]
     operation = staticmethod(methods.assign)
+
+    @functools.cached_property
+    def _meta(self):
+        args = [
+            meta_nonempty(op._meta) if isinstance(op, Expr) else op for op in self._args
+        ]
+        return make_meta(self.operation(*args, **self._kwargs))
 
     def _node_label_args(self):
         return [self.frame, self.key, self.value]
@@ -1716,6 +1778,41 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     return expr
 
 
+def is_broadcastable(dfs, s):
+    """
+    This Series is broadcastable against another dataframe in the sequence
+    """
+
+    return s.ndim <= 1 and s.npartitions == 1 and s.known_divisions
+
+
+def non_blockwise_ancestors(expr):
+    """Traverse through tree to find ancestors that are not blockwise or are IO"""
+    stack = [expr]
+    while stack:
+        e = stack.pop()
+        if isinstance(e, IO):
+            yield e
+        elif isinstance(e, Blockwise):
+            dependencies = e.dependencies()
+            stack.extend(
+                [
+                    expr
+                    for expr in dependencies
+                    if not is_broadcastable(dependencies, expr)
+                ]
+            )
+        else:
+            yield e
+
+
+def are_co_aligned(*exprs):
+    """Do inputs come from different parents, modulo blockwise?"""
+    exprs = [expr for expr in exprs if not is_broadcastable(exprs, expr)]
+    ancestors = [set(non_blockwise_ancestors(e)) for e in exprs]
+    return len(set(flatten(ancestors, container=set))) == 1
+
+
 ## Utilites for Expr fusion
 
 
@@ -1919,7 +2016,7 @@ class Fused(Blockwise):
         return dask.core.get(graph, name)
 
 
-from dask_expr.io import BlockwiseIO
+from dask_expr.io import IO, BlockwiseIO
 from dask_expr.reductions import (
     All,
     Any,
