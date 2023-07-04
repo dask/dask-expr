@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from dask.dataframe._compat import PANDAS_GT_210
-from dask.dataframe.utils import assert_eq
+from dask.dataframe.utils import UNKNOWN_CATEGORIES, assert_eq
 from dask.utils import M
 
 from dask_expr import expr, from_pandas, optimize
@@ -854,11 +854,22 @@ def test_align_different_partitions():
     assert_eq(result_2, pdf_result_2)
 
 
-def test_align_unknown_partitions():
+def test_align_unknown_partitions_same_root():
     pdf = pd.DataFrame({"a": 1}, index=[3, 2, 1])
     df = from_pandas(pdf, npartitions=2, sort=False)
+    result_1, result_2 = df.align(df)
+    pdf_result_1, pdf_result_2 = pdf.align(pdf)
+    assert_eq(result_1, pdf_result_1)
+    assert_eq(result_2, pdf_result_2)
+
+
+def test_unknown_partitions_different_root():
+    pdf = pd.DataFrame({"a": 1}, index=[3, 2, 1])
+    df = from_pandas(pdf, npartitions=2, sort=False)
+    pdf2 = pd.DataFrame({"a": 1}, index=[4, 3, 2, 1])
+    df2 = from_pandas(pdf2, npartitions=2, sort=False)
     with pytest.raises(ValueError, match="Not all divisions"):
-        df.align(df)
+        df.align(df2)
 
 
 def test_nunique_approx(df):
@@ -918,3 +929,9 @@ def test_are_co_aligned(pdf, df):
     merged_second = merged.rename(columns={"x": "a"})
     assert are_co_aligned(merged_first.expr, merged_second.expr)
     assert not are_co_aligned(merged_first.expr, df.expr)
+
+
+def test_astype_categories(df):
+    result = df.astype("category")
+    assert_eq(result.x._meta.cat.categories, pd.Index([UNKNOWN_CATEGORIES]))
+    assert_eq(result.y._meta.cat.categories, pd.Index([UNKNOWN_CATEGORIES]))

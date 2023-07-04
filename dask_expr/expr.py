@@ -24,7 +24,7 @@ from dask.dataframe.core import (
 )
 from dask.dataframe.dispatch import meta_nonempty
 from dask.dataframe.shuffle import set_partitions_pre
-from dask.dataframe.utils import drop_by_shallow_copy
+from dask.dataframe.utils import clear_known_categories, drop_by_shallow_copy
 from dask.utils import M, apply, funcname, import_required, is_arraylike
 from tlz import merge_sorted, unique
 
@@ -444,20 +444,24 @@ class Expr:
         from dask_expr.collection import new_collection
         from dask_expr.repartition import Repartition
 
-        dfs = [self, other]
-        if not all(df.known_divisions for df in dfs):
-            raise ValueError(
-                "Not all divisions are known, can't align "
-                "partitions. Please use `set_index` "
-                "to set the index."
-            )
+        if are_co_aligned(self, other):
+            left = self
 
-        divisions = list(unique(merge_sorted(*[df.divisions for df in dfs])))
-        if len(divisions) == 1:  # single value for index
-            divisions = (divisions[0], divisions[0])
+        else:
+            dfs = [self, other]
+            if not all(df.known_divisions for df in dfs):
+                raise ValueError(
+                    "Not all divisions are known, can't align "
+                    "partitions. Please use `set_index` "
+                    "to set the index."
+                )
 
-        left = Repartition(self, new_divisions=divisions, force=True)
-        other = Repartition(other, new_divisions=divisions, force=True)
+            divisions = list(unique(merge_sorted(*[df.divisions for df in dfs])))
+            if len(divisions) == 1:  # single value for index
+                divisions = (divisions[0], divisions[0])
+
+            left = Repartition(self, new_divisions=divisions, force=True)
+            other = Repartition(other, new_divisions=divisions, force=True)
         aligned = _Align(left, other, join=join, fill_value=fill_value)
 
         return new_collection(AlignGetitem(aligned, position=0)), new_collection(
@@ -1074,6 +1078,26 @@ class AsType(Elemwise):
 
     _parameters = ["frame", "dtypes"]
     operation = M.astype
+
+    @functools.cached_property
+    def _meta(self):
+        def _cat_dtype_without_categories(dtype):
+            return (
+                isinstance(pd.api.types.pandas_dtype(dtype), pd.CategoricalDtype)
+                and getattr(dtype, "categories", None) is None
+            )
+
+        meta = super()._meta
+        dtypes = self.operand("dtypes")
+        if hasattr(dtypes, "items"):
+            set_unknown = [
+                k for k, v in dtypes.items() if _cat_dtype_without_categories(v)
+            ]
+            meta = clear_known_categories(meta, cols=set_unknown)
+
+        elif _cat_dtype_without_categories(dtypes):
+            meta = clear_known_categories(meta)
+        return meta
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
