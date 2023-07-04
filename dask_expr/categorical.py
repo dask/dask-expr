@@ -7,7 +7,7 @@ from dask.dataframe.utils import (
 )
 from dask.utils import M
 
-from dask_expr.acessor import Accessor, PropertyMap
+from dask_expr.accessor import Accessor, PropertyMap
 from dask_expr.expr import Blockwise
 
 
