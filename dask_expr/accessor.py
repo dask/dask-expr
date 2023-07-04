@@ -1,6 +1,6 @@
 from dask.dataframe.accessor import _bind_method, _bind_property, maybe_wrap_pandas
 
-from dask_expr.expr import Blockwise
+from dask_expr.expr import Elemwise
 
 
 class Accessor:
@@ -72,7 +72,7 @@ class PropertyMap(Elemwise):
         return maybe_wrap_pandas(obj, out)
 
 
-class FunctionMap(Blockwise):
+class FunctionMap(Elemwise):
     _parameters = ["frame", "accessor", "attr", "args", "kwargs"]
 
     def operation(self, obj, accessor, attr, args, kwargs):
