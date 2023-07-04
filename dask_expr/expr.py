@@ -277,37 +277,30 @@ class Expr:
     def _simplify_up(self, parent):
         return
 
-    def lower(self):
+    def lower_once(self):
         expr = self
 
-        while True:
-            # Lower this node
-            out = expr._lower()
-            if out is None:
-                out = expr
-            if not isinstance(out, Expr):
-                return out
-            if out._name != expr._name:
-                expr = out
-                continue
+        # Lower this node
+        out = expr._lower()
+        if out is None:
+            out = expr
+        if not isinstance(out, Expr):
+            return out
 
-            # Lower all children
-            new_operands = []
-            changed = False
-            for operand in expr.operands:
-                if isinstance(operand, Expr):
-                    new = operand.lower()
-                    if new._name != operand._name:
-                        changed = True
-                else:
-                    new = operand
-                new_operands.append(new)
-
-            if changed:
-                expr = type(expr)(*new_operands)
-                continue
+        # Lower all children
+        new_operands = []
+        changed = False
+        for operand in expr.operands:
+            if isinstance(operand, Expr):
+                new = operand.lower_once()
+                if new._name != operand._name:
+                    changed = True
             else:
-                break
+                new = operand
+            new_operands.append(new)
+
+        if changed:
+            expr = type(expr)(*new_operands)
 
         return expr
 
@@ -1770,12 +1763,18 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     simplify
     optimize_blockwise_fusion
     """
-    expr = expr.simplify().lower()
+
+    result = expr
+    while True:
+        out = result.simplify().lower_once()
+        if out._name == result._name:
+            break
+        result = out
 
     if fuse:
-        expr = optimize_blockwise_fusion(expr)
+        result = optimize_blockwise_fusion(result)
 
-    return expr
+    return result
 
 
 def is_broadcastable(dfs, s):
