@@ -1197,11 +1197,6 @@ class Drop(Elemwise):
     operation = staticmethod(drop_by_shallow_copy)
 
 
-class SortIndexBlockwise(Blockwise):
-    _parameters = ["frame"]
-    operation = M.sort_index
-
-
 class Assign(Elemwise):
     """Column Assignment"""
 

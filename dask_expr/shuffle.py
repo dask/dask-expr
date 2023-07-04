@@ -17,16 +17,9 @@ from dask.dataframe.shuffle import (
     shuffle_group_2,
     shuffle_group_get,
 )
-from dask.utils import digit, get_default_shuffle_method, insert
+from dask.utils import M, digit, get_default_shuffle_method, insert
 
-from dask_expr.expr import (
-    Assign,
-    Blockwise,
-    Expr,
-    PartitionsFiltered,
-    Projection,
-    SortIndexBlockwise,
-)
+from dask_expr.expr import Assign, Blockwise, Expr, PartitionsFiltered, Projection
 from dask_expr.reductions import (
     All,
     Any,
@@ -712,3 +705,8 @@ class _SetIndexPostSeries(Blockwise):
         df2 = df.set_index("_index", drop=True)
         df2.index.name = index_name
         return df2
+
+
+class SortIndexBlockwise(Blockwise):
+    _parameters = ["frame"]
+    operation = M.sort_index
