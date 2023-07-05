@@ -280,7 +280,6 @@ class Expr:
     def lower_once(self):
         expr = self
 
-        changed = False
         # Lower this node
         out = expr._lower()
         if out is None:
