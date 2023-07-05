@@ -663,7 +663,7 @@ class SetIndex(Expr):
     def _simplify_down(self):
         if self.user_divisions is None:
             divisions = self._divisions()
-            presorted = _calculate_divisions(self.frame, self.other, self.ascending)
+            presorted = _calculate_divisions(self.frame, self.other, self.ascending)[3]
 
             if presorted:
                 index_set = SetIndexBlockwise(
