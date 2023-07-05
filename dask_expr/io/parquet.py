@@ -417,6 +417,10 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
 
     @property
     def engine(self):
+        if dask.config.get("dataframe.backend", "pandas") == "cudf":
+            from dask_cudf.io.parquet import CudfEngine
+
+            return CudfEngine
         return get_engine("pyarrow")
 
     @property

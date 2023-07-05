@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import functools
 import operator
 import pickle
 import re
@@ -16,11 +19,27 @@ from dask_expr.expr import are_co_aligned
 from dask_expr.reductions import Len
 
 
-@pytest.fixture
-def pdf():
+try:
+    import cudf
+except ImportError:
+    cudf = None
+
+
+@functools.cache
+def _pdf():
     pdf = pd.DataFrame({"x": range(100)})
     pdf["y"] = pdf.x * 10.0
-    yield pdf
+    return pdf
+
+
+@functools.cache
+def _gdf():
+    return None if cudf is None else cudf.from_pandas(_pdf())
+
+
+@pytest.fixture
+def pdf():
+    yield _pdf().copy()
 
 
 @pytest.fixture
@@ -28,6 +47,29 @@ def df(pdf):
     yield from_pandas(pdf, npartitions=10)
 
 
+def cpu_gpu(data: dict | None = None, npartitions: int = 10):
+    """DataFrame parameterization for cpu and gpu backed data"""
+    if data is None:
+        pdf, gdf = _pdf().copy(), _gdf().copy()
+    else:
+        pdf = pd.DataFrame(data)
+        gdf = None if cudf is None else cudf.from_pandas(pdf)
+
+    return pytest.mark.parametrize(
+        "pdf,df",
+        [
+            pytest.param(pdf, from_pandas(pdf, npartitions), id="pandas"),
+            pytest.param(
+                gdf,
+                from_pandas(gdf, npartitions) if cudf else None,
+                id="cudf",
+                marks=pytest.mark.skipif(cudf is None, reason="cudf not found"),
+            ),
+        ],
+    )
+
+
+@cpu_gpu()
 def test_del(pdf, df):
     pdf = pdf.copy()
 
@@ -37,6 +79,7 @@ def test_del(pdf, df):
     assert_eq(pdf, df)
 
 
+@cpu_gpu()
 def test_setitem(pdf, df):
     pdf = pdf.copy()
     pdf["z"] = pdf.x + pdf.y
@@ -87,6 +130,7 @@ def test_meta_blockwise():
     assert set(cc.columns) == {"x", "y", "z"}
 
 
+@cpu_gpu()
 def test_dask(pdf, df):
     assert (df.x + df.y).npartitions == 10
     z = (df.x + df.y).sum()
@@ -168,6 +212,7 @@ def test_memory_usage(pdf):
         df.index.memory_usage(index=True)
 
 
+@cpu_gpu()
 @pytest.mark.parametrize("func", [M.nlargest, M.nsmallest])
 def test_nlargest_nsmallest(df, pdf, func):
     assert_eq(func(df, n=5, columns="x"), func(pdf, n=5, columns="x"))
@@ -176,6 +221,7 @@ def test_nlargest_nsmallest(df, pdf, func):
         func(df.x, n=5, columns="foo")
 
 
+@cpu_gpu()
 @pytest.mark.parametrize(
     "func",
     [
@@ -232,6 +278,7 @@ def test_unary_operators(func):
     assert_eq(func(pdf), func(df))
 
 
+@cpu_gpu()
 @pytest.mark.parametrize(
     "func",
     [
@@ -300,6 +347,7 @@ def test_rename_axis(pdf):
     assert_eq(df.x.rename_axis(index="dummy"), pdf.x.rename_axis(index="dummy"))
 
 
+@cpu_gpu()
 def test_isin(df, pdf):
     values = [1, 2]
     assert_eq(pdf.isin(values), df.isin(values))
@@ -341,6 +389,7 @@ def test_rename_traverse_filter(df):
     assert str(result) == str(expected)
 
 
+@cpu_gpu()
 def test_columns_traverse_filters(pdf, df):
     result = df[df.x > 5].y.simplify()
     expected = df.y[df.x > 5]
@@ -377,6 +426,7 @@ def test_drop_duplicates_subset_simplify(pdf, subset, projection):
     assert str(result) == str(expected)
 
 
+@cpu_gpu()
 def test_broadcast(pdf, df):
     assert_eq(
         df + df.sum(),
@@ -388,6 +438,7 @@ def test_broadcast(pdf, df):
     )
 
 
+@cpu_gpu()
 def test_persist(pdf, df):
     a = df + 2
     b = a.persist()
@@ -400,11 +451,13 @@ def test_persist(pdf, df):
     assert_eq(b.y.sum(), (pdf + 2).y.sum())
 
 
+@cpu_gpu()
 def test_index(pdf, df):
     assert_eq(df.index, pdf.index)
     assert_eq(df.x.index, pdf.x.index)
 
 
+@cpu_gpu()
 @pytest.mark.parametrize("drop", [True, False])
 def test_reset_index(pdf, df, drop):
     assert_eq(df.reset_index(drop=drop), pdf.reset_index(drop=drop), check_index=False)
@@ -413,6 +466,7 @@ def test_reset_index(pdf, df, drop):
     )
 
 
+@cpu_gpu()
 def test_head(pdf, df):
     assert_eq(df.head(compute=False), pdf.head())
     assert_eq(df.head(compute=False, n=7), pdf.head(n=7))
@@ -436,6 +490,7 @@ def test_head_head(df):
     assert a.optimize()._name == b.optimize()._name
 
 
+@cpu_gpu()
 def test_tail(pdf, df):
     assert_eq(df.tail(compute=False), pdf.tail())
     assert_eq(df.tail(compute=False, n=7), pdf.tail(n=7))
@@ -531,6 +586,7 @@ def test_from_pandas(pdf):
     assert "pandas" in df._name
 
 
+@cpu_gpu()
 def test_copy(pdf, df):
     original = df.copy()
     columns = tuple(original.columns)
@@ -541,6 +597,7 @@ def test_copy(pdf, df):
     assert "z" not in original.columns
 
 
+@cpu_gpu()
 def test_partitions(pdf, df):
     assert_eq(df.partitions[0], pdf.iloc[:10])
     assert_eq(df.partitions[1], pdf.iloc[10:20])
@@ -566,6 +623,7 @@ def test_column_getattr(df):
         df.foo
 
 
+@cpu_gpu()
 def test_serialization(pdf, df):
     before = pickle.dumps(df)
 
@@ -711,6 +769,7 @@ def test_repartition_no_op(df):
     assert result._name == df._name
 
 
+@cpu_gpu()
 def test_len(df, pdf):
     df2 = df[["x"]] + 1
     assert len(df2) == len(pdf)
@@ -724,6 +783,7 @@ def test_len(df, pdf):
     assert isinstance(expr.Lengths(df2.expr).optimize(), expr.Literal)
 
 
+@cpu_gpu()
 def test_astype_simplify(df, pdf):
     q = df.astype({"x": "float64", "y": "float64"})["x"]
     result = q.simplify()
@@ -813,6 +873,7 @@ def test_dir(df):
     assert "sum" in dir(df.index)
 
 
+@cpu_gpu()
 @pytest.mark.parametrize(
     "func, args",
     [
@@ -941,6 +1002,7 @@ def test_assign_non_series_inputs(df, pdf):
     assert_eq(df.assign(a=lambda x: x.x * 2).a, pdf.assign(a=lambda x: x.x * 2).a)
 
 
+@cpu_gpu()
 def test_are_co_aligned(pdf, df):
     df2 = df.reset_index()
     assert are_co_aligned(df.expr, df2.expr)
