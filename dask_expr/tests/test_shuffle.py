@@ -136,3 +136,10 @@ def test_set_index(df, pdf):
 
     with pytest.raises(TypeError, match="can't be of type DataFrame"):
         df.set_index(df)
+
+
+def test_set_index_pre_sorted(pdf):
+    pdf = pdf.sort_values(by="y", ignore_index=True)
+    df = from_pandas(pdf, npartitions=10)
+    assert_eq(df.set_index("y"), pdf.set_index("y"))
+    assert_eq(df.set_index(df.y), pdf.set_index(pdf.y))
