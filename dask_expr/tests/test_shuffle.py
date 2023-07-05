@@ -134,5 +134,10 @@ def test_set_index(df, pdf):
     assert_eq(df.set_index("x"), pdf.set_index("x"))
     assert_eq(df.set_index(df.x), pdf.set_index(pdf.x))
 
+    q = df.set_index("x").simplify()
+    assert not all(div is None for div in q.divisions)
+    q = df.set_index(df.x).simplify()
+    assert not all(div is None for div in q.divisions)
+
     with pytest.raises(TypeError, match="can't be of type DataFrame"):
         df.set_index(df)

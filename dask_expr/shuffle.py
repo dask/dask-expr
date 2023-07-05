@@ -671,10 +671,15 @@ class SetPartition(SetIndex):
         )
 
         if isinstance(self._other, Expr):
-            index_set = _SetIndexPostSeries(shuffled, self.other._meta.name)
+            index_set = _SetIndexPostSeries(
+                shuffled, self.other._meta.name, new_divisions=self._divisions()
+            )
         else:
             index_set = _SetIndexPostScalar(
-                shuffled, self.other._meta.name, drop=self.drop
+                shuffled,
+                self.other._meta.name,
+                drop=self.drop,
+                new_divisions=self._divisions(),
             )
 
         return SortIndexBlockwise(index_set)
@@ -691,17 +696,23 @@ class _SetPartitionsPreSetIndex(Blockwise):
 
 
 class _SetIndexPostScalar(Blockwise):
-    _parameters = ["frame", "index_name", "drop"]
+    _parameters = ["frame", "index_name", "drop", "new_divisions"]
 
-    def operation(self, df, index_name, drop):
+    def _divisions(self):
+        return self.new_divisions
+
+    def operation(self, df, index_name, drop, new_divisions):
         df2 = df.set_index(index_name, drop=drop)
         return df2
 
 
 class _SetIndexPostSeries(Blockwise):
-    _parameters = ["frame", "index_name"]
+    _parameters = ["frame", "index_name", "new_divisions"]
 
-    def operation(self, df, index_name):
+    def _divisions(self):
+        return self.new_divisions
+
+    def operation(self, df, index_name, new_divisions):
         df2 = df.set_index("_index", drop=True)
         df2.index.name = index_name
         return df2
