@@ -782,6 +782,9 @@ def test_find_operations(df):
     assert len(adds) == 1
     assert next(iter(adds))._name == df2._name
 
+    both = list(df2.find_operations((expr.Add, expr.Filter)))
+    assert len(both) == 2
+
 
 @pytest.mark.parametrize("subset", ["x", ["x"]])
 def test_dropna_simplify(pdf, subset):

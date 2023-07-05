@@ -698,7 +698,7 @@ class Expr:
 
             yield node
 
-    def find_operations(self, operation: type) -> Generator[Expr]:
+    def find_operations(self, operation: type | tuple[type]) -> Generator[Expr]:
         """Search the expression graph for a specific operation type
 
         Parameters
@@ -712,7 +712,11 @@ class Expr:
             Generator of `operation` instances. Ordering corresponds
             to a depth-first search of the expression graph.
         """
-        assert issubclass(operation, Expr), "`operation` must be `Expr` subclass"
+        assert (
+            isinstance(operation, tuple)
+            and all(issubclass(e, Expr) for e in operation)
+            or issubclass(operation, Expr)
+        ), "`operation` must be`Expr` subclass)"
         return (expr for expr in self.walk() if isinstance(expr, operation))
 
 
