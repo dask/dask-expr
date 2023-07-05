@@ -676,6 +676,28 @@ class Expr:
         graphviz_to_file(g, filename, format)
         return g
 
+    def walk(self) -> Generator[Expr]:
+        """Iterate through all expressions in the tree
+
+        Returns
+        -------
+        nodes
+            Generator of Expr instances in the graph.
+            Ordering is a depth-first search of the expression tree
+        """
+        stack = [self]
+        seen = set()
+        while stack:
+            node = stack.pop()
+            if node._name in seen:
+                continue
+            seen.add(node._name)
+
+            for dep in node.dependencies():
+                stack.append(dep)
+
+            yield node
+
     def find_operations(self, operation: type) -> Generator[Expr]:
         """Search the expression graph for a specific operation type
 
@@ -690,21 +712,8 @@ class Expr:
             Generator of `operation` instances. Ordering corresponds
             to a depth-first search of the expression graph.
         """
-
         assert issubclass(operation, Expr), "`operation` must be `Expr` subclass"
-        stack = [self]
-        seen = set()
-        while stack:
-            node = stack.pop()
-            if node._name in seen:
-                continue
-            seen.add(node._name)
-
-            for dep in node.dependencies():
-                stack.append(dep)
-
-            if isinstance(node, operation):
-                yield node
+        return (expr for expr in self.walk() if isinstance(expr, operation))
 
 
 class Literal(Expr):

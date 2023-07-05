@@ -759,6 +759,16 @@ def test_unique(df, pdf):
     assert_eq(df.index.unique(), pd.Index(pdf.index.unique()))
 
 
+def test_walk(df):
+    df2 = df[df["x"] > 1][["y"]] + 1
+    assert all(isinstance(ex, expr.Expr) for ex in df2.walk())
+    exprs = set(df2.walk())
+    assert df.expr in exprs
+    assert df["x"].expr in exprs
+    assert (df["x"] > 1).expr in exprs
+    assert 1 not in exprs
+
+
 def test_find_operations(df):
     df2 = df[df["x"] > 1][["y"]] + 1
 
