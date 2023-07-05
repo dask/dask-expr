@@ -3,7 +3,7 @@ import pytest
 from dask.dataframe.utils import assert_eq
 
 from dask_expr import from_pandas
-from dask_expr.expr import Blockwise
+from dask_expr.expr import Blockwise, Expr
 from dask_expr.io import FromPandas
 
 
@@ -145,16 +145,21 @@ def test_set_index_pre_sorted(pdf):
     df = from_pandas(pdf, npartitions=10)
     q = df.set_index("y")
     assert_eq(q, pdf.set_index("y"))
-    check_expression_tree_is_blockwise(q.simplify().expr)
+    result = q.simplify().expr
+    assert (
+        len(
+            set(result.find_operations(Expr))
+            - set(result.find_operations((Blockwise, FromPandas)))
+        )
+        == 0
+    )
     q = df.set_index(df.y)
     assert_eq(q, pdf.set_index(pdf.y))
-    check_expression_tree_is_blockwise(q.simplify().expr)
-
-
-def check_expression_tree_is_blockwise(expr):
-    stack = [expr]
-
-    while stack:
-        expr = stack.pop()
-        assert isinstance(expr, (Blockwise, FromPandas))
-        stack.extend(expr.dependencies())
+    result = q.simplify().expr
+    assert (
+        len(
+            set(result.find_operations(Expr))
+            - set(result.find_operations((Blockwise, FromPandas)))
+        )
+        == 0
+    )
