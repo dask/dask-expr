@@ -280,6 +280,7 @@ class Expr:
     def lower_once(self):
         expr = self
 
+        changed = False
         # Lower this node
         out = expr._lower()
         if out is None:
@@ -290,7 +291,7 @@ class Expr:
         # Lower all children
         new_operands = []
         changed = False
-        for operand in expr.operands:
+        for operand in out.operands:
             if isinstance(operand, Expr):
                 new = operand.lower_once()
                 if new._name != operand._name:
@@ -300,9 +301,9 @@ class Expr:
             new_operands.append(new)
 
         if changed:
-            expr = type(expr)(*new_operands)
+            out = type(out)(*new_operands)
 
-        return expr
+        return out
 
     def _lower(self):
         return
