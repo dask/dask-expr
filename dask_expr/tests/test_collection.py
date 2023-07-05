@@ -18,7 +18,6 @@ from dask_expr.datasets import timeseries
 from dask_expr.expr import are_co_aligned
 from dask_expr.reductions import Len
 
-
 try:
     import cudf
 except ImportError:
@@ -49,6 +48,7 @@ def df(pdf):
 
 def cpu_gpu(data: dict | None = None, npartitions: int = 10):
     """DataFrame parameterization for cpu and gpu backed data"""
+
     if data is None:
         pdf, gdf = _pdf().copy(), _gdf().copy()
     else:
