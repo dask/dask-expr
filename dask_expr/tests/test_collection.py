@@ -157,7 +157,7 @@ def test_dropna(pdf):
 def test_fillna():
     pdf = pd.DataFrame({"x": [1, 2, None, None, 5, 6]})
     df = from_pandas(pdf, npartitions=2)
-    actual = df.fillna(value=100).compute()
+    actual = df.fillna(value=100)
     expected = pdf.fillna(value=100)
     assert_eq(actual, expected)
 
