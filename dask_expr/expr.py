@@ -277,6 +277,36 @@ class Expr:
     def _simplify_up(self, parent):
         return
 
+    def lower_once(self):
+        expr = self
+
+        # Lower this node
+        out = expr._lower()
+        if out is None:
+            out = expr
+        if not isinstance(out, Expr):
+            return out
+
+        # Lower all children
+        new_operands = []
+        changed = False
+        for operand in expr.operands:
+            if isinstance(operand, Expr):
+                new = operand.lower_once()
+                if new._name != operand._name:
+                    changed = True
+            else:
+                new = operand
+            new_operands.append(new)
+
+        if changed:
+            expr = type(expr)(*new_operands)
+
+        return expr
+
+    def _lower(self):
+        return
+
     def optimize(self, **kwargs):
         return optimize(self, **kwargs)
 
@@ -441,6 +471,11 @@ class Expr:
 
     def fillna(self, value=None):
         return Fillna(self, value=value)
+
+    def rename_axis(
+        self, mapper=no_default, index=no_default, columns=no_default, axis=0
+    ):
+        return RenameAxis(self, mapper=mapper, index=index, columns=columns, axis=axis)
 
     def align(self, other, join="outer", fill_value=None):
         from dask_expr.collection import new_collection
@@ -679,7 +714,29 @@ class Expr:
         graphviz_to_file(g, filename, format)
         return g
 
-    def find_operations(self, operation: type) -> Generator[Expr]:
+    def walk(self) -> Generator[Expr]:
+        """Iterate through all expressions in the tree
+
+        Returns
+        -------
+        nodes
+            Generator of Expr instances in the graph.
+            Ordering is a depth-first search of the expression tree
+        """
+        stack = [self]
+        seen = set()
+        while stack:
+            node = stack.pop()
+            if node._name in seen:
+                continue
+            seen.add(node._name)
+
+            for dep in node.dependencies():
+                stack.append(dep)
+
+            yield node
+
+    def find_operations(self, operation: type | tuple[type]) -> Generator[Expr]:
         """Search the expression graph for a specific operation type
 
         Parameters
@@ -693,21 +750,12 @@ class Expr:
             Generator of `operation` instances. Ordering corresponds
             to a depth-first search of the expression graph.
         """
-
-        assert issubclass(operation, Expr), "`operation` must be `Expr` subclass"
-        stack = [self]
-        seen = set()
-        while stack:
-            node = stack.pop()
-            if node._name in seen:
-                continue
-            seen.add(node._name)
-
-            for dep in node.dependencies():
-                stack.append(dep)
-
-            if isinstance(node, operation):
-                yield node
+        assert (
+            isinstance(operation, tuple)
+            and all(issubclass(e, Expr) for e in operation)
+            or issubclass(operation, Expr)
+        ), "`operation` must be`Expr` subclass)"
+        return (expr for expr in self.walk() if isinstance(expr, operation))
 
 
 class Literal(Expr):
@@ -1135,6 +1183,19 @@ class Abs(Elemwise):
     _projection_passthrough = True
     _parameters = ["frame"]
     operation = M.abs
+
+
+class RenameAxis(Elemwise):
+    _projection_passthrough = True
+    _parameters = ["frame", "mapper", "index", "columns", "axis"]
+    _defaults = {
+        "mapper": no_default,
+        "index": no_default,
+        "columns": no_default,
+        "axis": 0,
+    }
+    _keyword_only = ["mapper", "index", "columns", "axis"]
+    operation = M.rename_axis
 
 
 class Apply(Elemwise):
@@ -1742,12 +1803,18 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     simplify
     optimize_blockwise_fusion
     """
-    expr = expr.simplify()
+
+    result = expr
+    while True:
+        out = result.simplify().lower_once()
+        if out._name == result._name:
+            break
+        result = out
 
     if fuse:
-        expr = optimize_blockwise_fusion(expr)
+        result = optimize_blockwise_fusion(result)
 
-    return expr
+    return result
 
 
 def is_broadcastable(dfs, s):
