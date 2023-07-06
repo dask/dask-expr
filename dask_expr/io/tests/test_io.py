@@ -3,12 +3,30 @@ import os
 import dask.dataframe as dd
 import pandas as pd
 import pytest
+from dask import config
 from dask.dataframe.utils import assert_eq
 
 from dask_expr import from_dask_dataframe, from_pandas, optimize, read_csv, read_parquet
 from dask_expr.expr import Expr, Lengths, Literal
 from dask_expr.io import ReadParquet
 from dask_expr.reductions import Len
+
+try:
+    import cudf
+except ImportError:
+    cudf = None
+
+
+@pytest.fixture(
+    params=[
+        "pandas",
+        pytest.param(
+            "cudf", marks=pytest.mark.skipif(cudf is None, reason="cudf not found.")
+        ),
+    ]
+)
+def backend(request):
+    yield request.param
 
 
 def _make_file(dir, format="parquet", df=None):
@@ -206,8 +224,9 @@ def test_from_pandas_immutable():
     assert_eq(df, expected)
 
 
-def test_parquet_complex_filters(tmpdir):
-    df = read_parquet(_make_file(tmpdir))
+def test_parquet_complex_filters(tmpdir, backend):
+    with config.set({"dataframe.backend": backend}):
+        df = read_parquet(_make_file(tmpdir))
     pdf = df.compute()
     got = df["a"][df["b"] > df["b"].mean()]
     expect = pdf["a"][pdf["b"] > pdf["b"].mean()]

@@ -391,6 +391,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         "aggregate_files",
         "parquet_file_extension",
         "filesystem",
+        "engine",
         "kwargs",
         "_partitions",
         "_series",
@@ -409,6 +410,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         "aggregate_files": None,
         "parquet_file_extension": (".parq", ".parquet", ".pq"),
         "filesystem": "fsspec",
+        "engine": "pyarrow",
         "kwargs": None,
         "_partitions": None,
         "_series": False,
@@ -417,11 +419,10 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
 
     @property
     def engine(self):
-        if dask.config.get("dataframe.backend", "pandas") == "cudf":
-            from dask_cudf.io.parquet import CudfEngine
-
-            return CudfEngine
-        return get_engine("pyarrow")
+        _engine = self.operand("engine")
+        if isinstance(_engine, str):
+            return get_engine(_engine)
+        return _engine
 
     @property
     def columns(self):
