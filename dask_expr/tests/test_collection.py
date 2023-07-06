@@ -195,6 +195,14 @@ def test_dropna(bdf):
     assert_eq(df.y.dropna(), pdf.y.dropna())
 
 
+def test_fillna(lib):
+    pdf = lib.DataFrame({"x": [1, 2, None, None, 5, 6]})
+    df = from_pandas(pdf, npartitions=2)
+    actual = df.fillna(value=100)
+    expected = pdf.fillna(value=100)
+    assert_eq(actual, expected)
+
+
 def test_memory_usage(bdf):
     # Results are not equal with RangeIndex because pandas has one RangeIndex while
     # we have one RangeIndex per partition
@@ -1040,3 +1048,10 @@ def test_astype_categories(df, backend):
     result = df.astype("category")
     assert_eq(result.x._meta.cat.categories, pd.Index([UNKNOWN_CATEGORIES]))
     assert_eq(result.y._meta.cat.categories, pd.Index([UNKNOWN_CATEGORIES]))
+
+
+def test_drop_simplify(df):
+    q = df.drop(columns=["x"])[["y"]]
+    result = q.simplify()
+    expected = df[["y"]]
+    assert result._name == expected._name

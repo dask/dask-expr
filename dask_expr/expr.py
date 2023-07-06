@@ -469,6 +469,9 @@ class Expr:
     def replace(self, to_replace=None, value=no_default, regex=False):
         return Replace(self, to_replace=to_replace, value=value, regex=regex)
 
+    def fillna(self, value=None):
+        return Fillna(self, value=value)
+
     def rename_axis(
         self, mapper=no_default, index=no_default, columns=no_default, axis=0
     ):
@@ -1082,6 +1085,12 @@ class Elemwise(Blockwise):
     pass
 
 
+class Fillna(Elemwise):
+    _parameters = ["frame", "value"]
+    _defaults = {"value": None}
+    operation = M.fillna
+
+
 class Isin(Elemwise):
     _projection_passthrough = True
     _parameters = ["frame", "values"]
@@ -1256,6 +1265,12 @@ class Drop(Elemwise):
     _parameters = ["frame", "columns", "errors"]
     _defaults = {"errors": "raise"}
     operation = staticmethod(drop_by_shallow_copy)
+
+    def _simplify_down(self):
+        columns = [
+            col for col in self.frame.columns if col not in self.operand("columns")
+        ]
+        return Projection(self.frame, columns)
 
 
 class Assign(Elemwise):
