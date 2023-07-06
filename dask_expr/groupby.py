@@ -11,13 +11,15 @@ from dask.dataframe.groupby import (
     _groupby_aggregate,
     _groupby_apply_funcs,
     _normalize_spec,
+    _value_counts,
+    _value_counts_aggregate,
     _var_agg,
     _var_chunk,
     _var_combine,
 )
 from dask.utils import M, is_index_like
 
-from dask_expr.collection import DataFrame, new_collection
+from dask_expr.collection import DataFrame, Series, new_collection
 from dask_expr.expr import MapPartitions
 from dask_expr.reductions import ApplyConcatApply, Reduction
 
@@ -259,6 +261,11 @@ class Size(SingleAggregation):
     groupby_aggregate = M.sum
 
 
+class ValueCounts(SingleAggregation):
+    groupby_chunk = staticmethod(_value_counts)
+    groupby_aggregate = staticmethod(_value_counts_aggregate)
+
+
 class Var(Reduction):
     _parameters = ["frame", "by", "ddof", "numeric_only"]
     reduction_aggregate = _var_agg
@@ -286,6 +293,9 @@ class Var(Reduction):
     @functools.cached_property
     def combine_kwargs(self):
         return {"levels": self.levels}
+
+    def _divisions(self):
+        return (None, None)
 
 
 class Std(SingleAggregation):
@@ -353,6 +363,16 @@ class GroupBy:
         dropna=None,
         slice=None,
     ):
+        if (
+            isinstance(by, Series)
+            and by.name in obj.columns
+            and by._name == obj[by.name]._name
+        ):
+            by = by.name
+        elif isinstance(by, Series):
+            # TODO: Implement this
+            raise ValueError("by must be in the DataFrames columns.")
+
         by_ = by if isinstance(by, (tuple, list)) else [by]
         self._slice = slice
         # Check if we can project columns
@@ -472,6 +492,9 @@ class GroupBy:
 
     def size(self, **kwargs):
         return self._single_agg(Size, **kwargs)
+
+    def value_counts(self, **kwargs):
+        return self._single_agg(ValueCounts, **kwargs)
 
     def var(self, ddof=1, numeric_only=True):
         if not numeric_only:

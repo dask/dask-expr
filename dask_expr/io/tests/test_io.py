@@ -198,6 +198,14 @@ def test_from_pandas(sort):
     assert_eq(df, pdf)
 
 
+def test_from_pandas_immutable():
+    pdf = pd.DataFrame({"x": [1, 2, 3, 4]})
+    expected = pdf.copy()
+    df = from_pandas(pdf)
+    pdf["z"] = 100
+    assert_eq(df, expected)
+
+
 def test_parquet_complex_filters(tmpdir):
     df = read_parquet(_make_file(tmpdir))
     pdf = df.compute()
@@ -219,6 +227,14 @@ def test_parquet_len(tmpdir):
 
     assert isinstance(Len(s.expr).optimize(), Literal)
     assert isinstance(Lengths(s.expr).optimize(), Literal)
+
+
+def test_parquet_len_filter(tmpdir):
+    df = read_parquet(_make_file(tmpdir))
+    expr = Len(df[df.c > 0].expr)
+    result = expr.simplify()
+    for rp in result.find_operations(ReadParquet):
+        assert rp.operand("columns") == ["c"] or rp.operand("columns") == []
 
 
 @pytest.mark.parametrize("optimize", [True, False])

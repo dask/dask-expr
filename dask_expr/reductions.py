@@ -1,6 +1,6 @@
 import pandas as pd
 import toolz
-from dask.dataframe import methods
+from dask.dataframe import hyperloglog, methods
 from dask.dataframe.core import (
     _concat,
     idxmaxmin_agg,
@@ -13,7 +13,7 @@ from dask.dataframe.core import (
 )
 from dask.utils import M, apply
 
-from dask_expr.expr import Elemwise, Expr, Projection
+from dask_expr.expr import Elemwise, Expr, Index, Projection
 
 
 class ApplyConcatApply(Expr):
@@ -177,10 +177,7 @@ class DropDuplicates(Unique):
 
     def _simplify_up(self, parent):
         if self.subset is not None:
-            columns = parent.columns
-            if not isinstance(columns, pd.Index):
-                columns = [columns]
-            columns = set(columns).union(self.subset)
+            columns = set(parent.columns).union(self.subset)
             if columns == set(self.frame.columns):
                 # Don't add unnecessary Projections, protects against loops
                 return
@@ -240,7 +237,9 @@ class Reduction(ApplyConcatApply):
         return toolz.first, ()
 
     def _divisions(self):
-        return [None, None]
+        if self.ndim == 0:
+            return (None, None)
+        return (min(self.frame.columns), max(self.frame.columns))
 
     def __str__(self):
         params = {param: self.operand(param) for param in self._parameters[1:]}
@@ -346,9 +345,24 @@ class Len(Reduction):
     reduction_aggregate = sum
 
     def _simplify_down(self):
-        if isinstance(self.frame, Elemwise):
+        from dask_expr.io.io import IO
+
+        # We introduce Index nodes sometimes.  We special case around them.
+        if isinstance(self.frame, Index) and isinstance(self.frame.frame, Elemwise):
+            return Len(self.frame.frame)
+
+        # Pass through Elemwises, unless we just introduced an Index
+        if isinstance(self.frame, Elemwise) and not isinstance(self.frame, Index):
             child = max(self.frame.dependencies(), key=lambda expr: expr.npartitions)
             return Len(child)
+
+        # Let the child handle it.  They often know best
+        if isinstance(self.frame, IO):
+            return self
+
+        # Drop all of the columns, just pass through the index
+        if len(self.frame.columns):
+            return Len(self.frame.index)
 
     def _simplify_up(self, parent):
         return
@@ -441,6 +455,29 @@ class Mode(ApplyConcatApply):
         return {"dropna": self.dropna}
 
 
+class NuniqueApprox(Reduction):
+    _parameters = ["frame", "b"]
+    reduction_chunk = hyperloglog.compute_hll_array
+    reduction_combine = hyperloglog.reduce_state
+    reduction_aggregate = hyperloglog.estimate_count
+
+    @property
+    def _meta(self):
+        return 1.0
+
+    @property
+    def chunk_kwargs(self):
+        return {"b": self.b}
+
+    @property
+    def combine_kwargs(self):
+        return self.chunk_kwargs
+
+    @property
+    def aggregate_kwargs(self):
+        return self.chunk_kwargs
+
+
 class ReductionConstantDim(Reduction):
     """
     Some reductions reduce the number of rows in your object but keep the original
@@ -457,6 +494,10 @@ class ReductionConstantDim(Reduction):
         func = cls.reduction_combine or cls.reduction_aggregate or cls.reduction_chunk
         df = _concat(inputs)
         return func(df, **kwargs)
+
+    def _divisions(self):
+        # TODO: We can do better in some cases
+        return (None, None)
 
 
 class NLargest(ReductionConstantDim):
@@ -518,6 +559,10 @@ class ValueCounts(ReductionConstantDim):
 class MemoryUsage(Reduction):
     reduction_chunk = M.memory_usage
     reduction_aggregate = M.sum
+
+    def _divisions(self):
+        # TODO: We can do better, but not high priority
+        return (None, None)
 
 
 class MemoryUsageIndex(MemoryUsage):

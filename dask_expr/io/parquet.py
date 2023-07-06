@@ -27,6 +27,7 @@ from dask.delayed import delayed
 from dask.utils import apply, natural_sort_key
 from fsspec.utils import stringify_path
 
+from dask_expr._util import _convert_to_list
 from dask_expr.expr import (
     EQ,
     GE,
@@ -38,6 +39,7 @@ from dask_expr.expr import (
     Blockwise,
     Expr,
     Filter,
+    Index,
     Lengths,
     Literal,
     Or,
@@ -421,17 +423,22 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
     def columns(self):
         columns_operand = self.operand("columns")
         if columns_operand is None:
-            return self._meta.columns
+            return list(self._meta.columns)
         else:
-            import pandas as pd
-
-            return pd.Index(_list_columns(columns_operand))
+            return _convert_to_list(columns_operand)
 
     def _simplify_up(self, parent):
+        if isinstance(parent, Index):
+            # Column projection
+            operands = list(self.operands)
+            operands[self._parameters.index("columns")] = []
+            operands[self._parameters.index("_series")] = False
+            return ReadParquet(*operands)
+
         if isinstance(parent, Projection):
             # Column projection
             operands = list(self.operands)
-            operands[self._parameters.index("columns")] = _list_columns(
+            operands[self._parameters.index("columns")] = _convert_to_list(
                 parent.operand("columns")
             )
             if isinstance(parent.operand("columns"), (str, int)):
@@ -548,7 +555,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
     def _meta(self):
         meta = self._dataset_info["meta"]
         if self._series:
-            column = _list_columns(self.operand("columns"))[0]
+            column = _convert_to_list(self.operand("columns"))[0]
             return meta[column]
         return meta
 
@@ -638,15 +645,6 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
 #
 # Helper functions
 #
-
-
-def _list_columns(columns):
-    # Simple utility to convert columns to list
-    if isinstance(columns, (str, int)):
-        columns = [columns]
-    elif isinstance(columns, tuple):
-        columns = list(columns)
-    return columns
 
 
 def _align_statistics(parts, statistics):

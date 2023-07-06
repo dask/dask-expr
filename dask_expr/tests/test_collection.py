@@ -7,11 +7,12 @@ import numpy as np
 import pandas as pd
 import pytest
 from dask.dataframe._compat import PANDAS_GT_210
-from dask.dataframe.utils import assert_eq
+from dask.dataframe.utils import UNKNOWN_CATEGORIES, assert_eq
 from dask.utils import M
 
 from dask_expr import expr, from_pandas, optimize
 from dask_expr.datasets import timeseries
+from dask_expr.expr import are_co_aligned
 from dask_expr.reductions import Len
 
 
@@ -51,6 +52,15 @@ def test_explode():
     df = from_pandas(pdf)
     assert_eq(pdf.explode(column="a"), df.explode(column="a"))
     assert_eq(pdf.a.explode(), df.a.explode())
+
+
+def test_explode_simplify(pdf):
+    pdf["z"] = 1
+    df = from_pandas(pdf)
+    q = df.explode(column="x")["y"]
+    result = optimize(q, fuse=False)
+    expected = df[["x", "y"]].explode(column="x")["y"]
+    assert result._name == expected._name
 
 
 def test_meta_divisions_name():
@@ -104,8 +114,12 @@ def test_dask(pdf, df):
     ],
 )
 def test_reductions(func, pdf, df):
-    assert_eq(func(df), func(pdf))
-    assert_eq(func(df.x), func(pdf.x))
+    result = func(df)
+    assert result.known_divisions
+    assert_eq(result, func(pdf))
+    result = func(df.x)
+    assert not result.known_divisions
+    assert_eq(result, func(pdf.x))
     # check_dtype False because sub-selection of columns that is pushed through
     # is not reflected in the meta calculation
     assert_eq(func(df)["x"], func(pdf)["x"], check_dtype=False)
@@ -289,11 +303,20 @@ def test_to_timestamp(pdf, how):
         lambda df: df.combine_first(df),
         lambda df: df.x.combine_first(df.y),
         lambda df: df.x.to_frame(),
+        lambda df: df.drop(columns="x"),
         lambda df: df.x.index.to_frame(),
+        lambda df: df.eval("z=x+y"),
+        lambda df: df.select_dtypes(include="integer"),
     ],
 )
 def test_blockwise(func, pdf, df):
     assert_eq(func(pdf), func(df))
+
+
+def test_isin(df, pdf):
+    values = [1, 2]
+    assert_eq(pdf.isin(values), df.isin(values))
+    assert_eq(pdf.x.isin(values), df.x.isin(values))
 
 
 def test_round(pdf):
@@ -313,37 +336,55 @@ def test_repr(df):
     assert "sum(skipna=False)" in s
 
 
+def test_combine_first_simplify(pdf):
+    df = from_pandas(pdf)
+    pdf2 = pdf.rename(columns={"y": "z"})
+    df2 = from_pandas(pdf2)
+
+    q = df.combine_first(df2)[["z", "y"]]
+    result = q.simplify()
+    expected = df[["y"]].combine_first(df2[["z"]])[["z", "y"]]
+    assert result._name == expected._name
+    assert_eq(result, pdf.combine_first(pdf2)[["z", "y"]])
+
+
 def test_rename_traverse_filter(df):
-    result = optimize(df.rename(columns={"x": "xx"})[["xx"]], fuse=False)
+    result = df.rename(columns={"x": "xx"})[["xx"]].simplify()
     expected = df[["x"]].rename(columns={"x": "xx"})
     assert str(result) == str(expected)
 
 
 def test_columns_traverse_filters(pdf, df):
-    result = optimize(df[df.x > 5].y, fuse=False)
+    result = df[df.x > 5].y.simplify()
     expected = df.y[df.x > 5]
 
     assert str(result) == str(expected)
 
 
 def test_clip_traverse_filters(df):
-    result = optimize(df.clip(lower=10).y, fuse=False)
+    result = df.clip(lower=10).y.simplify()
     expected = df.y.clip(lower=10)
 
     assert result._name == expected._name
 
-    result = optimize(df.clip(lower=10)[["x", "y"]], fuse=False)
+    result = df.clip(lower=10)[["x", "y"]].simplify()
     expected = df.clip(lower=10)
+
+    assert result._name == expected._name
+
+    arg = df.clip(lower=10)[["x"]]
+    result = arg.simplify()
+    expected = df[["x"]].clip(lower=10)
 
     assert result._name == expected._name
 
 
 @pytest.mark.parametrize("projection", ["zz", ["zz"], ["zz", "x"], "zz"])
 @pytest.mark.parametrize("subset", ["x", ["x"]])
-def test_drop_duplicates_subset_optimizing(pdf, subset, projection):
+def test_drop_duplicates_subset_simplify(pdf, subset, projection):
     pdf["zz"] = 1
     df = from_pandas(pdf)
-    result = optimize(df.drop_duplicates(subset=subset)[projection], fuse=False)
+    result = df.drop_duplicates(subset=subset)[projection].simplify()
     expected = df[["x", "zz"]].drop_duplicates(subset=subset)[projection]
 
     assert str(result) == str(expected)
@@ -394,7 +435,7 @@ def test_head(pdf, df):
 
 def test_head_down(df):
     result = (df.x + df.y + 1).head(compute=False)
-    optimized = optimize(result)
+    optimized = result.simplify()
 
     assert_eq(result, optimized)
 
@@ -431,24 +472,36 @@ def test_tail_tail(df):
     assert a.optimize()._name == b.optimize()._name
 
 
+def test_tail_repartition(df):
+    a = df.repartition(npartitions=10).tail()
+    b = df.tail()
+    assert_eq(a, b)
+
+
 def test_projection_stacking(df):
     result = df[["x", "y"]]["x"]
-    optimized = optimize(result, fuse=False)
+    optimized = result.simplify()
     expected = df["x"]
 
     assert optimized._name == expected._name
 
 
+def test_projection_stacking_coercion(pdf):
+    df = from_pandas(pdf)
+    assert_eq(df.x[0], pdf.x[0], check_divisions=False)
+    assert_eq(df.x[[0]], pdf.x[[0]], check_divisions=False)
+
+
 def test_remove_unnecessary_projections(df):
     result = (df + 1)[df.columns]
-    optimized = optimize(result, fuse=False)
+    optimized = result.simplify()
     expected = df + 1
 
     assert optimized._name == expected._name
 
-    result = (df.x + 1)["x"]
-    optimized = optimize(result, fuse=False)
-    expected = df.x + 1
+    result = (df[["x"]] + 1)[["x"]]
+    optimized = result.simplify()
+    expected = df[["x"]] + 1
 
     assert optimized._name == expected._name
 
@@ -508,7 +561,7 @@ def test_partitions(pdf, df):
     assert_eq(df.partitions[[3, 4]], pdf.iloc[30:50])
     assert_eq(df.partitions[-1], pdf.iloc[90:])
 
-    out = (df + 1).partitions[0].optimize(fuse=False)
+    out = (df + 1).partitions[0].simplify()
     assert isinstance(out.expr, expr.Add)
     assert out.expr.left._partitions == [0]
 
@@ -559,6 +612,9 @@ def test_size_optimized(df):
 
 @pytest.mark.parametrize("fuse", [True, False])
 def test_tree_repr(df, fuse):
+    s = df.expr.tree_repr()
+    assert "<pandas>" in s
+
     df = timeseries()
     expr = ((df.x + 1).sum(skipna=False) + df.y.mean()).expr
     expr = expr.optimize() if fuse else expr
@@ -663,6 +719,11 @@ def test_repartition_divisions(df, opt):
             assert part.max() < df2.divisions[p + 1]
 
 
+def test_repartition_no_op(df):
+    result = df.repartition(divisions=df.divisions).optimize()
+    assert result._name == df._name
+
+
 def test_len(df, pdf):
     df2 = df[["x"]] + 1
     assert len(df2) == len(pdf)
@@ -674,6 +735,24 @@ def test_len(df, pdf):
 
     assert isinstance(Len(df2.expr).optimize(), expr.Literal)
     assert isinstance(expr.Lengths(df2.expr).optimize(), expr.Literal)
+
+
+def test_astype_simplify(df, pdf):
+    q = df.astype({"x": "float64", "y": "float64"})["x"]
+    result = q.simplify()
+    expected = df["x"].astype({"x": "float64"})
+    assert result._name == expected._name
+    assert_eq(q, pdf.astype({"x": "float64", "y": "float64"})["x"])
+
+    q = df.astype({"y": "float64"})["x"]
+    result = q.simplify()
+    expected = df["x"]
+    assert result._name == expected._name
+
+    q = df.astype("float64")["x"]
+    result = q.simplify()
+    expected = df["x"].astype("float64")
+    assert result._name == expected._name
 
 
 def test_drop_duplicates(df, pdf):
@@ -716,11 +795,49 @@ def test_find_operations(df):
     assert next(iter(adds))._name == df2._name
 
 
+@pytest.mark.parametrize("subset", ["x", ["x"]])
+def test_dropna_simplify(pdf, subset):
+    pdf["z"] = 1
+    df = from_pandas(pdf)
+    q = df.dropna(subset=subset)["y"]
+    result = q.simplify()
+    expected = df[["x", "y"]].dropna(subset=subset)["y"]
+    assert result._name == expected._name
+    assert_eq(q, pdf.dropna(subset=subset)["y"])
+
+
 def test_dir(df):
     assert all(c in dir(df) for c in df.columns)
     assert "sum" in dir(df)
     assert "sum" in dir(df.x)
     assert "sum" in dir(df.index)
+
+
+@pytest.mark.parametrize(
+    "func, args",
+    [
+        ("replace", (1, 2)),
+        ("isin", ([1, 2],)),
+        ("clip", (0, 5)),
+        ("isna", ()),
+        ("round", ()),
+        ("abs", ()),
+        # ("map", (lambda x: x+1, )),  # add in when pandas 2.1 is out
+    ],
+)
+@pytest.mark.parametrize("indexer", ["x", ["x"]])
+def test_simplify_up_blockwise(df, pdf, func, args, indexer):
+    q = getattr(df, func)(*args)[indexer]
+    result = q.simplify()
+    expected = getattr(df[indexer], func)(*args)
+    assert result._name == expected._name
+
+    assert_eq(q, getattr(pdf, func)(*args)[indexer])
+
+    q = getattr(df, func)(*args)[["x", "y"]]
+    result = q.simplify()
+    expected = getattr(df, func)(*args)
+    assert result._name == expected._name
 
 
 def test_sample(df):
@@ -731,3 +848,121 @@ def test_sample(df):
     result = df.sample(frac=0.5, random_state=1234)
     expected = df.sample(frac=0.5, random_state=1234)
     assert_eq(result, expected)
+
+
+def test_align(df, pdf):
+    result_1, result_2 = df.align(df)
+    pdf_result_1, pdf_result_2 = pdf.align(pdf)
+    assert_eq(result_1, pdf_result_1)
+    assert_eq(result_2, pdf_result_2)
+
+    result_1, result_2 = df.x.align(df.x)
+    pdf_result_1, pdf_result_2 = pdf.x.align(pdf.x)
+    assert_eq(result_1, pdf_result_1)
+    assert_eq(result_2, pdf_result_2)
+
+
+def test_align_different_partitions():
+    pdf = pd.DataFrame({"a": [11, 12, 31, 1, 2, 3], "b": [1, 2, 3, 4, 5, 6]})
+    df = from_pandas(pdf, npartitions=2)
+    pdf2 = pd.DataFrame(
+        {"a": [11, 12, 31, 1, 2, 3], "b": [1, 2, 3, 4, 5, 6]},
+        index=[-2, -1, 0, 1, 2, 3],
+    )
+    df2 = from_pandas(pdf2, npartitions=2)
+    result_1, result_2 = df.align(df2)
+    pdf_result_1, pdf_result_2 = pdf.align(pdf2)
+    assert_eq(result_1, pdf_result_1)
+    assert_eq(result_2, pdf_result_2)
+
+
+def test_align_unknown_partitions_same_root():
+    pdf = pd.DataFrame({"a": 1}, index=[3, 2, 1])
+    df = from_pandas(pdf, npartitions=2, sort=False)
+    result_1, result_2 = df.align(df)
+    pdf_result_1, pdf_result_2 = pdf.align(pdf)
+    assert_eq(result_1, pdf_result_1)
+    assert_eq(result_2, pdf_result_2)
+
+
+def test_unknown_partitions_different_root():
+    pdf = pd.DataFrame({"a": 1}, index=[3, 2, 1])
+    df = from_pandas(pdf, npartitions=2, sort=False)
+    pdf2 = pd.DataFrame({"a": 1}, index=[4, 3, 2, 1])
+    df2 = from_pandas(pdf2, npartitions=2, sort=False)
+    with pytest.raises(ValueError, match="Not all divisions"):
+        df.align(df2)
+
+
+def test_nunique_approx(df):
+    result = df.nunique_approx().compute()
+    assert 99 < result < 101
+
+
+def test_assign_simplify(pdf):
+    df = from_pandas(pdf)
+    df2 = from_pandas(pdf)
+    df["new"] = df.x > 1
+    result = df[["x", "new"]].simplify()
+    expected = df2[["x"]].assign(new=df2.x > 1).simplify()
+    assert result._name == expected._name
+
+    pdf["new"] = pdf.x > 1
+    assert_eq(pdf[["x", "new"]], result)
+
+
+def test_assign_simplify_new_column_not_needed(pdf):
+    df = from_pandas(pdf)
+    df2 = from_pandas(pdf)
+    df["new"] = df.x > 1
+    result = df[["x"]].simplify()
+    expected = df2[["x"]].simplify()
+    assert result._name == expected._name
+
+    pdf["new"] = pdf.x > 1
+    assert_eq(result, pdf[["x"]])
+
+
+def test_assign_simplify_series(pdf):
+    df = from_pandas(pdf)
+    df2 = from_pandas(pdf)
+    df["new"] = df.x > 1
+    result = df.new.simplify()
+    expected = df2[[]].assign(new=df2.x > 1).new.simplify()
+    assert result._name == expected._name
+
+
+def test_assign_non_series_inputs(df, pdf):
+    assert_eq(df.assign(a=lambda x: x.x * 2), pdf.assign(a=lambda x: x.x * 2))
+    assert_eq(df.assign(a=2), pdf.assign(a=2))
+    assert_eq(df.assign(a=df.x.sum()), pdf.assign(a=pdf.x.sum()))
+
+    assert_eq(df.assign(a=lambda x: x.x * 2).y, pdf.assign(a=lambda x: x.x * 2).y)
+    assert_eq(df.assign(a=lambda x: x.x * 2).a, pdf.assign(a=lambda x: x.x * 2).a)
+
+
+def test_are_co_aligned(pdf, df):
+    df2 = df.reset_index()
+    assert are_co_aligned(df.expr, df2.expr)
+    assert are_co_aligned(df.expr, df2.sum().expr)
+    assert not are_co_aligned(df.expr, df2.repartition(npartitions=2).expr)
+
+    assert are_co_aligned(df.expr, df.sum().expr)
+    assert are_co_aligned((df + df.sum()).expr, df.sum().expr)
+
+    pdf = pdf.assign(z=1)
+    df3 = from_pandas(pdf, npartitions=10)
+    assert not are_co_aligned(df.expr, df3.expr)
+    assert are_co_aligned(df.expr, df3.sum().expr)
+
+    merged = df.merge(df2)
+    merged_first = merged.reset_index()
+    merged_second = merged.rename(columns={"x": "a"})
+    assert are_co_aligned(merged_first.expr, merged_second.expr)
+    assert not are_co_aligned(merged_first.expr, df.expr)
+
+
+def test_astype_categories(df):
+    result = df.astype("category")
+    assert_eq(result.x._meta.cat.categories, pd.Index([UNKNOWN_CATEGORIES]))
+    assert_eq(result.y._meta.cat.categories, pd.Index([UNKNOWN_CATEGORIES]))

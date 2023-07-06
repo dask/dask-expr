@@ -1,3 +1,4 @@
+import functools
 import math
 import operator
 import uuid
@@ -11,13 +12,14 @@ from dask.dataframe.shuffle import (
     ensure_cleanup_on_exception,
     maybe_buffered_partd,
     partitioning_index,
+    set_partitions_pre,
     shuffle_group,
     shuffle_group_2,
     shuffle_group_get,
 )
-from dask.utils import digit, get_default_shuffle_algorithm, insert
+from dask.utils import M, digit, get_default_shuffle_method, insert
 
-from dask_expr.expr import Blockwise, Expr, PartitionsFiltered, Projection
+from dask_expr.expr import Assign, Blockwise, Expr, PartitionsFiltered, Projection
 from dask_expr.reductions import (
     All,
     Any,
@@ -84,11 +86,11 @@ class Shuffle(Expr):
     def _simplify_down(self):
         # Use `backend` to decide how to compose a
         # shuffle operation from concerete expressions
-        # TODO: Support "p2p"
-        backend = self.backend or get_default_shuffle_algorithm()
-        backend = "tasks" if backend == "p2p" else backend
+        backend = self.backend or get_default_shuffle_method()
         if hasattr(backend, "from_abstract_shuffle"):
             return backend.from_abstract_shuffle(self)
+        elif backend == "p2p":
+            return P2PShuffle.from_abstract_shuffle(self)
         elif backend == "disk":
             return DiskShuffle.from_abstract_shuffle(self)
         elif backend == "simple":
@@ -96,7 +98,6 @@ class Shuffle(Expr):
         elif backend == "tasks":
             return TaskShuffle.from_abstract_shuffle(self)
         else:
-            # Only support task-based shuffling for now
             raise ValueError(f"{backend} not supported")
 
     def _simplify_up(self, parent):
@@ -227,13 +228,16 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
                     options,
                 )
 
-        # Assign new "_partitions" column
-        index_added = AssignPartitioningIndex(
-            frame,
-            partitioning_index,
-            "_partitions",
-            npartitions_out,
-        )
+        if partitioning_index != ["_partitions"]:
+            # Assign new "_partitions" column
+            index_added = AssignPartitioningIndex(
+                frame,
+                partitioning_index,
+                "_partitions",
+                npartitions_out,
+            )
+        else:
+            index_added = frame
 
         # Apply shuffle
         shuffled = cls(
@@ -433,10 +437,6 @@ class DiskShuffle(SimpleShuffle):
         column = self.partitioning_index
         df = self.frame
 
-        npartitions = self.npartitions_out
-        if npartitions is None:
-            npartitions = df.npartitions
-
         always_new_token = uuid.uuid1().hex
 
         p = ("zpartd-" + always_new_token,)
@@ -460,6 +460,55 @@ class DiskShuffle(SimpleShuffle):
         }
 
         return toolz.merge(dsk1, dsk2, dsk3, dsk4)
+
+
+class P2PShuffle(SimpleShuffle):
+    """P2P worker-based shuffle implementation"""
+
+    lazy_hash_support = False
+
+    def _layer(self):
+        from distributed.shuffle._shuffle import (
+            ShuffleId,
+            barrier_key,
+            shuffle_barrier,
+            shuffle_transfer,
+            shuffle_unpack,
+        )
+
+        dsk = {}
+        token = self._name.split("-")[-1]
+        _barrier_key = barrier_key(ShuffleId(token))
+        name = "shuffle-transfer-" + token
+        transfer_keys = list()
+        parts_out = (
+            self._partitions if self._filtered else list(range(self.npartitions_out))
+        )
+        for i in range(self.frame.npartitions):
+            transfer_keys.append((name, i))
+            dsk[(name, i)] = (
+                shuffle_transfer,
+                (self.frame._name, i),
+                token,
+                i,
+                self.npartitions_out,
+                self.partitioning_index,
+                set(parts_out),
+            )
+
+        dsk[_barrier_key] = (shuffle_barrier, token, transfer_keys)
+
+        # TODO: Decompose p2p Into transfer/barrier + unpack
+        name = self._name
+        for i, part_out in enumerate(parts_out):
+            dsk[(name, i)] = (
+                shuffle_unpack,
+                token,
+                part_out,
+                _barrier_key,
+                self.frame._meta,
+            )
+        return dsk
 
 
 #
@@ -565,3 +614,99 @@ class AssignPartitioningIndex(Blockwise):
         else:
             index = partitioning_index(index, npartitions)
         return df.assign(**{name: index})
+
+
+class SetIndex(Expr):
+    _parameters = ["frame", "_other", "drop", "sorted", "user_divisions"]
+    _defaults = {"drop": True, "sorted": False, "user_divisions": None}
+
+    def _divisions(self):
+        if self.user_divisions is not None:
+            return self.user_divisions
+        return self._calculate_divisions()
+
+    @property
+    def _meta(self):
+        if isinstance(self._other, Expr):
+            other = self._other._meta
+        else:
+            other = self._other
+        return self.frame._meta.set_index(other, drop=self.drop)
+
+    @property
+    def other(self):
+        if isinstance(self._other, Expr):
+            return self._other
+        return self.frame[self._other]
+
+    @functools.lru_cache  # noqa: B019
+    def _calculate_divisions(self):
+        from dask_expr import RepartitionQuantiles, new_collection
+
+        return new_collection(
+            RepartitionQuantiles(self.other, self.frame.npartitions)
+        ).compute()
+
+    def _simplify_down(self):
+        divisions = self._divisions()
+        return SetPartition(self.frame, self._other, self.drop, divisions)
+
+
+class SetPartition(SetIndex):
+    _parameters = ["frame", "_other", "drop", "new_divisions"]
+
+    def _divisions(self):
+        return self.new_divisions
+
+    def _simplify_down(self):
+        partitions = _SetPartitionsPreSetIndex(self.other, self.new_divisions)
+        assigned = Assign(self.frame, "_partitions", partitions)
+        if isinstance(self._other, Expr):
+            assigned = Assign(assigned, "_index", self._other)
+        shuffled = Shuffle(
+            assigned,
+            "_partitions",
+            npartitions_out=len(self.new_divisions) - 1,
+            ignore_index=True,
+        )
+
+        if isinstance(self._other, Expr):
+            index_set = _SetIndexPostSeries(shuffled, self.other._meta.name)
+        else:
+            index_set = _SetIndexPostScalar(
+                shuffled, self.other._meta.name, drop=self.drop
+            )
+
+        return SortIndexBlockwise(index_set)
+
+
+class _SetPartitionsPreSetIndex(Blockwise):
+    _parameters = ["frame", "new_divisions", "ascending", "na_position"]
+    _defaults = {"ascending": True, "na_position": "last"}
+    operation = staticmethod(set_partitions_pre)
+
+    @property
+    def _meta(self):
+        return self.frame._meta._constructor([0])
+
+
+class _SetIndexPostScalar(Blockwise):
+    _parameters = ["frame", "index_name", "drop"]
+
+    def operation(self, df, index_name, drop):
+        df2 = df.set_index(index_name, drop=drop)
+        return df2
+
+
+class _SetIndexPostSeries(Blockwise):
+    _parameters = ["frame", "index_name"]
+
+    def operation(self, df, index_name):
+        df2 = df.set_index("_index", drop=True)
+        df2.index.name = index_name
+        return df2
+
+
+class SortIndexBlockwise(Blockwise):
+    _parameters = ["frame"]
+    operation = M.sort_index

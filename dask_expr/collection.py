@@ -2,26 +2,32 @@ from __future__ import annotations
 
 import functools
 import warnings
+from collections.abc import Hashable
 from numbers import Number
 
 import numpy as np
-from dask.base import DaskMethodsMixin, named_schedulers
+import pandas as pd
+from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
 from dask.dataframe.core import (
     _concat,
     _Frame,
+    check_divisions,
     is_dataframe_like,
     is_index_like,
     is_series_like,
     new_dd_object,
 )
 from dask.dataframe.dispatch import meta_nonempty
-from dask.utils import IndexCallable, random_state_data
+from dask.utils import IndexCallable, random_state_data, typename
 from fsspec.utils import stringify_path
 from tlz import first
 
 from dask_expr import expr
-from dask_expr.expr import no_default
-from dask_expr.merge import Merge
+from dask_expr._util import _convert_to_list
+from dask_expr.concat import Concat
+from dask_expr.expr import Eval, no_default
+from dask_expr.merge import JoinRecursive, Merge
+from dask_expr.quantiles import RepartitionQuantiles
 from dask_expr.reductions import (
     DropDuplicates,
     Len,
@@ -33,6 +39,7 @@ from dask_expr.reductions import (
     ValueCounts,
 )
 from dask_expr.repartition import Repartition
+from dask_expr.shuffle import SetIndex
 
 #
 # Utilities to wrap Expr API
@@ -93,6 +100,10 @@ class FrameBase(DaskMethodsMixin):
     @property
     def size(self):
         return new_collection(self.expr.size)
+
+    @property
+    def columns(self):
+        return pd.Index(self.expr.columns)
 
     def __len__(self):
         return new_collection(Len(self.expr)).compute()
@@ -188,6 +199,37 @@ class FrameBase(DaskMethodsMixin):
         """Return a copy of this object"""
         return new_collection(self.expr)
 
+    def isin(self, values):
+        if isinstance(self, DataFrame):
+            # DataFrame.isin does weird alignment stuff
+            bad_types = (FrameBase, pd.Series, pd.DataFrame)
+        else:
+            bad_types = (FrameBase,)
+        if isinstance(values, bad_types):
+            raise NotImplementedError("Passing a %r to `isin`" % typename(type(values)))
+
+        # We wrap values in a delayed for two reasons:
+        # - avoid serializing data in every task
+        # - avoid cost of traversal of large list in optimizations
+        if isinstance(values, list):
+            # Motivated by https://github.com/dask/dask/issues/9411.  This appears to be
+            # caused by https://github.com/dask/distributed/issues/6368, and further
+            # exacerbated by the fact that the list contains duplicates.  This is a patch until
+            # we can create a better fix for Serialization.
+            try:
+                values = list(set(values))
+            except TypeError:
+                pass
+            if not any(is_dask_collection(v) for v in values):
+                try:
+                    values = np.fromiter(values, dtype=object)
+                except ValueError:
+                    # Numpy 1.23 supports creating arrays of iterables, while lower
+                    # version 1.21.x and 1.22.x do not
+                    pass
+        # TODO: use delayed for values
+        return new_collection(expr.Isin(self.expr, values=values))
+
     def _partitions(self, index):
         # Used by `partitions` for partition-wise slicing
 
@@ -258,7 +300,7 @@ class FrameBase(DaskMethodsMixin):
     def groupby(self, by, **kwargs):
         from dask_expr.groupby import GroupBy
 
-        if isinstance(by, FrameBase):
+        if isinstance(by, FrameBase) and not isinstance(by, Series):
             raise ValueError(
                 f"`by` must be a column name or list of columns, got {by}."
             )
@@ -412,12 +454,21 @@ class DataFrame(FrameBase):
 
     def assign(self, **pairs):
         result = self
+        data = self.copy()
         for k, v in pairs.items():
-            if not isinstance(v, Series):
-                raise TypeError(f"Column assignment doesn't support type {type(v)}")
             if not isinstance(k, str):
                 raise TypeError(f"Column name cannot be type {type(k)}")
-            result = new_collection(expr.Assign(result.expr, k, v.expr))
+
+            if callable(v):
+                v = v(data)
+
+            if isinstance(v, (Scalar, Series)):
+                result = new_collection(expr.Assign(result.expr, k, v.expr))
+            elif not isinstance(v, FrameBase) and isinstance(v, Hashable):
+                result = new_collection(expr.Assign(result.expr, k, v))
+            else:
+                raise TypeError(f"Column assignment doesn't support type {type(v)}")
+
         return result
 
     def merge(
@@ -517,6 +568,44 @@ class DataFrame(FrameBase):
             )
         )
 
+    def join(
+        self,
+        other,
+        on=None,
+        how="left",
+        lsuffix="",
+        rsuffix="",
+        shuffle_backend=None,
+    ):
+        if (
+            not isinstance(other, list)
+            and not is_dataframe_like(other._meta)
+            and hasattr(other._meta, "name")
+        ):
+            other = new_collection(expr.ToFrame(other.expr))
+
+        if not isinstance(other, FrameBase):
+            if not isinstance(other, list) or not all(
+                isinstance(o, FrameBase) for o in other
+            ):
+                raise ValueError("other must be DataFrame or list of DataFrames")
+            if how not in ("outer", "left"):
+                raise ValueError("merge_multi only supports left or outer joins")
+
+            return new_collection(
+                JoinRecursive([self.expr] + [o.expr for o in other], how=how)
+            )
+
+        return self.merge(
+            right=other,
+            left_index=on is None,
+            right_index=True,
+            left_on=on,
+            how=how,
+            suffixes=(lsuffix, rsuffix),
+            shuffle_backend=shuffle_backend,
+        )
+
     def __setitem__(self, key, value):
         out = self.assign(**{key: value})
         self._expr = out._expr
@@ -565,12 +654,7 @@ class DataFrame(FrameBase):
 
     def drop_duplicates(self, subset=None, ignore_index=False):
         # Fail early if subset is not valid, e.g. missing columns
-        if (
-            subset is not None
-            and not isinstance(subset, list)
-            and not hasattr(subset, "dtype")
-        ):
-            subset = [subset]
+        subset = _convert_to_list(subset)
         meta_nonempty(self._meta).drop_duplicates(subset=subset)
         return new_collection(
             DropDuplicates(self.expr, subset=subset, ignore_index=ignore_index)
@@ -581,6 +665,7 @@ class DataFrame(FrameBase):
             raise TypeError(
                 "You cannot set both the how and thresh arguments at the same time."
             )
+        subset = _convert_to_list(subset)
         return new_collection(
             expr.DropnaFrame(self.expr, how=how, subset=subset, thresh=thresh)
         )
@@ -617,12 +702,43 @@ class DataFrame(FrameBase):
         return new_collection(expr.RenameFrame(self.expr, columns=columns))
 
     def explode(self, column):
+        column = _convert_to_list(column)
         return new_collection(expr.ExplodeFrame(self.expr, column=column))
+
+    def drop(self, labels=None, columns=None, errors="raise"):
+        if columns is None:
+            columns = labels
+        if columns is None:
+            raise TypeError("must either specify 'columns' or 'labels'")
+        return new_collection(expr.Drop(self.expr, columns=columns, errors=errors))
 
     def to_parquet(self, path, **kwargs):
         from dask_expr.io.parquet import to_parquet
 
         return to_parquet(self, path, **kwargs)
+
+    def select_dtypes(self, include=None, exclude=None):
+        columns = self._meta.select_dtypes(include=include, exclude=exclude).columns
+        return new_collection(self.expr[columns])
+
+    def eval(self, expr, **kwargs):
+        return new_collection(Eval(self.expr, _expr=expr, expr_kwargs=kwargs))
+
+    def set_index(self, other, drop=True, sorted=False, divisions=None):
+        if isinstance(other, DataFrame):
+            raise TypeError("other can't be of type DataFrame")
+        if isinstance(other, Series):
+            if other._name == self.index._name:
+                return self
+        elif other == self.index.name:
+            return self
+
+        if divisions is not None:
+            check_divisions(divisions)
+        other = other.expr if isinstance(other, Series) else other
+        return new_collection(
+            SetIndex(self.expr, other, drop, sorted, user_divisions=divisions)
+        )
 
 
 class Series(FrameBase):
@@ -687,6 +803,11 @@ class Series(FrameBase):
     def explode(self):
         return new_collection(expr.ExplodeSeries(self.expr))
 
+    def _repartition_quantiles(self, npartitions, upsample=1.0, random_state=None):
+        return new_collection(
+            RepartitionQuantiles(self.expr, npartitions, upsample, random_state)
+        )
+
 
 class Index(Series):
     """Index-like Expr Collection"""
@@ -737,10 +858,10 @@ def optimize(collection, fuse=True):
     return new_collection(expr.optimize(collection.expr, fuse=fuse))
 
 
-def from_pandas(*args, **kwargs):
+def from_pandas(data, *args, **kwargs):
     from dask_expr.io.io import FromPandas
 
-    return new_collection(FromPandas(*args, **kwargs))
+    return new_collection(FromPandas(data.copy(), *args, **kwargs))
 
 
 def from_graph(*args, **kwargs):
@@ -787,7 +908,7 @@ def read_parquet(
     filesystem="fsspec",
     **kwargs,
 ):
-    from dask_expr.io.parquet import ReadParquet, _list_columns
+    from dask_expr.io.parquet import ReadParquet
 
     if hasattr(path, "name"):
         path = stringify_path(path)
@@ -797,7 +918,7 @@ def read_parquet(
     return new_collection(
         ReadParquet(
             path,
-            columns=_list_columns(columns),
+            columns=_convert_to_list(columns),
             filters=filters,
             categories=categories,
             index=index,
@@ -811,5 +932,42 @@ def read_parquet(
             parquet_file_extension=parquet_file_extension,
             filesystem=filesystem,
             kwargs=kwargs,
+        )
+    )
+
+
+def concat(
+    dfs,
+    axis=0,
+    join="outer",
+    ignore_unknown_divisions=False,
+    ignore_order=False,
+    **kwargs,
+):
+    if axis == 1:
+        # TODO: implement
+        raise NotImplementedError
+    if ignore_unknown_divisions:
+        # TODO: implement
+        raise NotImplementedError
+
+    if not isinstance(dfs, list):
+        raise TypeError("dfs must be a list of DataFrames/Series objects")
+    if len(dfs) == 0:
+        raise ValueError("No objects to concatenate")
+    if len(dfs) == 1:
+        return dfs[0]
+
+    if join not in ("inner", "outer"):
+        raise ValueError("'join' must be 'inner' or 'outer'")
+
+    dfs = [from_pandas(df) if not is_dask_collection(df) else df for df in dfs]
+
+    return new_collection(
+        Concat(
+            join,
+            ignore_order,
+            kwargs,
+            *[df.expr for df in dfs],
         )
     )
