@@ -439,6 +439,9 @@ class Expr:
     def replace(self, to_replace=None, value=no_default, regex=False):
         return Replace(self, to_replace=to_replace, value=value, regex=regex)
 
+    def fillna(self, value=None):
+        return Fillna(self, value=value)
+
     def align(self, other, join="outer", fill_value=None):
         from dask_expr.collection import new_collection
         from dask_expr.repartition import Repartition
@@ -936,9 +939,8 @@ class DropnaFrame(Blockwise):
 
 
 class Fillna(Blockwise):
-    _parameters = ["frame", "value", "method", "limit", "axis"]
-    _defaults = {"value": None, "method": None, "limit": None, "axis": 0}
-    _keyword_only = ["method", "limit", "axis"]
+    _parameters = ["frame", "value"]
+    _defaults = {"value": None}
     operation = M.fillna
 
 

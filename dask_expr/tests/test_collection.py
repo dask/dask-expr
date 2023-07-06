@@ -154,26 +154,12 @@ def test_dropna(pdf):
     assert_eq(df.y.dropna(), pdf.y.dropna())
 
 
-@pytest.mark.parametrize(
-    "kwargs",
-    [
-        dict(value=123),
-        dict(value=123, limit=1),
-        dict(value=None, method="ffill"),
-        dict(value=None, method="bfill"),
-        dict(method="ffill", limit=1),
-        dict(method="bfill", limit=1),
-    ],
-)
-def test_fillna(kwargs):
+def test_fillna():
     pdf = pd.DataFrame({"x": [1, 2, None, None, 5, 6]})
     df = from_pandas(pdf, npartitions=2)
-    actual = df.fillna(**kwargs).compute()
-    expected = pdf.fillna(**kwargs)
-    # print(f"\n{expected}")
-    # print(f"\n{actual}")
+    actual = df.fillna(value=100).compute()
+    expected = pdf.fillna(value=100)
     assert_eq(actual, expected)
-    # assert_eq(df.x.fillna(**kwargs), pdf.x.fillna(**kwargs))
 
 
 def test_memory_usage(pdf):
