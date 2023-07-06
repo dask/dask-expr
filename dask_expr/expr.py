@@ -986,12 +986,6 @@ class DropnaFrame(Blockwise):
             )
 
 
-class Fillna(Blockwise):
-    _parameters = ["frame", "value"]
-    _defaults = {"value": None}
-    operation = M.fillna
-
-
 class Replace(Blockwise):
     _projection_passthrough = True
     _parameters = ["frame", "to_replace", "value", "regex"]
@@ -1089,6 +1083,12 @@ class Elemwise(Blockwise):
     """
 
     pass
+
+
+class Fillna(Elemwise):
+    _parameters = ["frame", "value"]
+    _defaults = {"value": None}
+    operation = M.fillna
 
 
 class Isin(Elemwise):
