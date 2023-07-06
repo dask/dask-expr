@@ -24,7 +24,7 @@ from fsspec.utils import stringify_path
 from tlz import first
 
 from dask_expr import expr
-from dask_expr._util import _convert_to_list
+from dask_expr._util import _convert_to_list, _maybe_import_backend
 from dask_expr.concat import Concat
 from dask_expr.expr import Eval, no_default
 from dask_expr.merge import JoinRecursive, Merge
@@ -858,6 +858,7 @@ def optimize(collection, fuse=True):
 def from_pandas(data, *args, **kwargs):
     from dask_expr.io.io import FromPandas
 
+    _maybe_import_backend()
     return new_collection(FromPandas(data.copy(), *args, **kwargs))
 
 
