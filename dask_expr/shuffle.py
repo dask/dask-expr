@@ -642,14 +642,12 @@ class SetIndex(Expr):
         "frame",
         "_other",
         "drop",
-        "sorted",
         "user_divisions",
         "partition_size",
         "ascending",
     ]
     _defaults = {
         "drop": True,
-        "sorted": False,
         "user_divisions": None,
         "partition_size": 128e6,
         "ascending": True,
@@ -695,6 +693,18 @@ class SetIndex(Expr):
 
         return SetPartition(self.frame, self._other, self.drop, divisions)
 
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            columns = parent.columns + (
+                [self._other] if not isinstance(self._other, Expr) else []
+            )
+            if self.frame.columns == columns:
+                return
+            return type(parent)(
+                type(self)(self.frame[columns], *self.operands[1:]),
+                parent.operand("columns"),
+            )
+
 
 class SetPartition(SetIndex):
     """Shuffles the DataFrame according to its new divisions.
@@ -737,12 +747,12 @@ class SetPartition(SetIndex):
         )
 
         if isinstance(self._other, Expr):
-            index_set = _SetIndexPostSeries(shuffled, self.other._meta.name)
+            drop, set_name = True, "_index"
         else:
-            index_set = _SetIndexPostScalar(
-                shuffled, self.other._meta.name, drop=self.drop
-            )
-
+            drop, set_name = self.drop, self.other._meta.name
+        index_set = _SetIndexPost(
+            shuffled, self.other._meta.name, drop=drop, set_name=set_name
+        )
         return SortIndexBlockwise(index_set)
 
 
@@ -756,24 +766,15 @@ class _SetPartitionsPreSetIndex(Blockwise):
         return self.frame._meta._constructor([0])
 
 
-class _SetIndexPostScalar(Blockwise):
-    _parameters = ["frame", "index_name", "drop"]
+class _SetIndexPost(Blockwise):
+    _parameters = ["frame", "index_name", "drop", "set_name"]
 
-    def operation(self, df, index_name, drop):
-        df2 = df.set_index(index_name, drop=drop)
-        return df2
-
-
-class _SetIndexPostSeries(Blockwise):
-    _parameters = ["frame", "index_name"]
-
-    def operation(self, df, index_name):
-        df2 = df.set_index("_index", drop=True)
-        df2.index.name = index_name
-        return df2
+    def operation(self, df, index_name, drop, set_name):
+        return df.set_index(set_name, drop=drop).rename_axis(index=index_name)
 
 
 class SortIndexBlockwise(Blockwise):
+    _projection_passthrough = True
     _parameters = ["frame"]
     operation = M.sort_index
 
@@ -786,7 +787,21 @@ class SetIndexBlockwise(Blockwise):
         return df.set_index(*args, **kwargs)
 
     def _divisions(self):
+        if self.new_divisions is None:
+            return (None,) * (self.frame.npartitions + 1)
         return tuple(self.new_divisions)
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            columns = parent.columns + (
+                [self.other] if not isinstance(self.other, Expr) else []
+            )
+            if self.frame.columns == columns:
+                return
+            return type(parent)(
+                type(self)(self.frame[columns], *self.operands[1:]),
+                parent.operand("columns"),
+            )
 
 
 @functools.lru_cache  # noqa: B019
