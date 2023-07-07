@@ -151,3 +151,9 @@ def test_set_index_pre_sorted(pdf):
     assert_eq(q, pdf.set_index(pdf.y))
     result = q.simplify().expr
     assert all(isinstance(expr, (Blockwise, FromPandas)) for expr in result.walk())
+
+
+def test_set_index_simplify(df, pdf):
+    q = df.set_index("x")["y"].simplify()
+    expected = df[["x", "y"]].set_index("x").simplify()
+    assert q._name == expected._name
