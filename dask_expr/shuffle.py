@@ -719,15 +719,12 @@ class SetPartition(SetIndex):
     def _divisions(self):
         return self.new_divisions
 
-    def _lower(self):
-        return
-
     @functools.cached_property
     def new_divisions(self):
         # TODO: Adjust for categoricals and NA values
         return self.other._meta._constructor(self.operand("new_divisions"))
 
-    def _simplify_down(self):
+    def _lower(self):
         partitions = _SetPartitionsPreSetIndex(self.other, self.new_divisions)
         assigned = Assign(self.frame, "_partitions", partitions)
         if isinstance(self._other, Expr):
