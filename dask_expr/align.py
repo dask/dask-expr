@@ -2,7 +2,7 @@ import functools
 
 from tlz import merge_sorted, unique
 
-from dask_expr.expr import Expr, Projection
+from dask_expr.expr import Expr, Projection, is_broadcastable
 from dask_expr.repartition import RepartitionDivisions
 
 
@@ -49,22 +49,3 @@ class AlignDivisions(Expr):
         return RepartitionDivisions(
             self.frame, new_divisions=self.divisions, force=True
         )
-
-
-def is_broadcastable(dfs, s):
-    """
-    This Series is broadcastable against another dataframe in the sequence
-    """
-
-    def compare(s, df):
-        try:
-            return s.divisions == (min(df.columns), max(df.columns))
-        except TypeError:
-            return False
-
-    return (
-        s.ndim <= 1
-        and s.npartitions == 1
-        and s.known_divisions
-        and any(compare(s, df) for df in dfs if df.ndim == 2)
-    )
