@@ -469,6 +469,14 @@ class Expr:
     def replace(self, to_replace=None, value=no_default, regex=False):
         return Replace(self, to_replace=to_replace, value=value, regex=regex)
 
+    def fillna(self, value=None):
+        return Fillna(self, value=value)
+
+    def rename_axis(
+        self, mapper=no_default, index=no_default, columns=no_default, axis=0
+    ):
+        return RenameAxis(self, mapper=mapper, index=index, columns=columns, axis=axis)
+
     def align(self, other, join="outer", fill_value=None):
         from dask_expr.collection import new_collection
         from dask_expr.repartition import Repartition
@@ -978,14 +986,6 @@ class DropnaFrame(Blockwise):
             )
 
 
-class Replace(Blockwise):
-    _projection_passthrough = True
-    _parameters = ["frame", "to_replace", "value", "regex"]
-    _defaults = {"to_replace": None, "value": no_default, "regex": False}
-    _keyword_only = ["value", "regex"]
-    operation = M.replace
-
-
 class CombineFirst(Blockwise):
     _parameters = ["frame", "other"]
     operation = M.combine_first
@@ -1075,6 +1075,21 @@ class Elemwise(Blockwise):
     """
 
     pass
+
+
+class Fillna(Elemwise):
+    _projection_passthrough = True
+    _parameters = ["frame", "value"]
+    _defaults = {"value": None}
+    operation = M.fillna
+
+
+class Replace(Elemwise):
+    _projection_passthrough = True
+    _parameters = ["frame", "to_replace", "value", "regex"]
+    _defaults = {"to_replace": None, "value": no_default, "regex": False}
+    _keyword_only = ["value", "regex"]
+    operation = M.replace
 
 
 class Isin(Elemwise):
@@ -1171,6 +1186,19 @@ class Abs(Elemwise):
     operation = M.abs
 
 
+class RenameAxis(Elemwise):
+    _projection_passthrough = True
+    _parameters = ["frame", "mapper", "index", "columns", "axis"]
+    _defaults = {
+        "mapper": no_default,
+        "index": no_default,
+        "columns": no_default,
+        "axis": 0,
+    }
+    _keyword_only = ["mapper", "index", "columns", "axis"]
+    operation = M.rename_axis
+
+
 class Apply(Elemwise):
     """A good example of writing a less-trivial blockwise operation"""
 
@@ -1238,6 +1266,12 @@ class Drop(Elemwise):
     _parameters = ["frame", "columns", "errors"]
     _defaults = {"errors": "raise"}
     operation = staticmethod(drop_by_shallow_copy)
+
+    def _simplify_down(self):
+        columns = [
+            col for col in self.frame.columns if col not in self.operand("columns")
+        ]
+        return Projection(self.frame, columns)
 
 
 class Assign(Elemwise):

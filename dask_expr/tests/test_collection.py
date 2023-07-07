@@ -154,6 +154,14 @@ def test_dropna(pdf):
     assert_eq(df.y.dropna(), pdf.y.dropna())
 
 
+def test_fillna():
+    pdf = pd.DataFrame({"x": [1, 2, None, None, 5, 6]})
+    df = from_pandas(pdf, npartitions=2)
+    actual = df.fillna(value=100)
+    expected = pdf.fillna(value=100)
+    assert_eq(actual, expected)
+
+
 def test_memory_usage(pdf):
     # Results are not equal with RangeIndex because pandas has one RangeIndex while
     # we have one RangeIndex per partition
@@ -289,6 +297,15 @@ def test_to_timestamp(pdf, how):
 )
 def test_blockwise(func, pdf, df):
     assert_eq(func(pdf), func(df))
+
+
+def test_rename_axis(pdf):
+    pdf.index.name = "a"
+    pdf.columns.name = "b"
+    df = from_pandas(pdf, npartitions=10)
+    assert_eq(df.rename_axis(index="dummy"), pdf.rename_axis(index="dummy"))
+    assert_eq(df.rename_axis(columns="dummy"), pdf.rename_axis(columns="dummy"))
+    assert_eq(df.x.rename_axis(index="dummy"), pdf.x.rename_axis(index="dummy"))
 
 
 def test_isin(df, pdf):
@@ -813,6 +830,7 @@ def test_dir(df):
         ("isna", ()),
         ("round", ()),
         ("abs", ()),
+        ("fillna", ({"x": 1})),
         # ("map", (lambda x: x+1, )),  # add in when pandas 2.1 is out
     ],
 )
@@ -957,3 +975,10 @@ def test_astype_categories(df):
     result = df.astype("category")
     assert_eq(result.x._meta.cat.categories, pd.Index([UNKNOWN_CATEGORIES]))
     assert_eq(result.y._meta.cat.categories, pd.Index([UNKNOWN_CATEGORIES]))
+
+
+def test_drop_simplify(pdf, df):
+    q = df.drop(columns=["x"])[["y"]]
+    result = q.simplify()
+    expected = df[["y"]]
+    assert result._name == expected._name
