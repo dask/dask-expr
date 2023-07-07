@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import warnings
+from collections.abc import Hashable
 from numbers import Number
 
 import numpy as np
@@ -10,6 +11,7 @@ from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
 from dask.dataframe.core import (
     _concat,
     _Frame,
+    check_divisions,
     is_dataframe_like,
     is_index_like,
     is_series_like,
@@ -25,7 +27,8 @@ from dask_expr._util import _convert_to_list
 from dask_expr.align import AlignDivisions
 from dask_expr.concat import Concat
 from dask_expr.expr import Eval, no_default
-from dask_expr.merge import Merge
+from dask_expr.merge import JoinRecursive, Merge
+from dask_expr.quantiles import RepartitionQuantiles
 from dask_expr.reductions import (
     DropDuplicates,
     Len,
@@ -37,6 +40,7 @@ from dask_expr.reductions import (
     ValueCounts,
 )
 from dask_expr.repartition import Repartition
+from dask_expr.shuffle import SetIndex, SetIndexBlockwise
 
 #
 # Utilities to wrap Expr API
@@ -110,7 +114,7 @@ class FrameBase(DaskMethodsMixin):
 
     @property
     def columns(self):
-        return pd.Index(self.expr.columns)
+        return pd.Index(self.expr.columns, name=self._meta.columns.name)
 
     def __len__(self):
         return new_collection(Len(self.expr)).compute()
@@ -129,32 +133,35 @@ class FrameBase(DaskMethodsMixin):
 
     def __dask_graph__(self):
         out = self.expr
-        out = out.simplify().lower()
+        out = out.optimize(fuse=False).lower()
         return out.__dask_graph__()
 
     def __dask_keys__(self):
         out = self.expr
-        out = out.simplify().lower()
+        out = out.optimize(fuse=False).lower()
         return out.__dask_keys__()
 
     def simplify(self):
         return new_collection(self.expr.simplify())
 
-    def lower(self):
-        return new_collection(self.expr.lower())
+    def lower_once(self):
+        return new_collection(self.expr.lower_once())
+
+    def optimize(self, fuse: bool = True):
+        return new_collection(self.expr.optimize(fuse=fuse))
 
     @property
     def dask(self):
         return self.__dask_graph__()
 
     def __dask_postcompute__(self):
-        state = self.simplify().lower()
+        state = self.optimize(fuse=False).lower()
         if type(self) != type(state):
             return state.__dask_postcompute__()
         return _concat, ()
 
     def __dask_postpersist__(self):
-        state = self.simplify().lower()
+        state = self.optimize(fuse=False).lower()
         return from_graph, (state._meta, state.divisions, state._name)
 
     def __getattr__(self, key):
@@ -464,12 +471,21 @@ class DataFrame(FrameBase):
 
     def assign(self, **pairs):
         result = self
+        data = self.copy()
         for k, v in pairs.items():
-            if not isinstance(v, Series):
-                raise TypeError(f"Column assignment doesn't support type {type(v)}")
             if not isinstance(k, str):
                 raise TypeError(f"Column name cannot be type {type(k)}")
-            result = new_collection(expr.Assign(result.expr, k, v.expr))
+
+            if callable(v):
+                v = v(data)
+
+            if isinstance(v, (Scalar, Series)):
+                result = new_collection(expr.Assign(result.expr, k, v.expr))
+            elif not isinstance(v, FrameBase) and isinstance(v, Hashable):
+                result = new_collection(expr.Assign(result.expr, k, v))
+            else:
+                raise TypeError(f"Column assignment doesn't support type {type(v)}")
+
         return result
 
     def merge(
@@ -578,12 +594,24 @@ class DataFrame(FrameBase):
         rsuffix="",
         shuffle_backend=None,
     ):
-        if not is_dataframe_like(other._meta) and hasattr(other._meta, "name"):
+        if (
+            not isinstance(other, list)
+            and not is_dataframe_like(other._meta)
+            and hasattr(other._meta, "name")
+        ):
             other = new_collection(expr.ToFrame(other.expr))
 
-        if not is_dataframe_like(other._meta):
-            # TODO: Implement multi-join
-            raise NotImplementedError
+        if not isinstance(other, FrameBase):
+            if not isinstance(other, list) or not all(
+                isinstance(o, FrameBase) for o in other
+            ):
+                raise ValueError("other must be DataFrame or list of DataFrames")
+            if how not in ("outer", "left"):
+                raise ValueError("merge_multi only supports left or outer joins")
+
+            return new_collection(
+                JoinRecursive([self.expr] + [o.expr for o in other], how=how)
+            )
 
         return self.merge(
             right=other,
@@ -689,6 +717,13 @@ class DataFrame(FrameBase):
         column = _convert_to_list(column)
         return new_collection(expr.ExplodeFrame(self.expr, column=column))
 
+    def drop(self, labels=None, columns=None, errors="raise"):
+        if columns is None:
+            columns = labels
+        if columns is None:
+            raise TypeError("must either specify 'columns' or 'labels'")
+        return new_collection(expr.Drop(self.expr, columns=columns, errors=errors))
+
     def to_parquet(self, path, **kwargs):
         from dask_expr.io.parquet import to_parquet
 
@@ -700,6 +735,28 @@ class DataFrame(FrameBase):
 
     def eval(self, expr, **kwargs):
         return new_collection(Eval(self.expr, _expr=expr, expr_kwargs=kwargs))
+
+    def set_index(self, other, drop=True, sorted=False, divisions=None):
+        if isinstance(other, DataFrame):
+            raise TypeError("other can't be of type DataFrame")
+        if isinstance(other, Series):
+            if other._name == self.index._name:
+                return self
+        elif other == self.index.name:
+            return self
+
+        if divisions is not None:
+            check_divisions(divisions)
+        other = other.expr if isinstance(other, Series) else other
+
+        if sorted:
+            return new_collection(
+                SetIndexBlockwise(self.expr, other, drop, new_divisions=divisions)
+            )
+
+        return new_collection(
+            SetIndex(self.expr, other, drop, user_divisions=divisions)
+        )
 
 
 class Series(FrameBase):
@@ -759,6 +816,11 @@ class Series(FrameBase):
     def explode(self):
         return new_collection(expr.ExplodeSeries(self.expr))
 
+    def _repartition_quantiles(self, npartitions, upsample=1.0, random_state=None):
+        return new_collection(
+            RepartitionQuantiles(self.expr, npartitions, upsample, random_state)
+        )
+
 
 class Index(Series):
     """Index-like Expr Collection"""
@@ -809,10 +871,10 @@ def optimize(collection, fuse=True):
     return new_collection(expr.optimize(collection.expr, fuse=fuse))
 
 
-def from_pandas(*args, **kwargs):
+def from_pandas(data, *args, **kwargs):
     from dask_expr.io.io import FromPandas
 
-    return new_collection(FromPandas(*args, **kwargs))
+    return new_collection(FromPandas(data.copy(), *args, **kwargs))
 
 
 def from_graph(*args, **kwargs):

@@ -23,6 +23,7 @@ from dask.dataframe.core import (
     make_meta,
 )
 from dask.dataframe.dispatch import meta_nonempty
+from dask.dataframe.utils import clear_known_categories, drop_by_shallow_copy
 from dask.utils import M, apply, funcname, import_required, is_arraylike
 from tlz import merge_sorted, unique
 
@@ -96,7 +97,7 @@ class Expr:
                 elif is_arraylike(op):
                     op = "<array>"
 
-                elif repr(op) != repr(default):
+                if repr(op) != repr(default):
                     if param:
                         header += f" {param}={repr(op)}"
                     else:
@@ -276,39 +277,32 @@ class Expr:
     def _simplify_up(self, parent):
         return
 
-    def lower(self):
+    def lower_once(self):
         expr = self
 
-        while True:
-            # Lower this node
-            out = expr._lower()
-            if out is None:
-                out = expr
-            if not isinstance(out, Expr):
-                return out
-            if out._name != expr._name:
-                expr = out
-                continue
+        # Lower this node
+        out = expr._lower()
+        if out is None:
+            out = expr
+        if not isinstance(out, Expr):
+            return out
 
-            # Lower all children
-            new_operands = []
-            changed = False
-            for operand in expr.operands:
-                if isinstance(operand, Expr):
-                    new = operand.lower()
-                    if new._name != operand._name:
-                        changed = True
-                else:
-                    new = operand
-                new_operands.append(new)
-
-            if changed:
-                expr = type(expr)(*new_operands)
-                continue
+        # Lower all children
+        new_operands = []
+        changed = False
+        for operand in out.operands:
+            if isinstance(operand, Expr):
+                new = operand.lower_once()
+                if new._name != operand._name:
+                    changed = True
             else:
-                break
+                new = operand
+            new_operands.append(new)
 
-        return expr
+        if changed:
+            out = type(out)(*new_operands)
+
+        return out
 
     def _lower(self):
         return
@@ -475,24 +469,36 @@ class Expr:
     def replace(self, to_replace=None, value=no_default, regex=False):
         return Replace(self, to_replace=to_replace, value=value, regex=regex)
 
+    def fillna(self, value=None):
+        return Fillna(self, value=value)
+
+    def rename_axis(
+        self, mapper=no_default, index=no_default, columns=no_default, axis=0
+    ):
+        return RenameAxis(self, mapper=mapper, index=index, columns=columns, axis=axis)
+
     def align(self, other, join="outer", fill_value=None):
         from dask_expr.collection import new_collection
         from dask_expr.repartition import Repartition
 
-        dfs = [self, other]
-        if not all(df.known_divisions for df in dfs):
-            raise ValueError(
-                "Not all divisions are known, can't align "
-                "partitions. Please use `set_index` "
-                "to set the index."
-            )
+        if are_co_aligned(self, other):
+            left = self
 
-        divisions = list(unique(merge_sorted(*[df.divisions for df in dfs])))
-        if len(divisions) == 1:  # single value for index
-            divisions = (divisions[0], divisions[0])
+        else:
+            dfs = [self, other]
+            if not all(df.known_divisions for df in dfs):
+                raise ValueError(
+                    "Not all divisions are known, can't align "
+                    "partitions. Please use `set_index` "
+                    "to set the index."
+                )
 
-        left = Repartition(self, new_divisions=divisions, force=True)
-        other = Repartition(other, new_divisions=divisions, force=True)
+            divisions = list(unique(merge_sorted(*[df.divisions for df in dfs])))
+            if len(divisions) == 1:  # single value for index
+                divisions = (divisions[0], divisions[0])
+
+            left = Repartition(self, new_divisions=divisions, force=True)
+            other = Repartition(other, new_divisions=divisions, force=True)
         aligned = _Align(left, other, join=join, fill_value=fill_value)
 
         return new_collection(AlignGetitem(aligned, position=0)), new_collection(
@@ -708,7 +714,29 @@ class Expr:
         graphviz_to_file(g, filename, format)
         return g
 
-    def find_operations(self, operation: type) -> Generator[Expr]:
+    def walk(self) -> Generator[Expr]:
+        """Iterate through all expressions in the tree
+
+        Returns
+        -------
+        nodes
+            Generator of Expr instances in the graph.
+            Ordering is a depth-first search of the expression tree
+        """
+        stack = [self]
+        seen = set()
+        while stack:
+            node = stack.pop()
+            if node._name in seen:
+                continue
+            seen.add(node._name)
+
+            for dep in node.dependencies():
+                stack.append(dep)
+
+            yield node
+
+    def find_operations(self, operation: type | tuple[type]) -> Generator[Expr]:
         """Search the expression graph for a specific operation type
 
         Parameters
@@ -722,21 +750,12 @@ class Expr:
             Generator of `operation` instances. Ordering corresponds
             to a depth-first search of the expression graph.
         """
-
-        assert issubclass(operation, Expr), "`operation` must be `Expr` subclass"
-        stack = [self]
-        seen = set()
-        while stack:
-            node = stack.pop()
-            if node._name in seen:
-                continue
-            seen.add(node._name)
-
-            for dep in node.dependencies():
-                stack.append(dep)
-
-            if isinstance(node, operation):
-                yield node
+        assert (
+            isinstance(operation, tuple)
+            and all(issubclass(e, Expr) for e in operation)
+            or issubclass(operation, Expr)
+        ), "`operation` must be`Expr` subclass)"
+        return (expr for expr in self.walk() if isinstance(expr, operation))
 
 
 class Literal(Expr):
@@ -967,17 +986,33 @@ class DropnaFrame(Blockwise):
             )
 
 
-class Replace(Blockwise):
-    _projection_passthrough = True
-    _parameters = ["frame", "to_replace", "value", "regex"]
-    _defaults = {"to_replace": None, "value": no_default, "regex": False}
-    _keyword_only = ["value", "regex"]
-    operation = M.replace
-
-
 class CombineFirst(Blockwise):
     _parameters = ["frame", "other"]
     operation = M.combine_first
+
+    @functools.cached_property
+    def _meta(self):
+        return make_meta(
+            self.operation(
+                meta_nonempty(self.frame._meta),
+                meta_nonempty(self.other._meta),
+            ),
+        )
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            columns = parent.columns
+            frame_columns = sorted(set(columns).intersection(self.frame.columns))
+            other_columns = sorted(set(columns).intersection(self.other.columns))
+            if (
+                self.frame.columns == frame_columns
+                and self.other.columns == other_columns
+            ):
+                return
+            return type(parent)(
+                type(self)(self.frame[frame_columns], self.other[other_columns]),
+                *parent.operands[1:],
+            )
 
 
 class RenameFrame(Blockwise):
@@ -1042,6 +1077,21 @@ class Elemwise(Blockwise):
     pass
 
 
+class Fillna(Elemwise):
+    _projection_passthrough = True
+    _parameters = ["frame", "value"]
+    _defaults = {"value": None}
+    operation = M.fillna
+
+
+class Replace(Elemwise):
+    _projection_passthrough = True
+    _parameters = ["frame", "to_replace", "value", "regex"]
+    _defaults = {"to_replace": None, "value": no_default, "regex": False}
+    _keyword_only = ["value", "regex"]
+    operation = M.replace
+
+
 class Isin(Elemwise):
     _projection_passthrough = True
     _parameters = ["frame", "values"]
@@ -1086,6 +1136,26 @@ class AsType(Elemwise):
     _parameters = ["frame", "dtypes"]
     operation = M.astype
 
+    @functools.cached_property
+    def _meta(self):
+        def _cat_dtype_without_categories(dtype):
+            return (
+                isinstance(pd.api.types.pandas_dtype(dtype), pd.CategoricalDtype)
+                and getattr(dtype, "categories", None) is None
+            )
+
+        meta = super()._meta
+        dtypes = self.operand("dtypes")
+        if hasattr(dtypes, "items"):
+            set_unknown = [
+                k for k, v in dtypes.items() if _cat_dtype_without_categories(v)
+            ]
+            meta = clear_known_categories(meta, cols=set_unknown)
+
+        elif _cat_dtype_without_categories(dtypes):
+            meta = clear_known_categories(meta)
+        return meta
+
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
             dtypes = self.operand("dtypes")
@@ -1114,6 +1184,19 @@ class Abs(Elemwise):
     _projection_passthrough = True
     _parameters = ["frame"]
     operation = M.abs
+
+
+class RenameAxis(Elemwise):
+    _projection_passthrough = True
+    _parameters = ["frame", "mapper", "index", "columns", "axis"]
+    _defaults = {
+        "mapper": no_default,
+        "index": no_default,
+        "columns": no_default,
+        "axis": 0,
+    }
+    _keyword_only = ["mapper", "index", "columns", "axis"]
+    operation = M.rename_axis
 
 
 class Apply(Elemwise):
@@ -1179,11 +1262,30 @@ class ExplodeFrame(ExplodeSeries):
             )
 
 
+class Drop(Elemwise):
+    _parameters = ["frame", "columns", "errors"]
+    _defaults = {"errors": "raise"}
+    operation = staticmethod(drop_by_shallow_copy)
+
+    def _simplify_down(self):
+        columns = [
+            col for col in self.frame.columns if col not in self.operand("columns")
+        ]
+        return Projection(self.frame, columns)
+
+
 class Assign(Elemwise):
     """Column Assignment"""
 
     _parameters = ["frame", "key", "value"]
     operation = staticmethod(methods.assign)
+
+    @functools.cached_property
+    def _meta(self):
+        args = [
+            meta_nonempty(op._meta) if isinstance(op, Expr) else op for op in self._args
+        ]
+        return make_meta(self.operation(*args, **self._kwargs))
 
     def _node_label_args(self):
         return [self.frame, self.key, self.value]
@@ -1708,12 +1810,53 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     simplify
     optimize_blockwise_fusion
     """
-    expr = expr.simplify().lower()
+
+    result = expr
+    while True:
+        out = result.simplify().lower_once()
+        if out._name == result._name:
+            break
+        result = out
 
     if fuse:
-        expr = optimize_blockwise_fusion(expr)
+        result = optimize_blockwise_fusion(result)
 
-    return expr
+    return result
+
+
+def is_broadcastable(dfs, s):
+    """
+    This Series is broadcastable against another dataframe in the sequence
+    """
+
+    return s.ndim <= 1 and s.npartitions == 1 and s.known_divisions
+
+
+def non_blockwise_ancestors(expr):
+    """Traverse through tree to find ancestors that are not blockwise or are IO"""
+    stack = [expr]
+    while stack:
+        e = stack.pop()
+        if isinstance(e, IO):
+            yield e
+        elif isinstance(e, Blockwise):
+            dependencies = e.dependencies()
+            stack.extend(
+                [
+                    expr
+                    for expr in dependencies
+                    if not is_broadcastable(dependencies, expr)
+                ]
+            )
+        else:
+            yield e
+
+
+def are_co_aligned(*exprs):
+    """Do inputs come from different parents, modulo blockwise?"""
+    exprs = [expr for expr in exprs if not is_broadcastable(exprs, expr)]
+    ancestors = [set(non_blockwise_ancestors(e)) for e in exprs]
+    return len(set(flatten(ancestors, container=set))) == 1
 
 
 def is_broadcastable(dfs, s):
