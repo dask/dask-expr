@@ -695,6 +695,18 @@ class SetIndex(Expr):
 
         return SetPartition(self.frame, self._other, self.drop, divisions)
 
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            columns = parent.columns + (
+                [self._other] if not isinstance(self._other, Expr) else []
+            )
+            if self.frame.columns == columns:
+                return
+            return type(parent)(
+                type(self)(self.frame[columns], *self.operands[1:]),
+                parent.operand("columns"),
+            )
+
 
 class SetPartition(SetIndex):
     """Shuffles the DataFrame according to its new divisions.
@@ -762,16 +774,6 @@ class _SetIndexPost(Blockwise):
     def operation(self, df, index_name, drop, set_name):
         return df.set_index(set_name, drop=drop).rename_axis(index=index_name)
 
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
-            columns = parent.columns + sorted({self.index_name, self.set_name})
-            if self.frame.columns == columns:
-                return
-            return type(parent)(
-                type(self)(self.frame[columns], *self.operands[1:]),
-                parent.operand("columns"),
-            )
-
 
 class SortIndexBlockwise(Blockwise):
     _projection_passthrough = True
@@ -788,16 +790,6 @@ class SetIndexBlockwise(Blockwise):
 
     def _divisions(self):
         return tuple(self.new_divisions)
-
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
-            columns = parent.columns + [self.other]
-            if self.frame.columns == columns:
-                return
-            return type(parent)(
-                type(self)(self.frame[columns], *self.operands[1:]),
-                parent.operand("columns"),
-            )
 
 
 @functools.lru_cache  # noqa: B019

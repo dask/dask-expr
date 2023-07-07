@@ -152,8 +152,16 @@ def test_set_index_pre_sorted(pdf):
     result = q.simplify().expr
     assert all(isinstance(expr, (Blockwise, FromPandas)) for expr in result.walk())
 
+    q = df.set_index("y")["x"].optimize(fuse=False)
+    expected = df[["x", "y"]].set_index("y")["x"].optimize(fuse=False)
+    assert q._name == expected._name
+
 
 def test_set_index_simplify(df, pdf):
-    q = df.set_index("x")["y"].simplify()
-    expected = df[["x", "y"]].set_index("x").simplify()
+    q = df.set_index("x")["y"].optimize(fuse=False)
+    expected = df[["x", "y"]].set_index("x")["y"].optimize(fuse=False)
+    assert q._name == expected._name
+
+    q = df.set_index(df.x)["y"].optimize(fuse=False)
+    expected = df[["y"]].set_index(df.x)["y"].optimize(fuse=False)
     assert q._name == expected._name
