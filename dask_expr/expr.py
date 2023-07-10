@@ -697,7 +697,7 @@ class Expr:
         ]
         if not alike:
             # No other operations of the same type. Early return
-            return
+            return []
 
         def _common_token(rp):
             # Helper function to "tokenize" the parameters
@@ -977,7 +977,7 @@ class Blockwise(Expr):
             common = type(self)(self.frame.frame, *self.operands[1:])
             projection = self.frame.operand("columns")
             push_up_projection = False
-            for op in self._find_common_operations(root, ignore=list(self._parameters)):
+            for op in self._find_common_operations(root, ignore=self._parameters):
                 if (
                     isinstance(op.frame, Projection)
                     and (
