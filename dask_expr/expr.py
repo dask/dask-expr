@@ -307,6 +307,58 @@ class Expr:
     def _lower(self):
         return
 
+    def simplify_global(self, root: Expr | None = None, _cache: dict | None = None):
+        expr = self
+        update_root = root is None
+        root = root or self
+
+        if _cache is None:
+            _cache = {}
+        elif (self._name, root._name) in _cache:
+            return _cache[(self._name, root._name)]
+
+        while True:
+            # Execute "_simplify_global" on expr
+            changed = False
+            out = expr._simplify_global(root)
+            if out is None:
+                out = expr
+            if not isinstance(out, Expr):
+                _cache[(self._name, root._name)] = out
+                return out
+            if out._name != expr._name:
+                changed = True
+                expr = out
+                if update_root:
+                    root = expr
+
+            # Call simplify_global on each dependency
+            new_operands = []
+            changed_dependency = False
+            for operand in expr.operands:
+                if isinstance(operand, Expr):
+                    new = operand.simplify_global(root=root, _cache=_cache)
+                    if new._name != operand._name:
+                        changed_dependency = True
+                else:
+                    new = operand
+                new_operands.append(new)
+
+            if changed_dependency:
+                expr = type(expr)(*new_operands)
+                changed = True
+                if update_root:
+                    root = expr
+
+            if not changed:
+                break
+
+        _cache[(self._name, root._name)] = expr
+        return expr
+
+    def _simplify_global(self, root: Expr):
+        return
+
     def optimize(self, **kwargs):
         return optimize(self, **kwargs)
 
@@ -612,6 +664,52 @@ class Expr:
             return type(self)(*new)
         return self
 
+    def _substitute_parameters(self, substitutions: dict) -> Expr:
+        """Substitute specific `Expr` parameters
+
+        Parameters
+        ----------
+        substitutions:
+            Mapping of parameter keys to new values. Keys that
+            are not found in ``self._parameters`` will be ignored.
+        """
+        if not substitutions:
+            return self
+
+        changed = False
+        new_operands = []
+        for i, operand in enumerate(self.operands):
+            if i < len(self._parameters) and self._parameters[i] in substitutions:
+                new_operands.append(substitutions[self._parameters[i]])
+                changed = True
+            else:
+                new_operands.append(operand)
+        if changed:
+            return type(self)(*new_operands)
+        return self
+
+    def _find_common_operations(self, root: Expr, ignore: list | None = None):
+        # Find operations with the same type and parameter values.
+        # Parameter keys specified by `ignore` will not be included
+        # in the comparison
+        alike = [
+            op for op in root.find_operations(type(self)) if op._name != self._name
+        ]
+        if not alike:
+            # No other operations of the same type. Early return
+            return
+
+        def _common_token(rp):
+            # Helper function to "tokenize" the parameters
+            # TODO: Maybe generalize this to account for unnamed operands?
+            return tokenize(
+                *[rp.operand(param) for param in rp._parameters if param not in ignore],
+            )
+
+        # Return subset of `alike` with the same "token"
+        token = _common_token(self)
+        return [item for item in alike if _common_token(item) == token]
+
     def _node_label_args(self):
         """Operands to include in the node label by `visualize`"""
         return self.dependencies()
@@ -871,6 +969,26 @@ class Blockwise(Expr):
     def _simplify_up(self, parent):
         if self._projection_passthrough and isinstance(parent, Projection):
             return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+
+    def _simplify_global(self, root: Expr):
+        # Push projections back up through `_projection_passthrough`
+        # operations if it reduces the number of unique expression nodes.
+        if self._projection_passthrough and isinstance(self.frame, Projection):
+            common = type(self)(self.frame.frame, *self.operands[1:])
+            projection = self.frame.operand("columns")
+            push_up_projection = False
+            for op in self._find_common_operations(root, ignore=list(self._parameters)):
+                if (
+                    isinstance(op.frame, Projection)
+                    and (
+                        common._name == type(op)(op.frame.frame, *op.operands[1:])._name
+                    )
+                ) or common._name == op._name:
+                    push_up_projection = True
+
+            if push_up_projection:
+                return common[projection]
+        return None
 
 
 class MapPartitions(Blockwise):
@@ -1790,24 +1908,29 @@ def normalize_expression(expr):
     return expr._name
 
 
-def optimize(expr: Expr, fuse: bool = True) -> Expr:
+def optimize(expr: Expr, simplify_global: bool = True, fuse: bool = True) -> Expr:
     """High level query optimization
 
     This leverages three optimization passes:
 
     1.  Class based simplification using the ``_simplify`` function and methods
-    2.  Blockwise fusion
+    2.  Combine alike operations
+    3.  Blockwise fusion
 
     Parameters
     ----------
     expr:
         Input expression to optimize
+    simplify_global:
+        whether or not to combine similar operations
+        (like `ReadParquet`) to aggregate work.
     fuse:
         whether or not to turn on blockwise fusion
 
     See Also
     --------
     simplify
+    simplify_global
     optimize_blockwise_fusion
     """
 
@@ -1817,6 +1940,9 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
         if out._name == result._name:
             break
         result = out
+
+    if simplify_global:
+        result = result.simplify_global()
 
     if fuse:
         result = optimize_blockwise_fusion(result)
