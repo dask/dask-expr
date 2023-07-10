@@ -24,7 +24,7 @@ from tlz import first
 
 from dask_expr import expr
 from dask_expr._util import _convert_to_list
-from dask_expr.align import AlignDivisions
+from dask_expr.align import AlignPartitions
 from dask_expr.concat import Concat
 from dask_expr.expr import Eval, no_default
 from dask_expr.merge import JoinRecursive, Merge
@@ -72,8 +72,8 @@ def _wrap_expr_op(self, other, op=None):
         return new_collection(getattr(self.expr, op)(other))
     else:
         return new_collection(
-            getattr(AlignDivisions(self.expr, other), op)(
-                AlignDivisions(other, self.expr)
+            getattr(AlignPartitions(self.expr, other), op)(
+                AlignPartitions(other, self.expr)
             )
         )
 

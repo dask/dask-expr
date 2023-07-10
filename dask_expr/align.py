@@ -6,7 +6,7 @@ from dask_expr.expr import Expr, Projection, is_broadcastable
 from dask_expr.repartition import RepartitionDivisions
 
 
-class AlignDivisions(Expr):
+class AlignPartitions(Expr):
     _parameters = ["frame"]
 
     @property

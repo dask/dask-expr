@@ -1006,7 +1006,7 @@ def test_can_co_align(df, pdf):
 
 
 def test_avoid_alignment():
-    from dask_expr.align import AlignDivisions
+    from dask_expr.align import AlignPartitions
 
     a = pd.DataFrame({"x": range(100)})
     da = from_pandas(a, npartitions=4)
@@ -1018,5 +1018,5 @@ def test_avoid_alignment():
     # Give correct results even when misaligned
     assert_eq(a.x + b.y, da.x + db.y)
 
-    assert not any(isinstance(ex, AlignDivisions) for ex in (db.y + db.z).walk())
-    assert not any(isinstance(ex, AlignDivisions) for ex in (da.x + db.y.sum()).walk())
+    assert not any(isinstance(ex, AlignPartitions) for ex in (db.y + db.z).walk())
+    assert not any(isinstance(ex, AlignPartitions) for ex in (da.x + db.y.sum()).walk())
