@@ -15,11 +15,8 @@ class AlignDivisions(Expr):
 
     @functools.cached_property
     def dfs(self):
-        _is_broadcastable = functools.partial(is_broadcastable, self.dependencies())
         return [
-            df
-            for df in self.dependencies()
-            if df.ndim > 0 and not _is_broadcastable(df)
+            df for df in self.dependencies() if df.ndim > 0 and not is_broadcastable(df)
         ]
 
     def _divisions(self):

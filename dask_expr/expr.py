@@ -1824,12 +1824,12 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     return result
 
 
-def is_broadcastable(dfs, s):
+def is_broadcastable(s):
     """
     This Series is broadcastable against another dataframe in the sequence
     """
 
-    return s.ndim <= 1 and s.npartitions == 1 and s.known_divisions
+    return s.ndim == 1 and s.npartitions == 1 and s.known_divisions or s.ndim == 0
 
 
 def non_blockwise_ancestors(expr):
@@ -1841,55 +1841,14 @@ def non_blockwise_ancestors(expr):
             yield e
         elif isinstance(e, Blockwise):
             dependencies = e.dependencies()
-            stack.extend(
-                [
-                    expr
-                    for expr in dependencies
-                    if not is_broadcastable(dependencies, expr)
-                ]
-            )
+            stack.extend([expr for expr in dependencies if not is_broadcastable(expr)])
         else:
             yield e
 
 
 def are_co_aligned(*exprs):
     """Do inputs come from different parents, modulo blockwise?"""
-    exprs = [expr for expr in exprs if not is_broadcastable(exprs, expr)]
-    ancestors = [set(non_blockwise_ancestors(e)) for e in exprs]
-    return len(set(flatten(ancestors, container=set))) == 1
-
-
-def is_broadcastable(dfs, s):
-    """
-    This Series is broadcastable against another dataframe in the sequence
-    """
-
-    return s.ndim <= 1 and s.npartitions == 1 and s.known_divisions
-
-
-def non_blockwise_ancestors(expr):
-    """Traverse through tree to find ancestors that are not blockwise or are IO"""
-    stack = [expr]
-    while stack:
-        e = stack.pop()
-        if isinstance(e, IO):
-            yield e
-        elif isinstance(e, Blockwise):
-            dependencies = e.dependencies()
-            stack.extend(
-                [
-                    expr
-                    for expr in dependencies
-                    if not is_broadcastable(dependencies, expr)
-                ]
-            )
-        else:
-            yield e
-
-
-def are_co_aligned(*exprs):
-    """Do inputs come from different parents, modulo blockwise?"""
-    exprs = [expr for expr in exprs if not is_broadcastable(exprs, expr)]
+    exprs = [expr for expr in exprs if not is_broadcastable(expr)]
     ancestors = [set(non_blockwise_ancestors(e)) for e in exprs]
     return len(set(flatten(ancestors, container=set))) == 1
 
