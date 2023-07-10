@@ -11,9 +11,9 @@ from dask.dataframe.utils import UNKNOWN_CATEGORIES, assert_eq
 from dask.utils import M
 
 from dask_expr import expr, from_pandas, optimize
-from dask_expr._datasets import timeseries
 from dask_expr._expr import are_co_aligned
 from dask_expr._reductions import Len
+from dask_expr.datasets import timeseries
 
 
 @pytest.fixture
