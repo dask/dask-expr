@@ -431,7 +431,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         # For ReadParquet, we can avoid redundant file-system
         # access by aggregating multiple operations with different
         # column projections into the same operation.
-        alike = self._find_common_operations(root, ignore=["columns", "_series"])
+        alike = self._find_similar_operations(root, ignore=["columns", "_series"])
         if alike:
             # We have other ReadParquet operations in the expression
             # graph that can be combined with this one, because

@@ -307,7 +307,32 @@ class Expr:
     def _lower(self):
         return
 
-    def simplify_global(self, root: Expr | None = None, _cache: dict | None = None):
+    def simplify_global(
+        self, root: Expr | None = None, _cache: dict | None = None
+    ) -> Expr:
+        """Simplify an expression using global information
+
+        This leverages the ``._simplify_global`` method defined
+        on each class. The global expression-tree traversal will
+        change IO leaves first, and finish with the root expression.
+        The primary purpose of this method is to allow column
+        projections to be "pushed back up" the expression graph
+        in the case that simlar IO & Blockwise operations can
+        be captured by the same operations.
+
+        Parameters
+        ----------
+        root:
+            The root node of the global expression graph. If not
+            specified, the root is assumed to be ``self``.
+        _cache:
+            Optional dictionary to use for caching.
+
+        Returns
+        -------
+        expr:
+            output expression
+        """
         expr = self
         update_root = root is None
         root = root or self
@@ -318,19 +343,7 @@ class Expr:
             return _cache[(self._name, root._name)]
 
         while True:
-            # Execute "_simplify_global" on expr
             changed = False
-            out = expr._simplify_global(root)
-            if out is None:
-                out = expr
-            if not isinstance(out, Expr):
-                _cache[(self._name, root._name)] = out
-                return out
-            if out._name != expr._name:
-                changed = True
-                expr = out
-                if update_root:
-                    root = expr
 
             # Call simplify_global on each dependency
             new_operands = []
@@ -347,6 +360,20 @@ class Expr:
             if changed_dependency:
                 expr = type(expr)(*new_operands)
                 changed = True
+                if update_root:
+                    root = expr
+                continue
+
+            # Execute "_simplify_global" on expr
+            out = expr._simplify_global(root)
+            if out is None:
+                out = expr
+            if not isinstance(out, Expr):
+                _cache[(self._name, root._name)] = out
+                return out
+            if out._name != expr._name:
+                changed = True
+                expr = out
                 if update_root:
                     root = expr
 
@@ -688,10 +715,10 @@ class Expr:
             return type(self)(*new_operands)
         return self
 
-    def _find_common_operations(self, root: Expr, ignore: list | None = None):
-        # Find operations with the same type and parameter values.
-        # Parameter keys specified by `ignore` will not be included
-        # in the comparison
+    def _find_similar_operations(self, root: Expr, ignore: list | None = None):
+        # Find operations with the same type and operands.
+        # Parameter keys specified by `ignore` will not be
+        # included in the operand comparison
         alike = [
             op for op in root.find_operations(type(self)) if op._name != self._name
         ]
@@ -699,16 +726,20 @@ class Expr:
             # No other operations of the same type. Early return
             return []
 
-        def _common_token(rp):
-            # Helper function to "tokenize" the parameters
-            # TODO: Maybe generalize this to account for unnamed operands?
+        def _tokenize(rp):
+            # Helper function to "tokenize" the operands
+            # that are not in the `ignore` list
             return tokenize(
-                *[rp.operand(param) for param in rp._parameters if param not in ignore],
+                *[
+                    op
+                    for i, op in enumerate(rp.operands)
+                    if i >= len(rp._parameters) or rp._parameters[i] not in ignore
+                ]
             )
 
         # Return subset of `alike` with the same "token"
-        token = _common_token(self)
-        return [item for item in alike if _common_token(item) == token]
+        token = _tokenize(self)
+        return [item for item in alike if _tokenize(item) == token]
 
     def _node_label_args(self):
         """Operands to include in the node label by `visualize`"""
@@ -977,7 +1008,7 @@ class Blockwise(Expr):
             common = type(self)(self.frame.frame, *self.operands[1:])
             projection = self.frame.operand("columns")
             push_up_projection = False
-            for op in self._find_common_operations(root, ignore=self._parameters):
+            for op in self._find_similar_operations(root, ignore=self._parameters):
                 if (
                     isinstance(op.frame, Projection)
                     and (
