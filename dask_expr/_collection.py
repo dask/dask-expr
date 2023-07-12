@@ -23,6 +23,7 @@ from fsspec.utils import stringify_path
 from tlz import first
 
 from dask_expr import _expr as expr
+from dask_expr._align import AlignPartitions
 from dask_expr._concat import Concat
 from dask_expr._expr import Eval, no_default
 from dask_expr._merge import JoinRecursive, Merge
@@ -64,7 +65,17 @@ def _wrap_expr_op(self, other, op=None):
     assert op is not None
     if isinstance(other, FrameBase):
         other = other.expr
-    return new_collection(getattr(self.expr, op)(other))
+
+    if not isinstance(other, expr.Expr):
+        return new_collection(getattr(self.expr, op)(other))
+    elif expr.are_co_aligned(self.expr, other):
+        return new_collection(getattr(self.expr, op)(other))
+    else:
+        return new_collection(
+            getattr(AlignPartitions(self.expr, other), op)(
+                AlignPartitions(other, self.expr)
+            )
+        )
 
 
 def _wrap_unary_expr_op(self, op=None):
@@ -860,10 +871,10 @@ def optimize(collection, fuse=True):
     return new_collection(expr.optimize(collection.expr, fuse=fuse))
 
 
-def from_pandas(data, *args, **kwargs):
+def from_pandas(data, npartitions=1, sort=True):
     from dask_expr.io.io import FromPandas
 
-    return new_collection(FromPandas(data.copy(), *args, **kwargs))
+    return new_collection(FromPandas(data.copy(), npartitions=npartitions, sort=sort))
 
 
 def from_graph(*args, **kwargs):
