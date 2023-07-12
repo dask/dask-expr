@@ -471,7 +471,7 @@ class FrameBase(DaskMethodsMixin):
         return new_collection(self.expr.clip(lower, upper))
 
     def combine_first(self, other):
-        return new_collection(self.expr.combine_first(other))
+        return new_collection(self.expr.combine_first(other.expr))
 
     def to_timestamp(self, freq=None, how="start"):
         return new_collection(self.expr.to_timestamp(freq, how))
@@ -497,7 +497,7 @@ class FrameBase(DaskMethodsMixin):
         return new_collection(self.expr.rename_axis(mapper, index, columns, axis))
 
     def align(self, other, join="outer", fill_value=None):
-        return new_collection(self.expr.align(other, join, fill_value))
+        return self.expr.align(other.expr, join, fill_value)
 
     def nunique_approx(self):
         return new_collection(self.expr.nunique_approx())
