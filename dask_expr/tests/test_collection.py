@@ -1006,7 +1006,7 @@ def test_can_co_align(df, pdf):
 
 
 def test_avoid_alignment():
-    from dask_expr.align import AlignPartitions
+    from dask_expr._align import AlignPartitions
 
     a = pd.DataFrame({"x": range(100)})
     da = from_pandas(a, npartitions=4)
