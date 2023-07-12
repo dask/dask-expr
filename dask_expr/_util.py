@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dask import config
+from dask.base import tokenize
+
 
 def _convert_to_list(column) -> list | None:
     if column is None or isinstance(column, list):
@@ -11,3 +14,8 @@ def _convert_to_list(column) -> list | None:
     else:
         column = [column]
     return column
+
+
+def _tokenize_deterministic(*args, **kwargs):
+    with config.set({"tokenize.ensure-deterministic": True}):
+        return tokenize(*args, **kwargs)
