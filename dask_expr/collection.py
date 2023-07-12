@@ -23,7 +23,7 @@ from fsspec.utils import stringify_path
 from tlz import first
 
 from dask_expr import expr
-from dask_expr._util import _convert_to_list, _wrap_lambdas
+from dask_expr._util import _convert_to_list
 from dask_expr.align import AlignPartitions
 from dask_expr.concat import Concat
 from dask_expr.expr import Eval, no_default
@@ -374,7 +374,7 @@ class FrameBase(DaskMethodsMixin):
             raise NotImplementedError()
         new_expr = expr.MapPartitions(
             self.expr,
-            _wrap_lambdas(func),
+            func,
             meta,
             enforce_metadata,
             transform_divisions,
@@ -655,9 +655,7 @@ class DataFrame(FrameBase):
         return list(o)
 
     def map(self, func, na_action=None):
-        return new_collection(
-            expr.Map(self.expr, arg=_wrap_lambdas(func), na_action=na_action)
-        )
+        return new_collection(expr.Map(self.expr, arg=func, na_action=na_action))
 
     def __repr__(self):
         return f"<dask_expr.expr.DataFrame: expr={self.expr}>"
@@ -779,9 +777,7 @@ class Series(FrameBase):
         return new_collection(self.expr.nbytes)
 
     def map(self, arg, na_action=None):
-        return new_collection(
-            expr.Map(self.expr, arg=_wrap_lambdas(arg), na_action=na_action)
-        )
+        return new_collection(expr.Map(self.expr, arg=arg, na_action=na_action))
 
     def __repr__(self):
         return f"<dask_expr.expr.Series: expr={self.expr}>"
