@@ -27,7 +27,7 @@ from dask.dataframe.utils import clear_known_categories, drop_by_shallow_copy
 from dask.utils import M, apply, funcname, import_required, is_arraylike
 from tlz import merge_sorted, unique
 
-from dask_expr._util import _tokenize_deterministic
+from dask_expr._util import _tokenize_deterministic, _wrap_lambdas
 
 replacement_rules = []
 
@@ -466,7 +466,7 @@ class Expr:
         return Round(self, decimals=decimals)
 
     def apply(self, function, *args, **kwargs):
-        return Apply(self, function, args, kwargs)
+        return Apply(self, _wrap_lambdas(function), args, kwargs)
 
     def replace(self, to_replace=None, value=no_default, regex=False):
         return Replace(self, to_replace=to_replace, value=value, regex=regex)
