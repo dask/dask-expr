@@ -290,7 +290,7 @@ class Expr:
         # Lower all children
         new_operands = []
         changed = False
-        for operand in expr.operands:
+        for operand in out.operands:
             if isinstance(operand, Expr):
                 new = operand.lower_once()
                 if new._name != operand._name:
@@ -300,9 +300,9 @@ class Expr:
             new_operands.append(new)
 
         if changed:
-            expr = type(expr)(*new_operands)
+            out = type(out)(*new_operands)
 
-        return expr
+        return out
 
     def _lower(self):
         return
@@ -986,14 +986,6 @@ class DropnaFrame(Blockwise):
             )
 
 
-class Replace(Blockwise):
-    _projection_passthrough = True
-    _parameters = ["frame", "to_replace", "value", "regex"]
-    _defaults = {"to_replace": None, "value": no_default, "regex": False}
-    _keyword_only = ["value", "regex"]
-    operation = M.replace
-
-
 class CombineFirst(Blockwise):
     _parameters = ["frame", "other"]
     operation = M.combine_first
@@ -1086,9 +1078,18 @@ class Elemwise(Blockwise):
 
 
 class Fillna(Elemwise):
+    _projection_passthrough = True
     _parameters = ["frame", "value"]
     _defaults = {"value": None}
     operation = M.fillna
+
+
+class Replace(Elemwise):
+    _projection_passthrough = True
+    _parameters = ["frame", "to_replace", "value", "regex"]
+    _defaults = {"to_replace": None, "value": no_default, "regex": False}
+    _keyword_only = ["value", "regex"]
+    operation = M.replace
 
 
 class Isin(Elemwise):
@@ -1475,11 +1476,13 @@ class Head(Expr):
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
+        if isinstance(self.frame, Head):
+            return Head(self.frame.frame, min(self.n, self.frame.n))
+
+    def _lower(self):
         if not isinstance(self, BlockwiseHead):
             # Lower to Blockwise
             return BlockwiseHead(Partitions(self.frame, [0]), self.n)
-        if isinstance(self.frame, Head):
-            return Head(self.frame.frame, min(self.n, self.frame.n))
 
 
 class BlockwiseHead(Head, Blockwise):
@@ -1519,13 +1522,15 @@ class Tail(Expr):
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
+        if isinstance(self.frame, Tail):
+            return Tail(self.frame.frame, min(self.n, self.frame.n))
+
+    def _lower(self):
         if not isinstance(self, BlockwiseTail):
             # Lower to Blockwise
             return BlockwiseTail(
                 Partitions(self.frame, [self.frame.npartitions - 1]), self.n
             )
-        if isinstance(self.frame, Tail):
-            return Tail(self.frame.frame, min(self.n, self.frame.n))
 
 
 class BlockwiseTail(Tail, Blockwise):
@@ -1823,12 +1828,12 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     return result
 
 
-def is_broadcastable(dfs, s):
+def is_broadcastable(s):
     """
     This Series is broadcastable against another dataframe in the sequence
     """
 
-    return s.ndim <= 1 and s.npartitions == 1 and s.known_divisions
+    return s.ndim == 1 and s.npartitions == 1 and s.known_divisions or s.ndim == 0
 
 
 def non_blockwise_ancestors(expr):
@@ -1840,20 +1845,14 @@ def non_blockwise_ancestors(expr):
             yield e
         elif isinstance(e, Blockwise):
             dependencies = e.dependencies()
-            stack.extend(
-                [
-                    expr
-                    for expr in dependencies
-                    if not is_broadcastable(dependencies, expr)
-                ]
-            )
+            stack.extend([expr for expr in dependencies if not is_broadcastable(expr)])
         else:
             yield e
 
 
 def are_co_aligned(*exprs):
     """Do inputs come from different parents, modulo blockwise?"""
-    exprs = [expr for expr in exprs if not is_broadcastable(exprs, expr)]
+    exprs = [expr for expr in exprs if not is_broadcastable(expr)]
     ancestors = [set(non_blockwise_ancestors(e)) for e in exprs]
     return len(set(flatten(ancestors, container=set))) == 1
 

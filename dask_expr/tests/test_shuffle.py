@@ -2,7 +2,7 @@ import pandas as pd
 import pytest
 from dask.dataframe.utils import assert_eq
 
-from dask_expr import from_pandas
+from dask_expr import SetIndexBlockwise, from_pandas
 from dask_expr.expr import Blockwise
 from dask_expr.io import FromPandas
 
@@ -140,14 +140,45 @@ def test_set_index(df, pdf):
         df.set_index(df)
 
 
+def test_set_index_sorted(pdf):
+    pdf = pdf.sort_values(by="y", ignore_index=True)
+    df = from_pandas(pdf, npartitions=10)
+    q = df.set_index("y", sorted=True)
+    assert_eq(q, pdf.set_index("y"))
+    result = q.simplify().expr
+    assert all(
+        isinstance(expr, (SetIndexBlockwise, FromPandas)) for expr in result.walk()
+    )
+
+    q = df.set_index("y", sorted=True)["x"]
+    assert_eq(q, pdf.set_index("y")["x"])
+    result = q.optimize(fuse=False)
+    expected = df[["x", "y"]].set_index("y", sorted=True)["x"].simplify()
+    assert result._name == expected._name
+
+
 def test_set_index_pre_sorted(pdf):
     pdf = pdf.sort_values(by="y", ignore_index=True)
     df = from_pandas(pdf, npartitions=10)
     q = df.set_index("y")
     assert_eq(q, pdf.set_index("y"))
-    result = q.simplify().expr
+    result = q.optimize(fuse=False).expr
     assert all(isinstance(expr, (Blockwise, FromPandas)) for expr in result.walk())
     q = df.set_index(df.y)
     assert_eq(q, pdf.set_index(pdf.y))
-    result = q.simplify().expr
+    result = q.optimize(fuse=False).expr
     assert all(isinstance(expr, (Blockwise, FromPandas)) for expr in result.walk())
+
+    q = df.set_index("y")["x"].optimize(fuse=False)
+    expected = df[["x", "y"]].set_index("y")["x"].optimize(fuse=False)
+    assert q._name == expected._name
+
+
+def test_set_index_simplify(df, pdf):
+    q = df.set_index("x")["y"].optimize(fuse=False)
+    expected = df[["x", "y"]].set_index("x")["y"].optimize(fuse=False)
+    assert q._name == expected._name
+
+    q = df.set_index(df.x)["y"].optimize(fuse=False)
+    expected = df[["y"]].set_index(df.x)["y"].optimize(fuse=False)
+    assert q._name == expected._name

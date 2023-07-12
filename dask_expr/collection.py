@@ -25,6 +25,7 @@ from tlz import first
 
 from dask_expr import expr
 from dask_expr._util import _convert_to_list, _maybe_import_backend
+from dask_expr.align import AlignPartitions
 from dask_expr.concat import Concat
 from dask_expr.expr import Eval, no_default
 from dask_expr.merge import JoinRecursive, Merge
@@ -40,7 +41,7 @@ from dask_expr.reductions import (
     ValueCounts,
 )
 from dask_expr.repartition import Repartition
-from dask_expr.shuffle import SetIndex
+from dask_expr.shuffle import SetIndex, SetIndexBlockwise
 
 #
 # Utilities to wrap Expr API
@@ -65,7 +66,17 @@ def _wrap_expr_op(self, other, op=None):
     assert op is not None
     if isinstance(other, FrameBase):
         other = other.expr
-    return new_collection(getattr(self.expr, op)(other))
+
+    if not isinstance(other, expr.Expr):
+        return new_collection(getattr(self.expr, op)(other))
+    elif expr.are_co_aligned(self.expr, other):
+        return new_collection(getattr(self.expr, op)(other))
+    else:
+        return new_collection(
+            getattr(AlignPartitions(self.expr, other), op)(
+                AlignPartitions(other, self.expr)
+            )
+        )
 
 
 def _wrap_unary_expr_op(self, op=None):
@@ -738,8 +749,14 @@ class DataFrame(FrameBase):
         if divisions is not None:
             check_divisions(divisions)
         other = other.expr if isinstance(other, Series) else other
+
+        if sorted:
+            return new_collection(
+                SetIndexBlockwise(self.expr, other, drop, new_divisions=divisions)
+            )
+
         return new_collection(
-            SetIndex(self.expr, other, drop, sorted, user_divisions=divisions)
+            SetIndex(self.expr, other, drop, user_divisions=divisions)
         )
 
 
