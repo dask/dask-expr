@@ -1068,7 +1068,8 @@ def test_op_align():
     assert_eq(df - df2, pdf - pdf2)
 
 
-def test_can_co_align(df, pdf):
+def test_can_co_align(df, bdf):
+    pdf = bdf.copy()
     q = (df.x + df.y).optimize(fuse=False)
     expected = df.x + df.y
     assert q._name == expected._name
