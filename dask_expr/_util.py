@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from types import LambdaType
+
 from dask import config
+from dask.base import normalize_token, tokenize
 
 
 def _convert_to_list(column) -> list | None:
@@ -18,3 +21,14 @@ def _convert_to_list(column) -> list | None:
 def _maybe_import_backend():
     if config.get("dataframe.backend", "pandas") == "cudf":
         import dask_cudf  # noqa F401
+
+
+@normalize_token.register(LambdaType)
+def _normalize_lambda(func):
+    return str(func)
+
+
+def _tokenize_deterministic(*args, **kwargs):
+    # Utility to be strict about deterministic tokens
+    with config.set({"tokenize.ensure-deterministic": True}):
+        return tokenize(*args, **kwargs)
