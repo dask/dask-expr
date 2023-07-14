@@ -12,7 +12,7 @@ from dask_expr._reductions import Len
 from dask_expr.io import ReadParquet
 
 # Import backend DataFrame library to test
-BACKEND = os.environ.get("TEST_DASK_EXPR_BACKEND", "pandas")
+BACKEND = config.get("dataframe.backend", "pandas")
 lib = importlib.import_module(BACKEND)
 
 

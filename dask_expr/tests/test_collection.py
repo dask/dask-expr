@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib
 import operator
-import os
 import pickle
 import re
 
@@ -19,7 +18,7 @@ from dask_expr._reductions import Len
 from dask_expr.datasets import timeseries
 
 # Import backend DataFrame library to test
-BACKEND = os.environ.get("TEST_DASK_EXPR_BACKEND", "pandas")
+BACKEND = dask.config.get("dataframe.backend", "pandas")
 lib = importlib.import_module(BACKEND)
 
 
