@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import importlib
 import operator
+import os
 import pickle
 import re
 
 import dask
 import numpy as np
-import pandas as pd
 import pytest
 from dask.dataframe._compat import PANDAS_GT_210
 from dask.dataframe.utils import UNKNOWN_CATEGORIES, assert_eq
@@ -17,45 +18,20 @@ from dask_expr._expr import are_co_aligned
 from dask_expr._reductions import Len
 from dask_expr.datasets import timeseries
 
-try:
-    import cudf
-except ImportError:
-    cudf = None
-
-
-@pytest.fixture(
-    params=[
-        "pandas",
-        pytest.param(
-            "cudf", marks=pytest.mark.skipif(cudf is None, reason="cudf not found.")
-        ),
-    ]
-)
-def backend(request):
-    # Return backend-library label
-    yield request.param
+# Import backend DataFrame library to test
+BACKEND = os.environ.get("TEST_DASK_EXPR_BACKEND", "pandas")
+lib = importlib.import_module(BACKEND)
 
 
 @pytest.fixture
-def lib(backend):
-    # Return library associated with `backend` label
-    if backend == "cudf":
-        yield cudf
-    else:
-        yield pd
-
-
-@pytest.fixture
-def bdf(lib):
-    # Backend DataFrame fixture
-    df = lib.DataFrame({"x": range(100)})
-    df["y"] = df.x * 10.0
-    yield df
+def bdf():
+    bdf = lib.DataFrame({"x": range(100)})
+    bdf["y"] = bdf.x * 10.0
+    yield bdf
 
 
 @pytest.fixture
 def df(bdf):
-    # Multi-backend Dask-Expression DataFrame fixture
     yield from_pandas(bdf, npartitions=10)
 
 
@@ -79,16 +55,16 @@ def test_setitem(bdf, df):
 
 
 def test_explode():
-    # CuDF backend does not support explode
-    # (See: https://github.com/rapidsai/cudf/issues/10271)
-    pdf = pd.DataFrame({"a": [[1, 2], [3, 4]]})
+    if BACKEND == "cudf":
+        pytest.xfail(reason="https://github.com/rapidsai/cudf/issues/10271")
+    pdf = lib.DataFrame({"a": [[1, 2], [3, 4]]})
     df = from_pandas(pdf)
     assert_eq(pdf.explode(column="a"), df.explode(column="a"))
     assert_eq(pdf.a.explode(), df.a.explode())
 
 
-def test_explode_simplify(bdf, backend):
-    if backend == "cudf":
+def test_explode_simplify(bdf):
+    if BACKEND == "cudf":
         pytest.xfail(reason="https://github.com/rapidsai/cudf/issues/10271")
     pdf = bdf.copy()
     pdf["z"] = 1
@@ -99,7 +75,7 @@ def test_explode_simplify(bdf, backend):
     assert result._name == expected._name
 
 
-def test_meta_divisions_name(lib):
+def test_meta_divisions_name():
     a = lib.DataFrame({"x": [1, 2, 3, 4], "y": [1.0, 2.0, 3.0, 4.0]})
     df = 2 * from_pandas(a, npartitions=2)
     assert list(df.columns) == list(a.columns)
@@ -112,7 +88,7 @@ def test_meta_divisions_name(lib):
     assert "sum" in df.sum()._name
 
 
-def test_meta_blockwise(lib):
+def test_meta_blockwise():
     a = lib.DataFrame({"x": [1, 2, 3, 4], "y": [1.0, 2.0, 3.0, 4.0]})
     b = lib.DataFrame({"z": [1, 2, 3, 4], "y": [1.0, 2.0, 3.0, 4.0]})
 
@@ -149,8 +125,8 @@ def test_dask(bdf, df):
         ),
     ],
 )
-def test_reductions(func, bdf, df, backend):
-    if backend == "cudf" and func in [M.idxmin, M.idxmax]:
+def test_reductions(func, bdf, df):
+    if BACKEND == "cudf" and func in [M.idxmin, M.idxmax]:
         pytest.xfail(reason="https://github.com/rapidsai/cudf/issues/9602")
     result = func(df)
     assert result.known_divisions
@@ -163,15 +139,15 @@ def test_reductions(func, bdf, df, backend):
     assert_eq(func(df)["x"], func(bdf)["x"], check_dtype=False)
 
 
-def test_nbytes(bdf, df, backend):
-    if backend == "cudf":
+def test_nbytes(bdf, df):
+    if BACKEND == "cudf":
         pytest.xfail(reason="nbytes not supported by cudf")
     with pytest.raises(NotImplementedError, match="nbytes is not implemented"):
         df.nbytes
     assert_eq(df.x.nbytes, bdf.x.nbytes)
 
 
-def test_mode(lib):
+def test_mode():
     pdf = lib.DataFrame({"x": [1, 2, 3, 1, 2]})
     df = from_pandas(pdf, npartitions=3)
 
@@ -195,7 +171,7 @@ def test_dropna(bdf):
     assert_eq(df.y.dropna(), pdf.y.dropna())
 
 
-def test_fillna(lib):
+def test_fillna():
     pdf = lib.DataFrame({"x": [1, 2, None, None, 5, 6]})
     df = from_pandas(pdf, npartitions=2)
     actual = df.fillna(value=100)
@@ -255,7 +231,7 @@ def test_conditionals(func, bdf, df):
         lambda df: df.x.__rxor__(df.y),
     ],
 )
-def test_boolean_operators(func, lib):
+def test_boolean_operators(func):
     pdf = lib.DataFrame(
         {"x": [True, False, True, False], "y": [True, False, False, False]}
     )
@@ -274,7 +250,7 @@ def test_boolean_operators(func, lib):
         lambda df: +df,
     ],
 )
-def test_unary_operators(func, lib):
+def test_unary_operators(func):
     pdf = lib.DataFrame(
         {"x": [True, False, True, False], "y": [True, False, False, False], "z": 1}
     )
@@ -294,10 +270,10 @@ def test_and_or(func, bdf, df):
 
 
 @pytest.mark.parametrize("how", ["start", "end"])
-def test_to_timestamp(bdf, how, backend):
-    if backend == "cudf":
+def test_to_timestamp(bdf, how):
+    if BACKEND == "cudf":
         pytest.xfail(reason="period_range not supported by cudf")
-    bdf.index = pd.period_range("2019-12-31", freq="D", periods=len(bdf))
+    bdf.index = lib.period_range("2019-12-31", freq="D", periods=len(bdf))
     df = from_pandas(bdf)
     assert_eq(df.to_timestamp(how=how), bdf.to_timestamp(how=how))
     assert_eq(df.x.to_timestamp(how=how), bdf.x.to_timestamp(how=how))
@@ -348,14 +324,14 @@ def test_blockwise(func, bdf, df):
         lambda df: df.x.combine_first(df.y),
     ],
 )
-def test_blockwise_cudf_fails(func, bdf, df, backend):
-    if backend == "cudf":
+def test_blockwise_cudf_fails(func, bdf, df):
+    if BACKEND == "cudf":
         pytest.xfail(reason="func not supported by cudf")
     assert_eq(func(bdf), func(df))
 
 
-def test_rename_axis(bdf, backend):
-    if backend == "cudf":
+def test_rename_axis(bdf):
+    if BACKEND == "cudf":
         pytest.xfail(reason="rename_axis not supported by cudf")
     pdf = bdf.copy()
     pdf.index.name = "a"
@@ -390,8 +366,8 @@ def test_repr(df):
     assert "sum(skipna=False)" in s
 
 
-def test_combine_first_simplify(bdf, backend):
-    if backend == "cudf":
+def test_combine_first_simplify(bdf):
+    if BACKEND == "cudf":
         pytest.xfail(reason="combine_first not supported by cudf")
     pdf = bdf.copy()
     df = from_pandas(pdf)
@@ -564,7 +540,7 @@ def test_remove_unnecessary_projections(df):
     assert optimized._name == expected._name
 
 
-def test_substitute(lib):
+def test_substitute():
     pdf = lib.DataFrame(
         {
             "a": range(100),
@@ -656,8 +632,8 @@ def test_serialization(bdf, df):
     assert_eq(pickle.loads(before), pickle.loads(after))
 
 
-def test_size_optimized(df, backend):
-    if backend == "cudf":
+def test_size_optimized(df):
+    if BACKEND == "cudf":
         pytest.xfail(reason="Cannot apply lambda function in cudf")
     expr = (df.x + 1).apply(lambda x: x).size
     out = optimize(expr)
@@ -672,8 +648,11 @@ def test_size_optimized(df, backend):
 
 @pytest.mark.parametrize("fuse", [True, False])
 def test_tree_repr(fuse):
-    s = from_pandas(pd.Series(range(10))).expr.tree_repr()
-    assert "<pandas>" in s
+    s = from_pandas(lib.Series(range(10))).expr.tree_repr()
+    if BACKEND == "pandas":
+        assert "<pandas>" in s
+    else:
+        assert "<series>" in s
 
     df = timeseries()
     expr = ((df.x + 1).sum(skipna=False) + df.y.mean()).expr
@@ -719,7 +698,7 @@ def test_map_partitions_broadcast(df):
 
 
 @pytest.mark.parametrize("opt", [True, False])
-def test_map_partitions_merge(opt, lib):
+def test_map_partitions_merge(opt):
     # Make simple left & right dfs
     pdf1 = lib.DataFrame({"x": range(20), "y": range(20)})
     df1 = from_pandas(pdf1, 2)
@@ -815,7 +794,7 @@ def test_astype_simplify(df, bdf):
     assert result._name == expected._name
 
 
-def test_drop_duplicates(df, bdf, backend):
+def test_drop_duplicates(df, bdf):
     assert_eq(df.drop_duplicates(), bdf.drop_duplicates())
     assert_eq(
         df.drop_duplicates(ignore_index=True), bdf.drop_duplicates(ignore_index=True)
@@ -823,7 +802,7 @@ def test_drop_duplicates(df, bdf, backend):
     assert_eq(df.drop_duplicates(subset=["x"]), bdf.drop_duplicates(subset=["x"]))
     assert_eq(df.x.drop_duplicates(), bdf.x.drop_duplicates())
 
-    if backend == "pandas":
+    if BACKEND == "pandas":
         with pytest.raises(KeyError, match=re.escape("Index(['a'], dtype='object')")):
             df.drop_duplicates(subset=["a"])
 
@@ -831,7 +810,7 @@ def test_drop_duplicates(df, bdf, backend):
         df.x.drop_duplicates(subset=["a"])
 
 
-def test_unique(df, bdf, lib):
+def test_unique(df, bdf):
     with pytest.raises(
         AttributeError, match="'DataFrame' object has no attribute 'unique'"
     ):
@@ -925,8 +904,8 @@ def test_sample(df):
     assert_eq(result, expected)
 
 
-def test_align(df, bdf, backend):
-    if backend == "cudf":
+def test_align(df, bdf):
+    if BACKEND == "cudf":
         pytest.skip(reason="align not supported by cudf")
     result_1, result_2 = df.align(df)
     pdf_result_1, pdf_result_2 = bdf.align(bdf)
@@ -940,9 +919,11 @@ def test_align(df, bdf, backend):
 
 
 def test_align_different_partitions():
-    pdf = pd.DataFrame({"a": [11, 12, 31, 1, 2, 3], "b": [1, 2, 3, 4, 5, 6]})
+    if BACKEND == "cudf":
+        pytest.skip(reason="align not supported by cudf")
+    pdf = lib.DataFrame({"a": [11, 12, 31, 1, 2, 3], "b": [1, 2, 3, 4, 5, 6]})
     df = from_pandas(pdf, npartitions=2)
-    pdf2 = pd.DataFrame(
+    pdf2 = lib.DataFrame(
         {"a": [11, 12, 31, 1, 2, 3], "b": [1, 2, 3, 4, 5, 6]},
         index=[-2, -1, 0, 1, 2, 3],
     )
@@ -954,7 +935,9 @@ def test_align_different_partitions():
 
 
 def test_align_unknown_partitions_same_root():
-    pdf = pd.DataFrame({"a": 1}, index=[3, 2, 1])
+    if BACKEND == "cudf":
+        pytest.skip(reason="align not supported by cudf")
+    pdf = lib.DataFrame({"a": 1}, index=[3, 2, 1])
     df = from_pandas(pdf, npartitions=2, sort=False)
     result_1, result_2 = df.align(df)
     pdf_result_1, pdf_result_2 = pdf.align(pdf)
@@ -963,16 +946,18 @@ def test_align_unknown_partitions_same_root():
 
 
 def test_unknown_partitions_different_root():
-    pdf = pd.DataFrame({"a": 1}, index=[3, 2, 1])
+    if BACKEND == "cudf":
+        pytest.skip(reason="align not supported by cudf")
+    pdf = lib.DataFrame({"a": 1}, index=[3, 2, 1])
     df = from_pandas(pdf, npartitions=2, sort=False)
-    pdf2 = pd.DataFrame({"a": 1}, index=[4, 3, 2, 1])
+    pdf2 = lib.DataFrame({"a": 1}, index=[4, 3, 2, 1])
     df2 = from_pandas(pdf2, npartitions=2, sort=False)
     with pytest.raises(ValueError, match="Not all divisions"):
         df.align(df2)
 
 
-def test_nunique_approx(df, backend):
-    if backend == "cudf":
+def test_nunique_approx(df):
+    if BACKEND == "cudf":
         pytest.xfail(reason="compute_hll_array doesn't work for cudf")
     result = df.nunique_approx().compute()
     assert 99 < result < 101
@@ -1011,8 +996,8 @@ def test_assign_simplify_series(bdf):
     assert result._name == expected._name
 
 
-def test_assign_non_series_inputs(df, bdf, backend):
-    if backend == "cudf":
+def test_assign_non_series_inputs(df, bdf):
+    if BACKEND == "cudf":
         pytest.xfail(reason="assign function not supported by cudf")
     assert_eq(df.assign(a=lambda x: x.x * 2), bdf.assign(a=lambda x: x.x * 2))
     assert_eq(df.assign(a=2), bdf.assign(a=2))
@@ -1043,12 +1028,12 @@ def test_are_co_aligned(bdf, df):
     assert not are_co_aligned(merged_first.expr, df.expr)
 
 
-def test_astype_categories(df, backend):
-    if backend == "cudf":
+def test_astype_categories(df):
+    if BACKEND == "cudf":
         pytest.xfail(reason="TODO")
     result = df.astype("category")
-    assert_eq(result.x._meta.cat.categories, pd.Index([UNKNOWN_CATEGORIES]))
-    assert_eq(result.y._meta.cat.categories, pd.Index([UNKNOWN_CATEGORIES]))
+    assert_eq(result.x._meta.cat.categories, lib.Index([UNKNOWN_CATEGORIES]))
+    assert_eq(result.y._meta.cat.categories, lib.Index([UNKNOWN_CATEGORIES]))
 
 
 def test_drop_simplify(df):
@@ -1059,10 +1044,10 @@ def test_drop_simplify(df):
 
 
 def test_op_align():
-    pdf = pd.DataFrame({"x": [1, 2, 3], "y": 1})
+    pdf = lib.DataFrame({"x": [1, 2, 3], "y": 1})
     df = from_pandas(pdf, npartitions=2)
 
-    pdf2 = pd.DataFrame({"x": [1, 2, 3, 4, 5, 6], "y": 1})
+    pdf2 = lib.DataFrame({"x": [1, 2, 3, 4, 5, 6], "y": 1})
     df2 = from_pandas(pdf2, npartitions=2)
 
     assert_eq(df - df2, pdf - pdf2)
@@ -1083,10 +1068,10 @@ def test_can_co_align(df, bdf):
 def test_avoid_alignment():
     from dask_expr._align import AlignPartitions
 
-    a = pd.DataFrame({"x": range(100)})
+    a = lib.DataFrame({"x": range(100)})
     da = from_pandas(a, npartitions=4)
 
-    b = pd.DataFrame({"y": range(100)})
+    b = lib.DataFrame({"y": range(100)})
     b["z"] = b.y * 2
     db = from_pandas(b, npartitions=3)
 

@@ -1,7 +1,7 @@
+import importlib
 import os
 
 import dask.dataframe as dd
-import pandas as pd
 import pytest
 from dask import config
 from dask.dataframe.utils import assert_eq
@@ -11,28 +11,15 @@ from dask_expr._expr import Expr, Lengths, Literal
 from dask_expr._reductions import Len
 from dask_expr.io import ReadParquet
 
-try:
-    import cudf
-except ImportError:
-    cudf = None
-
-
-@pytest.fixture(
-    params=[
-        "pandas",
-        pytest.param(
-            "cudf", marks=pytest.mark.skipif(cudf is None, reason="cudf not found.")
-        ),
-    ]
-)
-def backend(request):
-    yield request.param
+# Import backend DataFrame library to test
+BACKEND = os.environ.get("TEST_DASK_EXPR_BACKEND", "pandas")
+lib = importlib.import_module(BACKEND)
 
 
 def _make_file(dir, format="parquet", df=None):
     fn = os.path.join(str(dir), f"myfile.{format}")
     if df is None:
-        df = pd.DataFrame({c: range(10) for c in "abcde"})
+        df = lib.DataFrame({c: range(10) for c in "abcde"})
     if format == "csv":
         df.to_csv(fn)
     elif format == "parquet":
@@ -101,7 +88,7 @@ def test_io_fusion(tmpdir, fmt):
 
 
 def test_predicate_pushdown(tmpdir):
-    original = pd.DataFrame(
+    original = lib.DataFrame(
         {
             "a": [1, 2, 3, 4, 5] * 10,
             "b": [0, 1, 2, 3, 4] * 10,
@@ -128,7 +115,7 @@ def test_predicate_pushdown(tmpdir):
 
 
 def test_predicate_pushdown_compound(tmpdir):
-    pdf = pd.DataFrame(
+    pdf = lib.DataFrame(
         {
             "a": [1, 2, 3, 4, 5] * 10,
             "b": [0, 1, 2, 3, 4] * 10,
@@ -152,15 +139,18 @@ def test_predicate_pushdown_compound(tmpdir):
     )
 
     # Test OR
-    x = df[(df.a == 5) | (df.c > 20)][df.b != 0]["b"]
+    x = df[(df.a == 5) | (df.c > 20)]
+    x = x[x.b != 0]["b"]
     y = optimize(x, fuse=False)
     assert isinstance(y.expr, ReadParquet)
     filters = [set(y.filters[0]), set(y.filters[1])]
     assert {("c", ">", 20), ("b", "!=", 0)} in filters
     assert {("a", "==", 5), ("b", "!=", 0)} in filters
+    expect = pdf[(pdf.a == 5) | (pdf.c > 20)]
+    expect = expect[expect.b != 0]["b"]
     assert_eq(
         y,
-        pdf[(pdf.a == 5) | (pdf.c > 20)][pdf.b != 0]["b"],
+        expect,
         check_index=False,
     )
 
@@ -176,7 +166,7 @@ def test_predicate_pushdown_compound(tmpdir):
 
 @pytest.mark.parametrize("fmt", ["parquet", "csv", "pandas"])
 def test_io_culling(tmpdir, fmt):
-    pdf = pd.DataFrame({c: range(10) for c in "abcde"})
+    pdf = lib.DataFrame({c: range(10) for c in "abcde"})
     if fmt == "parquet":
         dd.from_pandas(pdf, 2).to_parquet(tmpdir)
         df = read_parquet(tmpdir)
@@ -209,7 +199,7 @@ def test_io_culling(tmpdir, fmt):
 
 @pytest.mark.parametrize("sort", [True, False])
 def test_from_pandas(sort):
-    pdf = pd.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
+    pdf = lib.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
     df = from_pandas(pdf, npartitions=2, sort=sort)
 
     assert df.divisions == (0, 3, 5) if sort else (None,) * 3
@@ -217,15 +207,15 @@ def test_from_pandas(sort):
 
 
 def test_from_pandas_immutable():
-    pdf = pd.DataFrame({"x": [1, 2, 3, 4]})
+    pdf = lib.DataFrame({"x": [1, 2, 3, 4]})
     expected = pdf.copy()
     df = from_pandas(pdf)
     pdf["z"] = 100
     assert_eq(df, expected)
 
 
-def test_parquet_complex_filters(tmpdir, backend):
-    with config.set({"dataframe.backend": backend}):
+def test_parquet_complex_filters(tmpdir):
+    with config.set({"dataframe.backend": BACKEND}):
         df = read_parquet(_make_file(tmpdir))
     pdf = df.compute()
     got = df["a"][df["b"] > df["b"].mean()]
@@ -266,7 +256,7 @@ def test_from_dask_dataframe(optimize):
 
 @pytest.mark.parametrize("optimize", [True, False])
 def test_to_dask_dataframe(optimize):
-    pdf = pd.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
+    pdf = lib.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
     df = from_pandas(pdf, npartitions=2)
     ddf = df.to_dask_dataframe(optimize=optimize)
     assert isinstance(ddf, dd.DataFrame)
@@ -275,7 +265,7 @@ def test_to_dask_dataframe(optimize):
 
 @pytest.mark.parametrize("write_metadata_file", [True, False])
 def test_to_parquet(tmpdir, write_metadata_file):
-    pdf = pd.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
+    pdf = lib.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
     df = from_pandas(pdf, npartitions=2)
 
     # Check basic parquet round trip

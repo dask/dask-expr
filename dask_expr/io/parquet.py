@@ -24,7 +24,7 @@ from dask.dataframe.io.parquet.core import (
 from dask.dataframe.io.parquet.utils import _split_user_options
 from dask.dataframe.io.utils import _is_local_fs
 from dask.delayed import delayed
-from dask.utils import apply, natural_sort_key
+from dask.utils import apply, natural_sort_key, typename
 from fsspec.utils import stringify_path
 
 from dask_expr._expr import (
@@ -176,6 +176,11 @@ def to_parquet(
 ):
     from dask_expr._collection import new_collection
     from dask_expr.io.parquet import NONE_LABEL, ToParquet
+
+    if typename(df._meta).split(".")[0] == "cudf":
+        from dask_cudf.io.parquet import CudfEngine
+
+        engine = CudfEngine
 
     compute_kwargs = compute_kwargs or {}
 

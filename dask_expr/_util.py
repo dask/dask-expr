@@ -18,11 +18,6 @@ def _convert_to_list(column) -> list | None:
     return column
 
 
-def _maybe_import_backend():
-    if config.get("dataframe.backend", "pandas") == "cudf":
-        import dask_cudf  # noqa F401
-
-
 @normalize_token.register(LambdaType)
 def _normalize_lambda(func):
     return str(func)
