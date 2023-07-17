@@ -157,7 +157,7 @@ class ToParquetBarrier(Expr):
 def to_parquet(
     df,
     path,
-    engine="pyarrow",
+    engine=None,
     compression="snappy",
     write_index=True,
     append=False,
@@ -177,11 +177,7 @@ def to_parquet(
     from dask_expr._collection import new_collection
     from dask_expr.io.parquet import NONE_LABEL, ToParquet
 
-    if typename(df._meta).split(".")[0] == "cudf":
-        from dask_cudf.io.parquet import CudfEngine
-
-        engine = CudfEngine
-
+    engine = _set_engine(meta=df._meta)
     compute_kwargs = compute_kwargs or {}
 
     partition_on = partition_on or []
@@ -655,6 +651,20 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
 #
 # Helper functions
 #
+
+
+def _set_engine(engine=None, meta=None):
+    # Use `engine` or `meta` input to set the parquet engine
+    if engine is None:
+        if (
+            meta is not None and typename(meta).split(".")[0] == "cudf"
+        ) or dask.config.get("dataframe.backend", "pandas") == "cudf":
+            from dask_cudf.io.parquet import CudfEngine
+
+            engine = CudfEngine
+        else:
+            engine = "pyarrow"
+    return engine
 
 
 def _align_statistics(parts, statistics):

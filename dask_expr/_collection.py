@@ -7,7 +7,6 @@ from numbers import Number
 
 import numpy as np
 import pandas as pd
-from dask import config
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
 from dask.dataframe.core import (
     _concat,
@@ -999,20 +998,12 @@ def read_parquet(
     engine=None,
     **kwargs,
 ):
-    from dask_expr.io.parquet import ReadParquet
+    from dask_expr.io.parquet import ReadParquet, _set_engine
 
     if not isinstance(path, str):
         path = stringify_path(path)
 
     kwargs["dtype_backend"] = dtype_backend
-
-    if engine is None:
-        if config.get("dataframe.backend", "pandas") == "cudf":
-            from dask_cudf.io.parquet import CudfEngine
-
-            engine = CudfEngine
-        else:
-            engine = "pyarrow"
 
     return new_collection(
         ReadParquet(
@@ -1030,7 +1021,7 @@ def read_parquet(
             aggregate_files=aggregate_files,
             parquet_file_extension=parquet_file_extension,
             filesystem=filesystem,
-            engine=engine,
+            engine=_set_engine(engine),
             kwargs=kwargs,
         )
     )

@@ -111,7 +111,7 @@ def test_predicate_pushdown(tmpdir):
     y_result = y.compute()
     assert y_result.name == "b"
     assert len(y_result) == 6
-    assert all(y_result == 4)
+    assert (y_result == 4).all()
 
 
 def test_predicate_pushdown_compound(tmpdir):
