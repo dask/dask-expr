@@ -286,7 +286,7 @@ def test_to_parquet(tmpdir, write_metadata_file):
 
 
 def test_combine_similar(tmpdir):
-    pdf = pd.DataFrame(
+    pdf = lib.DataFrame(
         {"x": [0, 1, 2, 3] * 4, "y": range(16), "z": [None, 1, 2, 3] * 4}
     )
     fn = _make_file(tmpdir, format="parquet", df=pdf)
