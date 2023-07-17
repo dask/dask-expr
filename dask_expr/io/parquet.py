@@ -157,7 +157,6 @@ class ToParquetBarrier(Expr):
 def to_parquet(
     df,
     path,
-    engine=None,
     compression="snappy",
     write_index=True,
     append=False,
