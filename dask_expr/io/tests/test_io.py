@@ -276,7 +276,7 @@ def test_to_parquet(tmpdir, write_metadata_file):
         df2.to_parquet(tmpdir, overwrite=True)
 
 
-def test_simplify_global(tmpdir):
+def test_combine_similar(tmpdir):
     pdf = pd.DataFrame(
         {"x": [0, 1, 2, 3] * 4, "y": range(16), "z": [None, 1, 2, 3] * 4}
     )

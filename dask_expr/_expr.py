@@ -309,12 +309,12 @@ class Expr:
     def _lower(self):
         return
 
-    def simplify_global(
+    def combine_similar(
         self, root: Expr | None = None, _cache: dict | None = None
     ) -> Expr:
-        """Simplify an expression using global information
+        """Combine similar expression nodes using global information
 
-        This leverages the ``._simplify_global`` method defined
+        This leverages the ``._combine_similar`` method defined
         on each class. The global expression-tree traversal will
         change IO leaves first, and finish with the root expression.
         The primary purpose of this method is to allow column
@@ -347,12 +347,12 @@ class Expr:
         while True:
             changed = False
 
-            # Call simplify_global on each dependency
+            # Call combine_similar on each dependency
             new_operands = []
             changed_dependency = False
             for operand in expr.operands:
                 if isinstance(operand, Expr):
-                    new = operand.simplify_global(root=root, _cache=_cache)
+                    new = operand.combine_similar(root=root, _cache=_cache)
                     if new._name != operand._name:
                         changed_dependency = True
                 else:
@@ -366,8 +366,8 @@ class Expr:
                     root = expr
                 continue
 
-            # Execute "_simplify_global" on expr
-            out = expr._simplify_global(root)
+            # Execute "_combine_similar" on expr
+            out = expr._combine_similar(root)
             if out is None:
                 out = expr
             if not isinstance(out, Expr):
@@ -385,7 +385,7 @@ class Expr:
         _cache[(self._name, root._name)] = expr
         return expr
 
-    def _simplify_global(self, root: Expr):
+    def _combine_similar(self, root: Expr):
         return
 
     def optimize(self, **kwargs):
@@ -1005,7 +1005,7 @@ class Blockwise(Expr):
         if self._projection_passthrough and isinstance(parent, Projection):
             return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
 
-    def _simplify_global(self, root: Expr):
+    def _combine_similar(self, root: Expr):
         # Push projections back up through `_projection_passthrough`
         # operations if it reduces the number of unique expression nodes.
         if self._projection_passthrough and isinstance(self.frame, Projection):
@@ -1947,29 +1947,29 @@ def normalize_expression(expr):
     return expr._name
 
 
-def optimize(expr: Expr, simplify_global: bool = True, fuse: bool = True) -> Expr:
+def optimize(expr: Expr, combine_similar: bool = True, fuse: bool = True) -> Expr:
     """High level query optimization
 
     This leverages three optimization passes:
 
     1.  Class based simplification using the ``_simplify`` function and methods
-    2.  Combine alike operations
+    2.  Combine similar operations
     3.  Blockwise fusion
 
     Parameters
     ----------
     expr:
         Input expression to optimize
-    simplify_global:
+    combine_similar:
         whether or not to combine similar operations
-        (like `ReadParquet`) to aggregate work.
+        (like `ReadParquet`) to aggregate redundant work.
     fuse:
         whether or not to turn on blockwise fusion
 
     See Also
     --------
     simplify
-    simplify_global
+    combine_similar
     optimize_blockwise_fusion
     """
 
@@ -1980,8 +1980,8 @@ def optimize(expr: Expr, simplify_global: bool = True, fuse: bool = True) -> Exp
             break
         result = out
 
-    if simplify_global:
-        result = result.simplify_global()
+    if combine_similar:
+        result = result.combine_similar()
 
     if fuse:
         result = optimize_blockwise_fusion(result)

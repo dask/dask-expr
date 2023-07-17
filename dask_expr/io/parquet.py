@@ -427,7 +427,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         else:
             return _convert_to_list(columns_operand)
 
-    def _simplify_global(self, root: Expr):
+    def _combine_similar(self, root: Expr):
         # For ReadParquet, we can avoid redundant file-system
         # access by aggregating multiple operations with different
         # column projections into the same operation.
