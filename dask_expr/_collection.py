@@ -22,13 +22,13 @@ from dask.utils import IndexCallable, random_state_data, typename
 from fsspec.utils import stringify_path
 from tlz import first
 
-from dask_expr import expr
-from dask_expr._util import _convert_to_list
-from dask_expr.concat import Concat
-from dask_expr.expr import Eval, no_default
-from dask_expr.merge import JoinRecursive, Merge
-from dask_expr.quantiles import RepartitionQuantiles
-from dask_expr.reductions import (
+from dask_expr import _expr as expr
+from dask_expr._align import AlignPartitions
+from dask_expr._concat import Concat
+from dask_expr._expr import Eval, no_default
+from dask_expr._merge import JoinRecursive, Merge
+from dask_expr._quantiles import RepartitionQuantiles
+from dask_expr._reductions import (
     DropDuplicates,
     Len,
     MemoryUsageFrame,
@@ -38,8 +38,9 @@ from dask_expr.reductions import (
     Unique,
     ValueCounts,
 )
-from dask_expr.repartition import Repartition
-from dask_expr.shuffle import SetIndex, SetIndexBlockwise
+from dask_expr._repartition import Repartition
+from dask_expr._shuffle import SetIndex, SetIndexBlockwise
+from dask_expr._util import _convert_to_list
 
 #
 # Utilities to wrap Expr API
@@ -64,7 +65,17 @@ def _wrap_expr_op(self, other, op=None):
     assert op is not None
     if isinstance(other, FrameBase):
         other = other.expr
-    return new_collection(getattr(self.expr, op)(other))
+
+    if not isinstance(other, expr.Expr):
+        return new_collection(getattr(self.expr, op)(other))
+    elif expr.are_co_aligned(self.expr, other):
+        return new_collection(getattr(self.expr, op)(other))
+    else:
+        return new_collection(
+            getattr(AlignPartitions(self.expr, other), op)(
+                AlignPartitions(other, self.expr)
+            )
+        )
 
 
 def _wrap_unary_expr_op(self, op=None):
@@ -286,7 +297,7 @@ class FrameBase(DaskMethodsMixin):
         **options: optional
             Algorithm-specific options.
         """
-        from dask_expr.shuffle import Shuffle
+        from dask_expr._shuffle import Shuffle
 
         # Preserve partition count by default
         npartitions = npartitions or self.npartitions
@@ -304,7 +315,7 @@ class FrameBase(DaskMethodsMixin):
         )
 
     def groupby(self, by, **kwargs):
-        from dask_expr.groupby import GroupBy
+        from dask_expr._groupby import GroupBy
 
         if isinstance(by, FrameBase) and not isinstance(by, Series):
             raise ValueError(
@@ -416,6 +427,80 @@ class FrameBase(DaskMethodsMixin):
         """
         df = self.optimize(**optimize_kwargs) if optimize else self
         return new_dd_object(df.dask, df._name, df._meta, df.divisions)
+
+    def sum(self, skipna=True, numeric_only=False, min_count=0):
+        return new_collection(self.expr.sum(skipna, numeric_only, min_count))
+
+    def prod(self, skipna=True, numeric_only=False, min_count=0):
+        return new_collection(self.expr.prod(skipna, numeric_only, min_count))
+
+    def mean(self, skipna=True, numeric_only=False, min_count=0):
+        return new_collection(self.expr.mean(skipna, numeric_only))
+
+    def max(self, skipna=True, numeric_only=False, min_count=0):
+        return new_collection(self.expr.max(skipna, numeric_only, min_count))
+
+    def any(self, skipna=True):
+        return new_collection(self.expr.any(skipna))
+
+    def all(self, skipna=True):
+        return new_collection(self.expr.all(skipna))
+
+    def idxmin(self, skipna=True, numeric_only=False):
+        return new_collection(self.expr.idxmin(skipna, numeric_only))
+
+    def idxmax(self, skipna=True, numeric_only=False):
+        return new_collection(self.expr.idxmax(skipna, numeric_only))
+
+    def mode(self, dropna=True):
+        return new_collection(self.expr.mode(dropna))
+
+    def min(self, skipna=True, numeric_only=False, min_count=0):
+        return new_collection(self.expr.min(skipna, numeric_only, min_count))
+
+    def count(self, numeric_only=False):
+        return new_collection(self.expr.count(numeric_only))
+
+    def abs(self):
+        return new_collection(self.expr.abs())
+
+    def astype(self, dtypes):
+        return new_collection(self.expr.astype(dtypes))
+
+    def clip(self, lower=None, upper=None):
+        return new_collection(self.expr.clip(lower, upper))
+
+    def combine_first(self, other):
+        return new_collection(self.expr.combine_first(other.expr))
+
+    def to_timestamp(self, freq=None, how="start"):
+        return new_collection(self.expr.to_timestamp(freq, how))
+
+    def isna(self):
+        return new_collection(self.expr.isna())
+
+    def round(self, decimals=0):
+        return new_collection(self.expr.round(decimals))
+
+    def apply(self, function, *args, **kwargs):
+        return new_collection(self.expr.apply(function, *args, **kwargs))
+
+    def replace(self, to_replace=None, value=no_default, regex=False):
+        return new_collection(self.expr.replace(to_replace, value, regex))
+
+    def fillna(self, value=None):
+        return new_collection(self.expr.fillna(value))
+
+    def rename_axis(
+        self, mapper=no_default, index=no_default, columns=no_default, axis=0
+    ):
+        return new_collection(self.expr.rename_axis(mapper, index, columns, axis))
+
+    def align(self, other, join="outer", fill_value=None):
+        return self.expr.align(other.expr, join, fill_value)
+
+    def nunique_approx(self):
+        return new_collection(self.expr.nunique_approx())
 
 
 # Add operator attributes
@@ -860,10 +945,10 @@ def optimize(collection, fuse=True):
     return new_collection(expr.optimize(collection.expr, fuse=fuse))
 
 
-def from_pandas(data, *args, **kwargs):
+def from_pandas(data, npartitions=1, sort=True):
     from dask_expr.io.io import FromPandas
 
-    return new_collection(FromPandas(data.copy(), *args, **kwargs))
+    return new_collection(FromPandas(data.copy(), npartitions=npartitions, sort=sort))
 
 
 def from_graph(*args, **kwargs):
@@ -886,10 +971,12 @@ def from_dask_dataframe(ddf: _Frame, optimize: bool = True) -> FrameBase:
     return from_graph(graph, ddf._meta, ddf.divisions, ddf._name)
 
 
-def read_csv(*args, **kwargs):
+def read_csv(path, *args, **kwargs):
     from dask_expr.io.csv import ReadCSV
 
-    return new_collection(ReadCSV(*args, **kwargs))
+    if not isinstance(path, str):
+        path = stringify_path(path)
+    return new_collection(ReadCSV(path, *args, **kwargs))
 
 
 def read_parquet(
@@ -912,7 +999,7 @@ def read_parquet(
 ):
     from dask_expr.io.parquet import ReadParquet
 
-    if hasattr(path, "name"):
+    if not isinstance(path, str):
         path = stringify_path(path)
 
     kwargs["dtype_backend"] = dtype_backend

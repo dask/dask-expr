@@ -13,7 +13,7 @@ from dask.dataframe.core import (
 )
 from dask.utils import M, apply
 
-from dask_expr.expr import Elemwise, Expr, Index, Projection
+from dask_expr._expr import Elemwise, Expr, Index, Projection
 
 
 class ApplyConcatApply(Expr):
@@ -398,7 +398,7 @@ class Mean(Reduction):
             self.frame._meta.sum(skipna=self.skipna, numeric_only=self.numeric_only) / 2
         )
 
-    def _simplify_down(self):
+    def _lower(self):
         return (
             self.frame.sum(skipna=self.skipna, numeric_only=self.numeric_only)
             / self.frame.count()

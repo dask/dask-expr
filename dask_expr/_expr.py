@@ -10,7 +10,7 @@ from collections.abc import Generator, Mapping
 import dask
 import pandas as pd
 import toolz
-from dask.base import normalize_token, tokenize
+from dask.base import normalize_token
 from dask.core import flatten, ishashable
 from dask.dataframe import methods
 from dask.dataframe.core import (
@@ -26,6 +26,8 @@ from dask.dataframe.dispatch import meta_nonempty
 from dask.dataframe.utils import clear_known_categories, drop_by_shallow_copy
 from dask.utils import M, apply, funcname, import_required, is_arraylike
 from tlz import merge_sorted, unique
+
+from dask_expr._util import _tokenize_deterministic
 
 replacement_rules = []
 
@@ -557,8 +559,8 @@ class Expr:
         return RenameAxis(self, mapper=mapper, index=index, columns=columns, axis=axis)
 
     def align(self, other, join="outer", fill_value=None):
-        from dask_expr.collection import new_collection
-        from dask_expr.repartition import Repartition
+        from dask_expr._collection import new_collection
+        from dask_expr._repartition import Repartition
 
         if are_co_aligned(self, other):
             left = self
@@ -609,7 +611,9 @@ class Expr:
 
     @functools.cached_property
     def _name(self):
-        return funcname(type(self)).lower() + "-" + tokenize(*self.operands)
+        return (
+            funcname(type(self)).lower() + "-" + _tokenize_deterministic(*self.operands)
+        )
 
     @property
     def columns(self) -> list:
@@ -729,7 +733,7 @@ class Expr:
         def _tokenize(rp):
             # Helper function to "tokenize" the operands
             # that are not in the `ignore` list
-            return tokenize(
+            return _tokenize_deterministic(
                 *[
                     op
                     for i, op in enumerate(rp.operands)
@@ -965,7 +969,7 @@ class Blockwise(Expr):
             head = funcname(self.operation)
         else:
             head = funcname(type(self)).lower()
-        return head + "-" + tokenize(*self.operands)
+        return head + "-" + _tokenize_deterministic(*self.operands)
 
     def _blockwise_arg(self, arg, i):
         """Return a Blockwise-task argument"""
@@ -1625,11 +1629,13 @@ class Head(Expr):
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
+        if isinstance(self.frame, Head):
+            return Head(self.frame.frame, min(self.n, self.frame.n))
+
+    def _lower(self):
         if not isinstance(self, BlockwiseHead):
             # Lower to Blockwise
             return BlockwiseHead(Partitions(self.frame, [0]), self.n)
-        if isinstance(self.frame, Head):
-            return Head(self.frame.frame, min(self.n, self.frame.n))
 
 
 class BlockwiseHead(Head, Blockwise):
@@ -1669,13 +1675,15 @@ class Tail(Expr):
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
+        if isinstance(self.frame, Tail):
+            return Tail(self.frame.frame, min(self.n, self.frame.n))
+
+    def _lower(self):
         if not isinstance(self, BlockwiseTail):
             # Lower to Blockwise
             return BlockwiseTail(
                 Partitions(self.frame, [self.frame.npartitions - 1]), self.n
             )
-        if isinstance(self.frame, Tail):
-            return Tail(self.frame.frame, min(self.n, self.frame.n))
 
 
 class BlockwiseTail(Tail, Blockwise):
@@ -1981,12 +1989,12 @@ def optimize(expr: Expr, simplify_global: bool = True, fuse: bool = True) -> Exp
     return result
 
 
-def is_broadcastable(dfs, s):
+def is_broadcastable(s):
     """
     This Series is broadcastable against another dataframe in the sequence
     """
 
-    return s.ndim <= 1 and s.npartitions == 1 and s.known_divisions
+    return s.ndim == 1 and s.npartitions == 1 and s.known_divisions or s.ndim == 0
 
 
 def non_blockwise_ancestors(expr):
@@ -1998,20 +2006,14 @@ def non_blockwise_ancestors(expr):
             yield e
         elif isinstance(e, Blockwise):
             dependencies = e.dependencies()
-            stack.extend(
-                [
-                    expr
-                    for expr in dependencies
-                    if not is_broadcastable(dependencies, expr)
-                ]
-            )
+            stack.extend([expr for expr in dependencies if not is_broadcastable(expr)])
         else:
             yield e
 
 
 def are_co_aligned(*exprs):
     """Do inputs come from different parents, modulo blockwise?"""
-    exprs = [expr for expr in exprs if not is_broadcastable(exprs, expr)]
+    exprs = [expr for expr in exprs if not is_broadcastable(expr)]
     ancestors = [set(non_blockwise_ancestors(e)) for e in exprs]
     return len(set(flatten(ancestors, container=set))) == 1
 
@@ -2184,7 +2186,7 @@ class Fused(Blockwise):
 
     @functools.cached_property
     def _name(self):
-        return f"{str(self)}-{tokenize(self.exprs)}"
+        return f"{str(self)}-{_tokenize_deterministic(self.exprs)}"
 
     def _divisions(self):
         return self.exprs[0]._divisions()
@@ -2219,8 +2221,7 @@ class Fused(Blockwise):
         return dask.core.get(graph, name)
 
 
-from dask_expr.io import IO, BlockwiseIO
-from dask_expr.reductions import (
+from dask_expr._reductions import (
     All,
     Any,
     Count,
@@ -2236,3 +2237,4 @@ from dask_expr.reductions import (
     Size,
     Sum,
 )
+from dask_expr.io import IO, BlockwiseIO
