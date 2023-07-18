@@ -810,7 +810,9 @@ class DataFrame(FrameBase):
     def eval(self, expr, **kwargs):
         return new_collection(Eval(self.expr, _expr=expr, expr_kwargs=kwargs))
 
-    def set_index(self, other, drop=True, sorted=False, divisions=None):
+    def set_index(
+        self, other, drop=True, sorted=False, divisions=None, sort: bool = True
+    ):
         if isinstance(other, DataFrame):
             raise TypeError("other can't be of type DataFrame")
         if isinstance(other, Series):
@@ -818,6 +820,9 @@ class DataFrame(FrameBase):
                 return self
         elif other == self.index.name:
             return self
+
+        if not sort:
+            return new_collection(SetIndexBlockwise(self.expr, other, drop, None))
 
         if divisions is not None:
             check_divisions(divisions)

@@ -11,9 +11,10 @@ from dask.dataframe.utils import UNKNOWN_CATEGORIES, assert_eq
 from dask.utils import M
 
 from dask_expr import expr, from_pandas, optimize
-from dask_expr._expr import are_co_aligned
+from dask_expr._expr import Blockwise, are_co_aligned
 from dask_expr._reductions import Len
 from dask_expr.datasets import timeseries
+from dask_expr.io import FromPandas
 
 
 @pytest.fixture
@@ -1020,3 +1021,11 @@ def test_avoid_alignment():
 
     assert not any(isinstance(ex, AlignPartitions) for ex in (db.y + db.z).walk())
     assert not any(isinstance(ex, AlignPartitions) for ex in (da.x + db.y.sum()).walk())
+
+
+def test_set_index_without_sort(df, pdf):
+    result = df.set_index("y", sort=False)
+    assert_eq(result, pdf.set_index("y"))
+
+    result = result.optimize(fuse=False)
+    assert all(isinstance(ex, (FromPandas, Blockwise)) for ex in result.walk())
