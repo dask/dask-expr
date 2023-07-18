@@ -182,3 +182,11 @@ def test_set_index_simplify(df, pdf):
     q = df.set_index(df.x)["y"].optimize(fuse=False)
     expected = df[["y"]].set_index(df.x)["y"].optimize(fuse=False)
     assert q._name == expected._name
+
+
+def test_set_index_without_sort(df, pdf):
+    result = df.set_index("y", sort=False)
+    assert_eq(result, pdf.set_index("y"))
+
+    result = result.optimize(fuse=False)
+    assert all(isinstance(ex, (FromPandas, Blockwise)) for ex in result.walk())
