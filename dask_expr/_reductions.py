@@ -89,7 +89,7 @@ class ApplyConcatApply(Expr):
             combine_kwargs = aggregate_kwargs
 
         # Decompose ApplyConcatApply into Chunk and TreeReduction
-        aca_type = funcname(type(self))
+        aca_type = type(self)
         chunked = Chunk(self.frame, aca_type, chunk, chunk_kwargs)
         return TreeReduction(
             chunked,
@@ -113,16 +113,6 @@ class Chunk(Blockwise):
 
     _parameters = ["frame", "type", "chunk", "chunk_kwargs"]
 
-    def __name__(self):
-        return funcname(type(self.chunk)) + "Chunk"
-
-    @property
-    def _defaults(self):
-        return {
-            "chunk": self.chunk,
-            "chunk_kwargs": self.chunk_kwargs,
-        }
-
     def operation(self, *args, **kwargs):
         return self.chunk(*args, **kwargs)
 
@@ -140,6 +130,24 @@ class Chunk(Blockwise):
         chunk_kwargs = self.chunk_kwargs or {}
         return make_meta(self.chunk(meta, **chunk_kwargs))
 
+    def _tree_repr_lines(self, indent=0, recursive=True):
+        header = f"{funcname(self.type)}({funcname(type(self))}): "
+        lines = []
+        if recursive:
+            for dep in self.dependencies():
+                lines.extend(dep._tree_repr_lines(2))
+
+        for k, v in self.chunk_kwargs.items():
+            try:
+                if v != self.type._defaults[k]:
+                    header += f" {k}={v}"
+            except KeyError:
+                header += f" {k}={v}"
+
+        lines = [header] + lines
+        lines = [" " * indent + line for line in lines]
+        return lines
+
 
 class TreeReduction(Expr):
     _parameters = [
@@ -150,15 +158,6 @@ class TreeReduction(Expr):
         "combine_kwargs",
         "aggregate_kwargs",
     ]
-
-    @property
-    def _defaults(self):
-        return {
-            "combine": self.combine,
-            "aggregate": self.aggregate,
-            "combine_kwargs": self.combine_kwargs,
-            "aggregate_kwargs": self.aggregate_kwargs,
-        }
 
     def __dask_postcompute__(self):
         return toolz.first, ()
@@ -208,6 +207,20 @@ class TreeReduction(Expr):
 
     def _divisions(self):
         return (None, None)
+
+    def _tree_repr_lines(self, indent=0, recursive=True):
+        header = f"{funcname(self.type)}({funcname(type(self))}): "
+        lines = []
+        if recursive:
+            for dep in self.dependencies():
+                lines.extend(dep._tree_repr_lines(2))
+
+        split_every = getattr(self, "split_every", 0)
+        header += f" split_every={split_every}"
+
+        lines = [header] + lines
+        lines = [" " * indent + line for line in lines]
+        return lines
 
 
 class Unique(ApplyConcatApply):

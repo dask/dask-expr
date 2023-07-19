@@ -649,7 +649,7 @@ def test_tree_repr(df, fuse):
     assert str(df.seed) in s.lower()
     if fuse:
         assert "Fused" in s
-        assert s.count("|") == 9
+        assert s.count("|") == 10
 
 
 def test_simple_graphs(df):
