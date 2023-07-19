@@ -108,7 +108,7 @@ class Chunk(Blockwise):
     ApplyConcatApply
     """
 
-    _parameters = ["frame", "type", "chunk", "chunk_kwargs"]
+    _parameters = ["frame", "kind", "chunk", "chunk_kwargs"]
 
     def operation(self, *args, **kwargs):
         return self.chunk(*args, **kwargs)
@@ -122,7 +122,7 @@ class Chunk(Blockwise):
         return self.chunk_kwargs or {}
 
     def _tree_repr_lines(self, indent=0, recursive=True):
-        header = f"{funcname(self.type)}({funcname(type(self))}): "
+        header = f"{funcname(self.kind)}({funcname(type(self))}): "
         lines = []
         if recursive:
             for dep in self.dependencies():
@@ -130,7 +130,7 @@ class Chunk(Blockwise):
 
         for k, v in self.chunk_kwargs.items():
             try:
-                if v != self.type._defaults[k]:
+                if v != self.kind._defaults[k]:
                     header += f" {k}={v}"
             except KeyError:
                 header += f" {k}={v}"
@@ -143,7 +143,7 @@ class Chunk(Blockwise):
 class TreeReduce(Expr):
     _parameters = [
         "frame",
-        "type",
+        "kind",
         "_meta",
         "combine",
         "aggregate",
@@ -191,8 +191,13 @@ class TreeReduce(Expr):
     def _divisions(self):
         return (None, None)
 
+    def __str__(self):
+        chunked = str(self.frame)
+        split_every = getattr(self, "split_every", 0)
+        return f"{type(self).__name__}({chunked}, kind={funcname(self.kind)}, split_every={split_every})"
+
     def _tree_repr_lines(self, indent=0, recursive=True):
-        header = f"{funcname(self.type)}({funcname(type(self))}): "
+        header = f"{funcname(self.kind)}({funcname(type(self))}): "
         lines = []
         if recursive:
             for dep in self.dependencies():
