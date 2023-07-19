@@ -44,9 +44,6 @@ class ApplyConcatApply(Expr):
     combine_kwargs = {}
     aggregate_kwargs = {}
 
-    def __dask_postcompute__(self):
-        return toolz.first, ()
-
     def _layer(self):
         # This is an abstract expression
         raise NotImplementedError()
@@ -88,12 +85,12 @@ class ApplyConcatApply(Expr):
             combine = aggregate
             combine_kwargs = aggregate_kwargs
 
-        # Decompose ApplyConcatApply into Chunk and TreeReduction
+        # Decompose ApplyConcatApply into Chunk and TreeReduce
         aca_type = type(self)
-        chunked = Chunk(self.frame, aca_type, chunk, chunk_kwargs)
-        return TreeReduction(
-            chunked,
+        return TreeReduce(
+            Chunk(self.frame, aca_type, chunk, chunk_kwargs),
             aca_type,
+            self._meta,
             combine,
             aggregate,
             combine_kwargs,
@@ -124,12 +121,6 @@ class Chunk(Blockwise):
     def _kwargs(self) -> dict:
         return self.chunk_kwargs or {}
 
-    @functools.cached_property
-    def _meta(self):
-        meta = meta_nonempty(self.frame._meta)
-        chunk_kwargs = self.chunk_kwargs or {}
-        return make_meta(self.chunk(meta, **chunk_kwargs))
-
     def _tree_repr_lines(self, indent=0, recursive=True):
         header = f"{funcname(self.type)}({funcname(type(self))}): "
         lines = []
@@ -149,10 +140,11 @@ class Chunk(Blockwise):
         return lines
 
 
-class TreeReduction(Expr):
+class TreeReduce(Expr):
     _parameters = [
         "frame",
         "type",
+        "_meta",
         "combine",
         "aggregate",
         "combine_kwargs",
@@ -163,17 +155,11 @@ class TreeReduction(Expr):
         return toolz.first, ()
 
     def _layer(self):
-        d = {}
-        split_every = getattr(self, "split_every", 0)
-        keys = self.frame.__dask_keys__()
-
-        # Create an alias for every input key
-        for i, key in enumerate(keys):
-            d[self._name, 0, i] = key
-
         # apply combine to batches of intermediate results
         j = 1
-        keys = list(d)
+        d = {}
+        keys = self.frame.__dask_keys__()
+        split_every = getattr(self, "split_every", 0)
         while len(keys) > 1:
             new_keys = []
             for i, batch in enumerate(
@@ -200,10 +186,7 @@ class TreeReduction(Expr):
 
     @property
     def _meta(self):
-        meta = meta_nonempty(self.frame._meta)
-        meta = self.combine([meta], **self.combine_kwargs)
-        meta = self.aggregate([meta], **self.aggregate_kwargs)
-        return make_meta(meta)
+        return self.operand("_meta")
 
     def _divisions(self):
         return (None, None)
