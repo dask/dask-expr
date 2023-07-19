@@ -2055,8 +2055,7 @@ def optimize_blockwise_fusion(expr):
             if v == set() or all(not isinstance(_expr, Blockwise) for _expr in v)
         ]
         while roots:
-            # Need to pop roots in FIFO order
-            root = roots.pop(0)
+            root = roots.pop()
             seen = set()
             stack = [root]
             group = []
@@ -2080,7 +2079,9 @@ def optimize_blockwise_fusion(expr):
                         # of partitions, since broadcasting within
                         # a group is not allowed.
                         stack.append(dep)
-                    elif dep not in roots and dependencies[dep]:
+                    elif dependencies[dep] and dep._name not in [
+                        r._name for r in roots
+                    ]:
                         # Couldn't fuse dep, but we may be able to
                         # use it as a new root on the next pass
                         roots.append(dep)
