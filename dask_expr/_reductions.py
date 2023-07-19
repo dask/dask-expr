@@ -101,7 +101,7 @@ class ApplyConcatApply(Expr):
 class Chunk(Blockwise):
     """Partition-wise component of `ApplyConcatApply`
 
-    This class is used within `ApplyConcatApply._simplify_down`.
+    This class is used within `ApplyConcatApply._lower`.
 
     See Also
     --------
@@ -141,6 +141,15 @@ class Chunk(Blockwise):
 
 
 class TreeReduce(Expr):
+    """Tree-reduction component of `ApplyConcatApply`
+
+    This class is used within `ApplyConcatApply._lower`.
+
+    See Also
+    --------
+    ApplyConcatApply
+    """
+
     _parameters = [
         "frame",
         "kind",
