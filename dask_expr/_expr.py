@@ -2055,7 +2055,8 @@ def optimize_blockwise_fusion(expr):
             if v == set() or all(not isinstance(_expr, Blockwise) for _expr in v)
         ]
         while roots:
-            root = roots.pop()
+            # Need to pop roots in FIFO order
+            root = roots.pop(0)
             seen = set()
             stack = [root]
             group = []
