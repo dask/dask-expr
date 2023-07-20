@@ -813,7 +813,6 @@ class DataFrame(FrameBase):
         return new_collection(Eval(self.expr, _expr=expr, expr_kwargs=kwargs))
 
     def set_index(
-        self, other, drop=True, sorted=False, divisions=None, sort: bool = True
         self,
         other,
         drop=True,
