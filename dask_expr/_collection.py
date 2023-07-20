@@ -830,6 +830,10 @@ class DataFrame(FrameBase):
             return self
 
         if not sort:
+            if npartitions is not None:
+                raise ValueError(
+                    "Specifying npartitions with sort=False is not supported. Call `repartition` afterwards."
+                )
             return new_collection(SetIndexBlockwise(self.expr, other, drop, None))
 
         if divisions is not None:
