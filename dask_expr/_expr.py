@@ -496,6 +496,14 @@ class Expr:
     def prod(self, skipna=True, numeric_only=False, min_count=0):
         return Prod(self, skipna, numeric_only, min_count)
 
+    def var(self, axis=0, skipna=True, ddof=1, numeric_only=False):
+        if axis == 0:
+            return Var(self, skipna, ddof, numeric_only)
+        elif axis == 1:
+            return VarColumns(axis, skipna, ddof, numeric_only)
+        else:
+            raise ValueError(f"axis={axis} not supported. Please specify 0 or 1")
+
     def mean(self, skipna=True, numeric_only=False, min_count=0):
         return Mean(self, skipna=skipna, numeric_only=numeric_only)
 
@@ -1219,6 +1227,21 @@ class ToFrameIndex(Blockwise):
     _defaults = {"name": no_default, "index": True}
     _keyword_only = ["name", "index"]
     operation = M.to_frame
+
+
+class VarColumns(Blockwise):
+    _parameters = ["frame", "skipna", "ddof", "numeric_only"]
+    _defaults = {"axis": 1, "skipna": True, "ddof": 1, "numeric_only": False}
+    _keyword_only = ["axis", "skipna", "ddof", "numeric_only"]
+    operation = M.var
+
+    # @functools.cached_property
+    # def _args(self) -> list:
+    #     return [self.frame]
+
+    # @functools.cached_property
+    # def _kwargs(self) -> dict:
+    #     return {"axis": 1, "skipna": self.skipna, "ddof": self.ddof, "numeric_only": self.numeric_only}
 
 
 class Elemwise(Blockwise):
@@ -2232,5 +2255,6 @@ from dask_expr._reductions import (
     Prod,
     Size,
     Sum,
+    Var,
 )
 from dask_expr.io import IO, BlockwiseIO
