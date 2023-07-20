@@ -8,6 +8,7 @@ from collections import defaultdict
 from collections.abc import Generator, Mapping
 
 import dask
+import numpy as np
 import pandas as pd
 import toolz
 from dask.base import normalize_token
@@ -503,6 +504,9 @@ class Expr:
             return VarColumns(self, skipna, ddof, numeric_only)
         else:
             raise ValueError(f"axis={axis} not supported. Please specify 0 or 1")
+
+    def std(self, axis=0, skipna=True, ddof=1, numeric_only=False):
+        return Sqrt(self.var(axis, skipna, ddof, numeric_only))
 
     def mean(self, skipna=True, numeric_only=False, min_count=0):
         return Mean(self, skipna=skipna, numeric_only=numeric_only)
@@ -1238,6 +1242,11 @@ class VarColumns(Blockwise):
     @functools.cached_property
     def _kwargs(self) -> dict:
         return {"axis": 1, **super()._kwargs}
+
+
+class Sqrt(Blockwise):
+    _parameters = ["frame"]
+    operation = np.sqrt
 
 
 class Elemwise(Blockwise):
