@@ -829,13 +829,6 @@ class DataFrame(FrameBase):
         elif other == self.index.name:
             return self
 
-        if not sort:
-            if npartitions is not None:
-                raise ValueError(
-                    "Specifying npartitions with sort=False is not supported. Call `repartition` afterwards."
-                )
-            return new_collection(SetIndexBlockwise(self.expr, other, drop, None))
-
         if divisions is not None:
             check_divisions(divisions)
         other = other.expr if isinstance(other, Series) else other
@@ -844,6 +837,13 @@ class DataFrame(FrameBase):
             return new_collection(
                 SetIndexBlockwise(self.expr, other, drop, new_divisions=divisions)
             )
+
+        elif not sort:
+            if npartitions is not None:
+                raise ValueError(
+                    "Specifying npartitions with sort=False is not supported. Call `repartition` afterwards."
+                )
+            return new_collection(SetIndexBlockwise(self.expr, other, drop, None))
 
         return new_collection(
             SetIndex(

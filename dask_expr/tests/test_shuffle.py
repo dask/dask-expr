@@ -198,5 +198,8 @@ def test_set_index_without_sort(df, pdf):
     result = result.optimize(fuse=False)
     assert all(isinstance(ex, (FromPandas, Blockwise)) for ex in result.walk())
 
+    result = df.set_index(df.y, sort=False)
+    assert_eq(result, pdf.set_index(pdf.y))
+
     with pytest.raises(ValueError, match="Specifying npartitions with sort=False"):
         df.set_index("y", sort=False, npartitions=20)
