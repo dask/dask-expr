@@ -389,6 +389,8 @@ class NBytes(Reduction):
 
 
 class Var(Reduction):
+    # Uses the parallel version of Welford's online algorithm (Chan 79')
+    # (http://i.stanford.edu/pub/cstr/reports/cs/tr/79/773/CS-TR-79-773.pdf)
     _parameters = ["frame", "skipna", "ddof", "numeric_only"]
     _defaults = {"skipna": True, "ddof": 1, "numeric_only": False}
 
@@ -396,7 +398,7 @@ class Var(Reduction):
     def _meta(self):
         return make_meta(
             meta_nonempty(self.frame._meta).var(
-                numeric_only=self.numeric_only, skipna=self.skipna
+                skipna=self.skipna, numeric_only=self.numeric_only
             )
         )
 
