@@ -109,10 +109,12 @@ API Coverage
 - `select_dtypes`
 - `set_index`
 - `shuffle`
+- `std`
 - `sum`
 - `tail`
 - `to_parquet`
 - `to_timestamp`
+- `var`
 - `visualize`
 
 
@@ -159,12 +161,14 @@ API Coverage
 - `reset_index`
 - `round`
 - `shuffle`
+- `std`
 - `sum`
 - `tail`
 - `to_frame`
 - `to_timestamp`
 - `unique`
 - `value_counts`
+- `var`
 - `visualize`
 
 
@@ -204,10 +208,12 @@ API Coverage
 - `reset_index`
 - `round`
 - `shuffle`
+- `std`
 - `sum`
 - `tail`
 - `to_frame`
 - `to_timestamp`
+- `var`
 - `visualize`
 
 
@@ -227,3 +233,38 @@ API Coverage
 - `sum`
 - `value_counts`
 - `var`
+
+
+**Binary operators (`DataFrame`, `Series`, and `Index`)**:
+
+- `__add__`
+- `__radd__`
+- `__sub__`
+- `__rsub__`
+- `__mul__`
+- `__rmul__`
+- `__truediv__`
+- `__rtruediv__`
+- `__lt__`
+- `__rlt__`
+- `__gt__`
+- `__rgt__`
+- `__le__`
+- `__rle__`
+- `__ge__`
+- `__rge__`
+- `__eq__`
+- `__ne__`
+- `__and__`
+- `__rand__`
+- `__or__`
+- `__ror__`
+- `__xor__`
+- `__rxor__`
+
+
+**Unary operators (`DataFrame`, `Series`, and `Index`)**:
+
+- `__invert__`
+- `__neg__`
+- `__pos__`
