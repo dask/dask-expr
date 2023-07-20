@@ -55,8 +55,8 @@ deprecation warning.  Please provide feedback, but it's best to avoid use in
 production settings.
 
 
-Current API Coverage
---------------------
+API Coverage
+------------
 
 **`dask_expr.DataFrame`**
 
