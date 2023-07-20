@@ -10,7 +10,7 @@ from collections.abc import Generator, Mapping
 import dask
 import pandas as pd
 import toolz
-from dask.base import normalize_token, tokenize
+from dask.base import normalize_token
 from dask.core import flatten, ishashable
 from dask.dataframe import methods
 from dask.dataframe.core import (
@@ -26,6 +26,8 @@ from dask.dataframe.dispatch import meta_nonempty
 from dask.dataframe.utils import clear_known_categories, drop_by_shallow_copy
 from dask.utils import M, apply, funcname, import_required, is_arraylike
 from tlz import merge_sorted, unique
+
+from dask_expr._util import _tokenize_deterministic
 
 replacement_rules = []
 
@@ -307,6 +309,85 @@ class Expr:
     def _lower(self):
         return
 
+    def combine_similar(
+        self, root: Expr | None = None, _cache: dict | None = None
+    ) -> Expr:
+        """Combine similar expression nodes using global information
+
+        This leverages the ``._combine_similar`` method defined
+        on each class. The global expression-tree traversal will
+        change IO leaves first, and finish with the root expression.
+        The primary purpose of this method is to allow column
+        projections to be "pushed back up" the expression graph
+        in the case that simlar IO & Blockwise operations can
+        be captured by the same operations.
+
+        Parameters
+        ----------
+        root:
+            The root node of the global expression graph. If not
+            specified, the root is assumed to be ``self``.
+        _cache:
+            Optional dictionary to use for caching.
+
+        Returns
+        -------
+        expr:
+            output expression
+        """
+        expr = self
+        update_root = root is None
+        root = root or self
+
+        if _cache is None:
+            _cache = {}
+        elif (self._name, root._name) in _cache:
+            return _cache[(self._name, root._name)]
+
+        while True:
+            changed = False
+
+            # Call combine_similar on each dependency
+            new_operands = []
+            changed_dependency = False
+            for operand in expr.operands:
+                if isinstance(operand, Expr):
+                    new = operand.combine_similar(root=root, _cache=_cache)
+                    if new._name != operand._name:
+                        changed_dependency = True
+                else:
+                    new = operand
+                new_operands.append(new)
+
+            if changed_dependency:
+                expr = type(expr)(*new_operands)
+                changed = True
+                if update_root:
+                    root = expr
+                continue
+
+            # Execute "_combine_similar" on expr
+            out = expr._combine_similar(root)
+            if out is None:
+                out = expr
+            if not isinstance(out, Expr):
+                _cache[(self._name, root._name)] = out
+                return out
+            if out._name != expr._name:
+                changed = True
+                expr = out
+                if update_root:
+                    root = expr
+
+            if not changed:
+                break
+
+        _cache[(self._name, root._name)] = expr
+        return expr
+
+    def _combine_similar(self, root: Expr):
+        return
+
     def optimize(self, **kwargs):
         return optimize(self, **kwargs)
 
@@ -530,7 +611,9 @@ class Expr:
 
     @functools.cached_property
     def _name(self):
-        return funcname(type(self)).lower() + "-" + tokenize(*self.operands)
+        return (
+            funcname(type(self)).lower() + "-" + _tokenize_deterministic(*self.operands)
+        )
 
     @property
     def columns(self) -> list:
@@ -611,6 +694,56 @@ class Expr:
         if update:  # Only recreate if something changed
             return type(self)(*new)
         return self
+
+    def substitute_parameters(self, substitutions: dict) -> Expr:
+        """Substitute specific `Expr` parameters
+
+        Parameters
+        ----------
+        substitutions:
+            Mapping of parameter keys to new values. Keys that
+            are not found in ``self._parameters`` will be ignored.
+        """
+        if not substitutions:
+            return self
+
+        changed = False
+        new_operands = []
+        for i, operand in enumerate(self.operands):
+            if i < len(self._parameters) and self._parameters[i] in substitutions:
+                new_operands.append(substitutions[self._parameters[i]])
+                changed = True
+            else:
+                new_operands.append(operand)
+        if changed:
+            return type(self)(*new_operands)
+        return self
+
+    def _find_similar_operations(self, root: Expr, ignore: list | None = None):
+        # Find operations with the same type and operands.
+        # Parameter keys specified by `ignore` will not be
+        # included in the operand comparison
+        alike = [
+            op for op in root.find_operations(type(self)) if op._name != self._name
+        ]
+        if not alike:
+            # No other operations of the same type. Early return
+            return []
+
+        def _tokenize(rp):
+            # Helper function to "tokenize" the operands
+            # that are not in the `ignore` list
+            return _tokenize_deterministic(
+                *[
+                    op
+                    for i, op in enumerate(rp.operands)
+                    if i >= len(rp._parameters) or rp._parameters[i] not in ignore
+                ]
+            )
+
+        # Return subset of `alike` with the same "token"
+        token = _tokenize(self)
+        return [item for item in alike if _tokenize(item) == token]
 
     def _node_label_args(self):
         """Operands to include in the node label by `visualize`"""
@@ -836,7 +969,7 @@ class Blockwise(Expr):
             head = funcname(self.operation)
         else:
             head = funcname(type(self)).lower()
-        return head + "-" + tokenize(*self.operands)
+        return head + "-" + _tokenize_deterministic(*self.operands)
 
     def _blockwise_arg(self, arg, i):
         """Return a Blockwise-task argument"""
@@ -871,6 +1004,26 @@ class Blockwise(Expr):
     def _simplify_up(self, parent):
         if self._projection_passthrough and isinstance(parent, Projection):
             return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+
+    def _combine_similar(self, root: Expr):
+        # Push projections back up through `_projection_passthrough`
+        # operations if it reduces the number of unique expression nodes.
+        if self._projection_passthrough and isinstance(self.frame, Projection):
+            common = type(self)(self.frame.frame, *self.operands[1:])
+            projection = self.frame.operand("columns")
+            push_up_projection = False
+            for op in self._find_similar_operations(root, ignore=self._parameters):
+                if (
+                    isinstance(op.frame, Projection)
+                    and (
+                        common._name == type(op)(op.frame.frame, *op.operands[1:])._name
+                    )
+                ) or common._name == op._name:
+                    push_up_projection = True
+
+            if push_up_projection:
+                return common[projection]
+        return None
 
 
 class MapPartitions(Blockwise):
@@ -1724,11 +1877,7 @@ class Partitions(Expr):
                 partitions = self.partitions
             # We assume that expressions defining a special "_partitions"
             # parameter can internally capture the same logic as `Partitions`
-            operands = [
-                partitions if self.frame._parameters[i] == "_partitions" else op
-                for i, op in enumerate(self.frame.operands)
-            ]
-            return type(self.frame)(*operands)
+            return self.frame.substitute_parameters({"_partitions": partitions})
 
     def _node_label_args(self):
         return [self.frame, self.partitions]
@@ -1794,24 +1943,29 @@ def normalize_expression(expr):
     return expr._name
 
 
-def optimize(expr: Expr, fuse: bool = True) -> Expr:
+def optimize(expr: Expr, combine_similar: bool = True, fuse: bool = True) -> Expr:
     """High level query optimization
 
     This leverages three optimization passes:
 
     1.  Class based simplification using the ``_simplify`` function and methods
-    2.  Blockwise fusion
+    2.  Combine similar operations
+    3.  Blockwise fusion
 
     Parameters
     ----------
     expr:
         Input expression to optimize
+    combine_similar:
+        whether or not to combine similar operations
+        (like `ReadParquet`) to aggregate redundant work.
     fuse:
         whether or not to turn on blockwise fusion
 
     See Also
     --------
     simplify
+    combine_similar
     optimize_blockwise_fusion
     """
 
@@ -1821,6 +1975,9 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
         if out._name == result._name:
             break
         result = out
+
+    if combine_similar:
+        result = result.combine_similar()
 
     if fuse:
         result = optimize_blockwise_fusion(result)
@@ -2025,7 +2182,7 @@ class Fused(Blockwise):
 
     @functools.cached_property
     def _name(self):
-        return f"{str(self)}-{tokenize(self.exprs)}"
+        return f"{str(self)}-{_tokenize_deterministic(self.exprs)}"
 
     def _divisions(self):
         return self.exprs[0]._divisions()

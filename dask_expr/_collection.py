@@ -147,8 +147,10 @@ class FrameBase(DaskMethodsMixin):
     def lower_once(self):
         return new_collection(self.expr.lower_once())
 
-    def optimize(self, fuse: bool = True):
-        return new_collection(self.expr.optimize(fuse=fuse))
+    def optimize(self, combine_similar: bool = True, fuse: bool = True):
+        return new_collection(
+            self.expr.optimize(combine_similar=combine_similar, fuse=fuse)
+        )
 
     @property
     def dask(self):
@@ -812,6 +814,13 @@ class DataFrame(FrameBase):
 
     def set_index(
         self, other, drop=True, sorted=False, divisions=None, sort: bool = True
+        self,
+        other,
+        drop=True,
+        sorted=False,
+        npartitions: int | None = None,
+        divisions=None,
+        sort: bool = True,
     ):
         if isinstance(other, DataFrame):
             raise TypeError("other can't be of type DataFrame")
@@ -834,7 +843,13 @@ class DataFrame(FrameBase):
             )
 
         return new_collection(
-            SetIndex(self.expr, other, drop, user_divisions=divisions)
+            SetIndex(
+                self.expr,
+                other,
+                drop,
+                user_divisions=divisions,
+                npartitions=npartitions,
+            )
         )
 
 
@@ -976,10 +991,12 @@ def from_dask_dataframe(ddf: _Frame, optimize: bool = True) -> FrameBase:
     return from_graph(graph, ddf._meta, ddf.divisions, ddf._name)
 
 
-def read_csv(*args, **kwargs):
+def read_csv(path, *args, **kwargs):
     from dask_expr.io.csv import ReadCSV
 
-    return new_collection(ReadCSV(*args, **kwargs))
+    if not isinstance(path, str):
+        path = stringify_path(path)
+    return new_collection(ReadCSV(path, *args, **kwargs))
 
 
 def read_parquet(
@@ -1002,7 +1019,7 @@ def read_parquet(
 ):
     from dask_expr.io.parquet import ReadParquet
 
-    if hasattr(path, "name"):
+    if not isinstance(path, str):
         path = stringify_path(path)
 
     kwargs["dtype_backend"] = dtype_backend
