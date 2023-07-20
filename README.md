@@ -106,7 +106,7 @@ API Coverage
 - `reset_index`
 - `round`
 - `sample`
-- `select_types`
+- `select_dtypes`
 - `set_index`
 - `shuffle`
 - `sum`
