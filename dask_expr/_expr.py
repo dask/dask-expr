@@ -500,7 +500,7 @@ class Expr:
         if axis == 0:
             return Var(self, skipna, ddof, numeric_only)
         elif axis == 1:
-            return VarColumns(axis, skipna, ddof, numeric_only)
+            return VarColumns(self, skipna, ddof, numeric_only)
         else:
             raise ValueError(f"axis={axis} not supported. Please specify 0 or 1")
 
@@ -1231,17 +1231,13 @@ class ToFrameIndex(Blockwise):
 
 class VarColumns(Blockwise):
     _parameters = ["frame", "skipna", "ddof", "numeric_only"]
-    _defaults = {"axis": 1, "skipna": True, "ddof": 1, "numeric_only": False}
-    _keyword_only = ["axis", "skipna", "ddof", "numeric_only"]
+    _defaults = {"skipna": True, "ddof": 1, "numeric_only": False}
+    _keyword_only = ["skipna", "ddof", "numeric_only"]
     operation = M.var
 
-    # @functools.cached_property
-    # def _args(self) -> list:
-    #     return [self.frame]
-
-    # @functools.cached_property
-    # def _kwargs(self) -> dict:
-    #     return {"axis": 1, "skipna": self.skipna, "ddof": self.ddof, "numeric_only": self.numeric_only}
+    @functools.cached_property
+    def _kwargs(self) -> dict:
+        return {"axis": 1, **super()._kwargs}
 
 
 class Elemwise(Blockwise):
