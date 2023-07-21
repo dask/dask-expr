@@ -143,6 +143,8 @@ def test_reductions(func, pdf, df):
 @pytest.mark.parametrize("skipna", [True, False])
 @pytest.mark.parametrize("ddof", [1, 2])
 def test_std_kwargs(axis, skipna, ddof):
+    if BACKEND == "cudf" and skipna is False:
+        pytest.xfail(reason="cudf requires skipna=True when nulls are present.")
     pdf = lib.DataFrame(
         {"x": range(30), "y": [1, 2, None] * 10, "z": ["dog", "cat"] * 15}
     )
