@@ -879,8 +879,8 @@ class DataFrame(FrameBase):
 
         if not (
             is_scalar(values)
-            and values in self._meta[columns]
-            or all(is_scalar(x) and x in self._meta[columns] for x in values)
+            and values in self._meta.columns
+            or all(is_scalar(x) and x in self._meta.columns for x in values)
         ):
             raise ValueError("'values' must refer to an existing column or columns")
 
