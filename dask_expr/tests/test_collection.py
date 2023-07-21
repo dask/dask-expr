@@ -143,7 +143,7 @@ def test_reductions(func, pdf, df):
 @pytest.mark.parametrize("skipna", [True, False])
 @pytest.mark.parametrize("ddof", [1, 2])
 def test_std_kwargs(axis, skipna, ddof):
-    pdf = pd.DataFrame(
+    pdf = lib.DataFrame(
         {"x": range(30), "y": [1, 2, None] * 10, "z": ["dog", "cat"] * 15}
     )
     df = from_pandas(pdf, npartitions=3)
@@ -581,7 +581,7 @@ def test_substitute():
 
 
 def test_substitute_parameters(df):
-    pdf = pd.DataFrame(
+    pdf = lib.DataFrame(
         {
             "a": range(100),
             "b": range(100),
