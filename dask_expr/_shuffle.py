@@ -631,9 +631,7 @@ class BaseSetIndexSortValues(Expr):
 
     @property
     def npartitions(self):
-        if self.operand("npartitions") is not None:
-            return self.operand("npartitions")
-        return self.frame.npartitions
+        return self.operand("npartitions") or self.frame.npartitions
 
 
 class SetIndex(BaseSetIndexSortValues):
