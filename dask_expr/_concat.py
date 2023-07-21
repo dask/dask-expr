@@ -6,12 +6,25 @@ from dask.dataframe.dispatch import make_meta, meta_nonempty
 from dask.dataframe.utils import check_meta, strip_unknown_categories
 from dask.utils import apply, is_dataframe_like, is_series_like
 
-from dask_expr.expr import AsType, Expr, Projection
+from dask_expr._expr import AsType, Expr, Projection
 
 
 class Concat(Expr):
     _parameters = ["join", "ignore_order", "_kwargs"]
     _defaults = {"join": "outer", "ignore_order": False, "_kwargs": {}}
+
+    def __str__(self):
+        s = (
+            "frames="
+            + str(self.dependencies())
+            + ", "
+            + ", ".join(
+                str(param) + "=" + str(operand)
+                for param, operand in zip(self._parameters, self.operands)
+                if operand != self._defaults.get(param)
+            )
+        )
+        return f"{type(self).__name__}({s})"
 
     @property
     def _frames(self):
@@ -46,7 +59,7 @@ class Concat(Expr):
 
         return [None] * (sum(df.npartitions for df in dfs) + 1)
 
-    def _simplify_down(self):
+    def _lower(self):
         dfs = self._frames
         cast_dfs = []
         for df in dfs:
@@ -132,5 +145,5 @@ class StackPartition(Concat):
                 i += 1
         return dsk
 
-    def _simplify_down(self):
+    def _lower(self):
         return

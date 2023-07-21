@@ -19,9 +19,9 @@ from dask.dataframe.groupby import (
 )
 from dask.utils import M, is_index_like
 
-from dask_expr.collection import DataFrame, Series, new_collection
-from dask_expr.expr import MapPartitions
-from dask_expr.reductions import ApplyConcatApply, Reduction
+from dask_expr._collection import DataFrame, Series, new_collection
+from dask_expr._expr import MapPartitions, Projection
+from dask_expr._reductions import ApplyConcatApply, Reduction
 
 
 def _as_dict(key, value):
@@ -114,6 +114,16 @@ class SingleAggregation(ApplyConcatApply):
             **_as_dict("dropna", self.dropna),
             **aggregate_kwargs,
         }
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            columns = sorted(set(parent.columns + self.by))
+            if columns == self.frame.columns:
+                return
+            return type(parent)(
+                type(self)(self.frame[columns], *self.operands[1:]),
+                *parent.operands[1:],
+            )
 
 
 class GroupbyAggregation(ApplyConcatApply):
@@ -297,15 +307,25 @@ class Var(Reduction):
     def _divisions(self):
         return (None, None)
 
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            columns = sorted(set(parent.columns + self.by))
+            if columns == self.frame.columns:
+                return
+            return type(parent)(
+                type(self)(self.frame[columns], *self.operands[1:]),
+                *parent.operands[1:],
+            )
+
 
 class Std(SingleAggregation):
     _parameters = ["frame", "by", "ddof", "numeric_only"]
 
     @functools.cached_property
     def _meta(self):
-        return self.simplify()._meta
+        return self._lower()._meta
 
-    def _simplify_down(self):
+    def _lower(self):
         v = Var(*self.operands)
         return MapPartitions(
             v,
@@ -320,9 +340,9 @@ class Std(SingleAggregation):
 class Mean(SingleAggregation):
     @functools.cached_property
     def _meta(self):
-        return self.simplify()._meta
+        return self._lower()._meta
 
-    def _simplify_down(self):
+    def _lower(self):
         s = Sum(*self.operands)
         # Drop chunk/aggregate_kwargs for count
         c = Count(

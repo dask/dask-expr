@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import functools
 import warnings
+from collections.abc import Hashable
 from numbers import Number
 
 import numpy as np
 import pandas as pd
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
 from dask.dataframe import methods
+from dask.dataframe.accessor import CachedAccessor
 from dask.dataframe.core import (
     _concat,
     _Frame,
+    check_divisions,
     is_dataframe_like,
     is_index_like,
     is_series_like,
@@ -22,12 +25,14 @@ from dask.utils import IndexCallable, random_state_data, typename
 from fsspec.utils import stringify_path
 from tlz import first
 
-from dask_expr import expr
-from dask_expr._util import _convert_to_list, is_scalar
-from dask_expr.concat import Concat
-from dask_expr.expr import Eval, no_default
-from dask_expr.merge import Merge
-from dask_expr.reductions import (
+from dask_expr import _expr as expr
+from dask_expr._align import AlignPartitions
+from dask_expr._categorical import CategoricalAccessor
+from dask_expr._concat import Concat
+from dask_expr._expr import Eval, no_default
+from dask_expr._merge import JoinRecursive, Merge
+from dask_expr._quantiles import RepartitionQuantiles
+from dask_expr._reductions import (
     DropDuplicates,
     Len,
     MemoryUsageFrame,
@@ -38,7 +43,9 @@ from dask_expr.reductions import (
     Unique,
     ValueCounts,
 )
-from dask_expr.repartition import Repartition
+from dask_expr._repartition import Repartition
+from dask_expr._shuffle import SetIndex, SetIndexBlockwise
+from dask_expr._util import _convert_to_list, is_scalar
 
 #
 # Utilities to wrap Expr API
@@ -63,7 +70,17 @@ def _wrap_expr_op(self, other, op=None):
     assert op is not None
     if isinstance(other, FrameBase):
         other = other.expr
-    return new_collection(getattr(self.expr, op)(other))
+
+    if not isinstance(other, expr.Expr):
+        return new_collection(getattr(self.expr, op)(other))
+    elif expr.are_co_aligned(self.expr, other):
+        return new_collection(getattr(self.expr, op)(other))
+    else:
+        return new_collection(
+            getattr(AlignPartitions(self.expr, other), op)(
+                AlignPartitions(other, self.expr)
+            )
+        )
 
 
 def _wrap_unary_expr_op(self, op=None):
@@ -89,7 +106,7 @@ class FrameBase(DaskMethodsMixin):
         self._expr = expr
 
     @property
-    def expr(self):
+    def expr(self) -> expr.Expr:
         return self._expr
 
     @property
@@ -102,7 +119,7 @@ class FrameBase(DaskMethodsMixin):
 
     @property
     def columns(self):
-        return pd.Index(self.expr.columns)
+        return pd.Index(self.expr.columns, name=self._meta.columns.name)
 
     def __len__(self):
         return new_collection(Len(self.expr)).compute()
@@ -121,29 +138,37 @@ class FrameBase(DaskMethodsMixin):
 
     def __dask_graph__(self):
         out = self.expr
-        out = out.simplify()
+        out = out.optimize(fuse=False)
         return out.__dask_graph__()
 
     def __dask_keys__(self):
         out = self.expr
-        out = out.simplify()
+        out = out.optimize(fuse=False)
         return out.__dask_keys__()
 
     def simplify(self):
         return new_collection(self.expr.simplify())
+
+    def lower_once(self):
+        return new_collection(self.expr.lower_once())
+
+    def optimize(self, combine_similar: bool = True, fuse: bool = True):
+        return new_collection(
+            self.expr.optimize(combine_similar=combine_similar, fuse=fuse)
+        )
 
     @property
     def dask(self):
         return self.__dask_graph__()
 
     def __dask_postcompute__(self):
-        state = self.simplify()
+        state = self.optimize(fuse=False)
         if type(self) != type(state):
             return state.__dask_postcompute__()
         return _concat, ()
 
     def __dask_postpersist__(self):
-        state = self.simplify()
+        state = self.optimize(fuse=False)
         return from_graph, (state._meta, state.divisions, state._name)
 
     def __getattr__(self, key):
@@ -279,7 +304,7 @@ class FrameBase(DaskMethodsMixin):
         **options: optional
             Algorithm-specific options.
         """
-        from dask_expr.shuffle import Shuffle
+        from dask_expr._shuffle import Shuffle
 
         # Preserve partition count by default
         npartitions = npartitions or self.npartitions
@@ -297,7 +322,7 @@ class FrameBase(DaskMethodsMixin):
         )
 
     def groupby(self, by, **kwargs):
-        from dask_expr.groupby import GroupBy
+        from dask_expr._groupby import GroupBy
 
         if isinstance(by, FrameBase) and not isinstance(by, Series):
             raise ValueError(
@@ -410,6 +435,86 @@ class FrameBase(DaskMethodsMixin):
         df = self.optimize(**optimize_kwargs) if optimize else self
         return new_dd_object(df.dask, df._name, df._meta, df.divisions)
 
+    def sum(self, skipna=True, numeric_only=False, min_count=0):
+        return new_collection(self.expr.sum(skipna, numeric_only, min_count))
+
+    def prod(self, skipna=True, numeric_only=False, min_count=0):
+        return new_collection(self.expr.prod(skipna, numeric_only, min_count))
+
+    def var(self, axis=0, skipna=True, ddof=1, numeric_only=False):
+        return new_collection(self.expr.var(axis, skipna, ddof, numeric_only))
+
+    def std(self, axis=0, skipna=True, ddof=1, numeric_only=False):
+        return new_collection(self.expr.std(axis, skipna, ddof, numeric_only))
+
+    def mean(self, skipna=True, numeric_only=False, min_count=0):
+        return new_collection(self.expr.mean(skipna, numeric_only))
+
+    def max(self, skipna=True, numeric_only=False, min_count=0):
+        return new_collection(self.expr.max(skipna, numeric_only, min_count))
+
+    def any(self, skipna=True):
+        return new_collection(self.expr.any(skipna))
+
+    def all(self, skipna=True):
+        return new_collection(self.expr.all(skipna))
+
+    def idxmin(self, skipna=True, numeric_only=False):
+        return new_collection(self.expr.idxmin(skipna, numeric_only))
+
+    def idxmax(self, skipna=True, numeric_only=False):
+        return new_collection(self.expr.idxmax(skipna, numeric_only))
+
+    def mode(self, dropna=True):
+        return new_collection(self.expr.mode(dropna))
+
+    def min(self, skipna=True, numeric_only=False, min_count=0):
+        return new_collection(self.expr.min(skipna, numeric_only, min_count))
+
+    def count(self, numeric_only=False):
+        return new_collection(self.expr.count(numeric_only))
+
+    def abs(self):
+        return new_collection(self.expr.abs())
+
+    def astype(self, dtypes):
+        return new_collection(self.expr.astype(dtypes))
+
+    def clip(self, lower=None, upper=None):
+        return new_collection(self.expr.clip(lower, upper))
+
+    def combine_first(self, other):
+        return new_collection(self.expr.combine_first(other.expr))
+
+    def to_timestamp(self, freq=None, how="start"):
+        return new_collection(self.expr.to_timestamp(freq, how))
+
+    def isna(self):
+        return new_collection(self.expr.isna())
+
+    def round(self, decimals=0):
+        return new_collection(self.expr.round(decimals))
+
+    def apply(self, function, *args, **kwargs):
+        return new_collection(self.expr.apply(function, *args, **kwargs))
+
+    def replace(self, to_replace=None, value=no_default, regex=False):
+        return new_collection(self.expr.replace(to_replace, value, regex))
+
+    def fillna(self, value=None):
+        return new_collection(self.expr.fillna(value))
+
+    def rename_axis(
+        self, mapper=no_default, index=no_default, columns=no_default, axis=0
+    ):
+        return new_collection(self.expr.rename_axis(mapper, index, columns, axis))
+
+    def align(self, other, join="outer", fill_value=None):
+        return self.expr.align(other.expr, join, fill_value)
+
+    def nunique_approx(self):
+        return new_collection(self.expr.nunique_approx())
+
 
 # Add operator attributes
 for op in [
@@ -453,12 +558,21 @@ class DataFrame(FrameBase):
 
     def assign(self, **pairs):
         result = self
+        data = self.copy()
         for k, v in pairs.items():
-            if not isinstance(v, Series):
-                raise TypeError(f"Column assignment doesn't support type {type(v)}")
             if not isinstance(k, str):
                 raise TypeError(f"Column name cannot be type {type(k)}")
-            result = new_collection(expr.Assign(result.expr, k, v.expr))
+
+            if callable(v):
+                v = v(data)
+
+            if isinstance(v, (Scalar, Series)):
+                result = new_collection(expr.Assign(result.expr, k, v.expr))
+            elif not isinstance(v, FrameBase) and isinstance(v, Hashable):
+                result = new_collection(expr.Assign(result.expr, k, v))
+            else:
+                raise TypeError(f"Column assignment doesn't support type {type(v)}")
+
         return result
 
     def merge(
@@ -567,12 +681,24 @@ class DataFrame(FrameBase):
         rsuffix="",
         shuffle_backend=None,
     ):
-        if not is_dataframe_like(other._meta) and hasattr(other._meta, "name"):
+        if (
+            not isinstance(other, list)
+            and not is_dataframe_like(other._meta)
+            and hasattr(other._meta, "name")
+        ):
             other = new_collection(expr.ToFrame(other.expr))
 
-        if not is_dataframe_like(other._meta):
-            # TODO: Implement multi-join
-            raise NotImplementedError
+        if not isinstance(other, FrameBase):
+            if not isinstance(other, list) or not all(
+                isinstance(o, FrameBase) for o in other
+            ):
+                raise ValueError("other must be DataFrame or list of DataFrames")
+            if how not in ("outer", "left"):
+                raise ValueError("merge_multi only supports left or outer joins")
+
+            return new_collection(
+                JoinRecursive([self.expr] + [o.expr for o in other], how=how)
+            )
 
         return self.merge(
             right=other,
@@ -678,6 +804,13 @@ class DataFrame(FrameBase):
         column = _convert_to_list(column)
         return new_collection(expr.ExplodeFrame(self.expr, column=column))
 
+    def drop(self, labels=None, columns=None, errors="raise"):
+        if columns is None:
+            columns = labels
+        if columns is None:
+            raise TypeError("must either specify 'columns' or 'labels'")
+        return new_collection(expr.Drop(self.expr, columns=columns, errors=errors))
+
     def to_parquet(self, path, **kwargs):
         from dask_expr.io.parquet import to_parquet
 
@@ -689,6 +822,50 @@ class DataFrame(FrameBase):
 
     def eval(self, expr, **kwargs):
         return new_collection(Eval(self.expr, _expr=expr, expr_kwargs=kwargs))
+
+    def set_index(
+        self,
+        other,
+        drop=True,
+        sorted=False,
+        npartitions: int | None = None,
+        divisions=None,
+        sort: bool = True,
+    ):
+        if isinstance(other, DataFrame):
+            raise TypeError("other can't be of type DataFrame")
+        if isinstance(other, Series):
+            if other._name == self.index._name:
+                return self
+        elif other == self.index.name:
+            return self
+
+        if divisions is not None:
+            check_divisions(divisions)
+        other = other.expr if isinstance(other, Series) else other
+
+        if (sorted or not sort) and npartitions is not None:
+            raise ValueError(
+                "Specifying npartitions with sort=False or sorted=True is not "
+                "supported. Call `repartition` afterwards."
+            )
+
+        if sorted:
+            return new_collection(
+                SetIndexBlockwise(self.expr, other, drop, new_divisions=divisions)
+            )
+        elif not sort:
+            return new_collection(SetIndexBlockwise(self.expr, other, drop, None))
+
+        return new_collection(
+            SetIndex(
+                self.expr,
+                other,
+                drop,
+                user_divisions=divisions,
+                npartitions=npartitions,
+            )
+        )
 
     def pivot_table(self, index, columns, values, aggfunc="mean"):
         if not is_scalar(index) or index not in self._meta.columns:
@@ -767,6 +944,13 @@ class Series(FrameBase):
     def explode(self):
         return new_collection(expr.ExplodeSeries(self.expr))
 
+    cat = CachedAccessor("cat", CategoricalAccessor)
+
+    def _repartition_quantiles(self, npartitions, upsample=1.0, random_state=None):
+        return new_collection(
+            RepartitionQuantiles(self.expr, npartitions, upsample, random_state)
+        )
+
 
 class Index(Series):
     """Index-like Expr Collection"""
@@ -817,10 +1001,10 @@ def optimize(collection, fuse=True):
     return new_collection(expr.optimize(collection.expr, fuse=fuse))
 
 
-def from_pandas(*args, **kwargs):
+def from_pandas(data, npartitions=1, sort=True):
     from dask_expr.io.io import FromPandas
 
-    return new_collection(FromPandas(*args, **kwargs))
+    return new_collection(FromPandas(data.copy(), npartitions=npartitions, sort=sort))
 
 
 def from_graph(*args, **kwargs):
@@ -843,10 +1027,12 @@ def from_dask_dataframe(ddf: _Frame, optimize: bool = True) -> FrameBase:
     return from_graph(graph, ddf._meta, ddf.divisions, ddf._name)
 
 
-def read_csv(*args, **kwargs):
+def read_csv(path, *args, **kwargs):
     from dask_expr.io.csv import ReadCSV
 
-    return new_collection(ReadCSV(*args, **kwargs))
+    if not isinstance(path, str):
+        path = stringify_path(path)
+    return new_collection(ReadCSV(path, *args, **kwargs))
 
 
 def read_parquet(
@@ -869,7 +1055,7 @@ def read_parquet(
 ):
     from dask_expr.io.parquet import ReadParquet
 
-    if hasattr(path, "name"):
+    if not isinstance(path, str):
         path = stringify_path(path)
 
     kwargs["dtype_backend"] = dtype_backend
