@@ -66,7 +66,7 @@ class CategoricalAccessor(Accessor):
         """
         if self.known:
             return self._series
-        from dask_expr.collection import new_collection
+        from dask_expr._collection import new_collection
 
         categories = (
             new_collection(PropertyMap(self._series.expr, "cat", "categories"))

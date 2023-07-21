@@ -53,7 +53,7 @@ class Accessor:
         return maybe_wrap_pandas(obj, out)
 
     def _function_map(self, attr, *args, **kwargs):
-        from dask_expr.collection import new_collection
+        from dask_expr._collection import new_collection
 
         return new_collection(
             FunctionMap(self._series.expr, self._accessor_name, attr, args, kwargs)
