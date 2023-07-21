@@ -776,28 +776,30 @@ class SortValues(BaseSetIndexSortValues):
         return self.frame._meta
 
     def _lower(self):
-        if self.user_divisions is None:
-            divisions = self._divisions()
-            presorted = _calculate_divisions(
-                self.frame, self.other, self.npartitions, self.ascending
-            )[3]
+        by = self.frame[self.by[0]]
+        divisions, _, _, presorted = _calculate_divisions(
+            self.frame, by, self.npartitions, self.ascending
+        )
+        if presorted and self.npartitions == self.frame.npartitions:
+            return SortValuesBlockwise(
+                self.frame, self.sort_function, self.sort_function_kwargs
+            )
 
-            if presorted and self.npartitions == self.frame.npartitions:
-                index_set = SetIndexBlockwise(
-                    self.frame, self._other, self.drop, divisions
-                )
-                return SortIndexBlockwise(index_set)
-
-        else:
-            divisions = self.user_divisions
-
-        return SetPartition(self.frame, self._other, self.drop, divisions)
+        partitions = _SetPartitionsPreSetIndex(by, by._meta._constructor(divisions))
+        assigned = Assign(self.frame, "_partitions", partitions)
+        shuffled = Shuffle(
+            assigned,
+            "_partitions",
+            npartitions_out=len(divisions) - 1,
+            ignore_index=True,
+        )
+        return SortValuesBlockwise(
+            shuffled, self.sort_function, self.sort_function_kwargs
+        )
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
-            columns = parent.columns + (
-                [self._other] if not isinstance(self._other, Expr) else []
-            )
+            columns = parent.columns + self.by
             if self.frame.columns == columns:
                 return
             return type(parent)(
@@ -877,6 +879,19 @@ class SortIndexBlockwise(Blockwise):
     _projection_passthrough = True
     _parameters = ["frame"]
     operation = M.sort_index
+
+
+def sort_function(self, *args, **kwargs):
+    sort_func = kwargs.pop("sort_function")
+    sort_kwargs = kwargs.pop("sort_kwargs")
+    return sort_func(*args, **kwargs, **sort_kwargs)
+
+
+class SortValuesBlockwise(Blockwise):
+    _projection_passthrough = False
+    _parameters = ["frame", "sort_function", "sort_kwargs"]
+    operation = sort_function
+    _keyword_only = ["sort_function", "sort_kwargs"]
 
 
 class SetIndexBlockwise(Blockwise):

@@ -874,7 +874,6 @@ class DataFrame(FrameBase):
         partition_size: float = 128e6,
         sort_function: Callable[[pd.DataFrame], pd.DataFrame] | None = None,
         sort_function_kwargs: Mapping[str, Any] | None = None,
-        **kwargs,
     ):
         """See DataFrame.sort_values for docstring"""
         if na_position not in ("first", "last"):
