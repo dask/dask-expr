@@ -8,6 +8,7 @@ from collections import defaultdict
 from collections.abc import Generator, Mapping
 
 import dask
+import numpy as np
 import pandas as pd
 import toolz
 from dask.base import normalize_token
@@ -147,7 +148,13 @@ class Expr:
                 return self.operands[idx]
             if is_dataframe_like(self._meta) and key in self._meta.columns:
                 return self[key]
-            raise err
+
+            link = "https://github.com/dask-contrib/dask-expr/blob/main/README.md#api-coverage"
+            raise AttributeError(
+                f"{err}\n\n"
+                "This often means that you are attempting to use an unsupported "
+                f"API function. Current API coverage is documented here: {link}."
+            )
 
     def operand(self, key):
         # Access an operand unambiguously
@@ -496,6 +503,17 @@ class Expr:
     def prod(self, skipna=True, numeric_only=False, min_count=0):
         return Prod(self, skipna, numeric_only, min_count)
 
+    def var(self, axis=0, skipna=True, ddof=1, numeric_only=False):
+        if axis == 0:
+            return Var(self, skipna, ddof, numeric_only)
+        elif axis == 1:
+            return VarColumns(self, skipna, ddof, numeric_only)
+        else:
+            raise ValueError(f"axis={axis} not supported. Please specify 0 or 1")
+
+    def std(self, axis=0, skipna=True, ddof=1, numeric_only=False):
+        return Sqrt(self.var(axis, skipna, ddof, numeric_only))
+
     def mean(self, skipna=True, numeric_only=False, min_count=0):
         return Mean(self, skipna=skipna, numeric_only=numeric_only)
 
@@ -695,7 +713,7 @@ class Expr:
             return type(self)(*new)
         return self
 
-    def _substitute_parameters(self, substitutions: dict) -> Expr:
+    def substitute_parameters(self, substitutions: dict) -> Expr:
         """Substitute specific `Expr` parameters
 
         Parameters
@@ -1219,6 +1237,22 @@ class ToFrameIndex(Blockwise):
     _defaults = {"name": no_default, "index": True}
     _keyword_only = ["name", "index"]
     operation = M.to_frame
+
+
+class VarColumns(Blockwise):
+    _parameters = ["frame", "skipna", "ddof", "numeric_only"]
+    _defaults = {"skipna": True, "ddof": 1, "numeric_only": False}
+    _keyword_only = ["skipna", "ddof", "numeric_only"]
+    operation = M.var
+
+    @functools.cached_property
+    def _kwargs(self) -> dict:
+        return {"axis": 1, **super()._kwargs}
+
+
+class Sqrt(Blockwise):
+    _parameters = ["frame"]
+    operation = np.sqrt
 
 
 class Elemwise(Blockwise):
@@ -1877,11 +1911,7 @@ class Partitions(Expr):
                 partitions = self.partitions
             # We assume that expressions defining a special "_partitions"
             # parameter can internally capture the same logic as `Partitions`
-            operands = [
-                partitions if self.frame._parameters[i] == "_partitions" else op
-                for i, op in enumerate(self.frame.operands)
-            ]
-            return type(self.frame)(*operands)
+            return self.frame.substitute_parameters({"_partitions": partitions})
 
     def _node_label_args(self):
         return [self.frame, self.partitions]
@@ -2236,5 +2266,6 @@ from dask_expr._reductions import (
     Prod,
     Size,
     Sum,
+    Var,
 )
 from dask_expr.io import IO, BlockwiseIO

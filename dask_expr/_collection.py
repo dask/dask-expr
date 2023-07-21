@@ -8,6 +8,7 @@ from numbers import Number
 import numpy as np
 import pandas as pd
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
+from dask.dataframe.accessor import CachedAccessor
 from dask.dataframe.core import (
     _concat,
     _Frame,
@@ -24,6 +25,7 @@ from tlz import first
 
 from dask_expr import _expr as expr
 from dask_expr._align import AlignPartitions
+from dask_expr._categorical import CategoricalAccessor
 from dask_expr._concat import Concat
 from dask_expr._expr import Eval, no_default
 from dask_expr._merge import JoinRecursive, Merge
@@ -436,6 +438,12 @@ class FrameBase(DaskMethodsMixin):
     def prod(self, skipna=True, numeric_only=False, min_count=0):
         return new_collection(self.expr.prod(skipna, numeric_only, min_count))
 
+    def var(self, axis=0, skipna=True, ddof=1, numeric_only=False):
+        return new_collection(self.expr.var(axis, skipna, ddof, numeric_only))
+
+    def std(self, axis=0, skipna=True, ddof=1, numeric_only=False):
+        return new_collection(self.expr.std(axis, skipna, ddof, numeric_only))
+
     def mean(self, skipna=True, numeric_only=False, min_count=0):
         return new_collection(self.expr.mean(skipna, numeric_only))
 
@@ -812,7 +820,15 @@ class DataFrame(FrameBase):
     def eval(self, expr, **kwargs):
         return new_collection(Eval(self.expr, _expr=expr, expr_kwargs=kwargs))
 
-    def set_index(self, other, drop=True, sorted=False, divisions=None):
+    def set_index(
+        self,
+        other,
+        drop=True,
+        sorted=False,
+        npartitions: int | None = None,
+        divisions=None,
+        sort: bool = True,
+    ):
         if isinstance(other, DataFrame):
             raise TypeError("other can't be of type DataFrame")
         if isinstance(other, Series):
@@ -825,13 +841,27 @@ class DataFrame(FrameBase):
             check_divisions(divisions)
         other = other.expr if isinstance(other, Series) else other
 
+        if (sorted or not sort) and npartitions is not None:
+            raise ValueError(
+                "Specifying npartitions with sort=False or sorted=True is not "
+                "supported. Call `repartition` afterwards."
+            )
+
         if sorted:
             return new_collection(
                 SetIndexBlockwise(self.expr, other, drop, new_divisions=divisions)
             )
+        elif not sort:
+            return new_collection(SetIndexBlockwise(self.expr, other, drop, None))
 
         return new_collection(
-            SetIndex(self.expr, other, drop, user_divisions=divisions)
+            SetIndex(
+                self.expr,
+                other,
+                drop,
+                user_divisions=divisions,
+                npartitions=npartitions,
+            )
         )
 
 
@@ -891,6 +921,8 @@ class Series(FrameBase):
 
     def explode(self):
         return new_collection(expr.ExplodeSeries(self.expr))
+
+    cat = CachedAccessor("cat", CategoricalAccessor)
 
     def _repartition_quantiles(self, npartitions, upsample=1.0, random_state=None):
         return new_collection(

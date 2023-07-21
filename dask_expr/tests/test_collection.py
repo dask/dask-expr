@@ -115,6 +115,8 @@ def test_dask(pdf, df):
         M.prod,
         M.count,
         M.mean,
+        M.std,
+        M.var,
         M.idxmin,
         M.idxmax,
         pytest.param(
@@ -135,6 +137,20 @@ def test_reductions(func, pdf, df):
     # check_dtype False because sub-selection of columns that is pushed through
     # is not reflected in the meta calculation
     assert_eq(func(df)["x"], func(pdf)["x"], check_dtype=False)
+
+
+@pytest.mark.parametrize("axis", [0, 1])
+@pytest.mark.parametrize("skipna", [True, False])
+@pytest.mark.parametrize("ddof", [1, 2])
+def test_std_kwargs(axis, skipna, ddof):
+    pdf = pd.DataFrame(
+        {"x": range(30), "y": [1, 2, None] * 10, "z": ["dog", "cat"] * 15}
+    )
+    df = from_pandas(pdf, npartitions=3)
+    assert_eq(
+        pdf.std(axis=axis, skipna=skipna, ddof=ddof, numeric_only=True),
+        df.std(axis=axis, skipna=skipna, ddof=ddof, numeric_only=True),
+    )
 
 
 def test_nbytes(pdf, df):
@@ -562,6 +578,31 @@ def test_substitute():
     result = (df["a"].sum() + 5).substitute({df["a"]: df["b"], 5: 6})
     expected = df["b"].sum() + 6
     assert result._name == expected._name
+
+
+def test_substitute_parameters(df):
+    pdf = pd.DataFrame(
+        {
+            "a": range(100),
+            "b": range(100),
+            "c": range(100),
+            "index": range(100, 0, -1),
+        }
+    )
+    df = from_pandas(pdf, npartitions=3, sort=True)
+
+    result = df.substitute_parameters({"sort": False})
+    assert result._name != df._name
+    assert result._name == from_pandas(pdf, npartitions=3, sort=False)._name
+
+    result = df.substitute_parameters({"npartitions": 2, "sort": False})
+    assert result._name != df._name
+    assert result._name == from_pandas(pdf, npartitions=2, sort=False)._name
+
+    df2 = df[["a", "b"]]
+    result = df2.substitute_parameters({"columns": "c"})
+    assert result._name != df2._name
+    assert result._name == df["c"]._name
 
 
 def test_from_pandas(pdf):
