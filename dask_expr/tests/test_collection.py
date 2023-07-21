@@ -11,9 +11,9 @@ from dask.dataframe.utils import UNKNOWN_CATEGORIES, assert_eq
 from dask.utils import M
 
 from dask_expr import expr, from_pandas, optimize
+from dask_expr._expr import are_co_aligned
+from dask_expr._reductions import Len
 from dask_expr.datasets import timeseries
-from dask_expr.expr import are_co_aligned
-from dask_expr.reductions import Len
 
 
 @pytest.fixture
@@ -105,6 +105,8 @@ def test_dask(pdf, df):
         M.prod,
         M.count,
         M.mean,
+        M.std,
+        M.var,
         M.idxmin,
         M.idxmax,
         pytest.param(
@@ -123,6 +125,20 @@ def test_reductions(func, pdf, df):
     # check_dtype False because sub-selection of columns that is pushed through
     # is not reflected in the meta calculation
     assert_eq(func(df)["x"], func(pdf)["x"], check_dtype=False)
+
+
+@pytest.mark.parametrize("axis", [0, 1])
+@pytest.mark.parametrize("skipna", [True, False])
+@pytest.mark.parametrize("ddof", [1, 2])
+def test_std_kwargs(axis, skipna, ddof):
+    pdf = pd.DataFrame(
+        {"x": range(30), "y": [1, 2, None] * 10, "z": ["dog", "cat"] * 15}
+    )
+    df = from_pandas(pdf, npartitions=3)
+    assert_eq(
+        pdf.std(axis=axis, skipna=skipna, ddof=ddof, numeric_only=True),
+        df.std(axis=axis, skipna=skipna, ddof=ddof, numeric_only=True),
+    )
 
 
 def test_nbytes(pdf, df):
@@ -152,6 +168,14 @@ def test_dropna(pdf):
     assert_eq(df.dropna(), pdf.dropna())
     assert_eq(df.dropna(how="all"), pdf.dropna(how="all"))
     assert_eq(df.y.dropna(), pdf.y.dropna())
+
+
+def test_fillna():
+    pdf = pd.DataFrame({"x": [1, 2, None, None, 5, 6]})
+    df = from_pandas(pdf, npartitions=2)
+    actual = df.fillna(value=100)
+    expected = pdf.fillna(value=100)
+    assert_eq(actual, expected)
 
 
 def test_memory_usage(pdf):
@@ -289,6 +313,15 @@ def test_to_timestamp(pdf, how):
 )
 def test_blockwise(func, pdf, df):
     assert_eq(func(pdf), func(df))
+
+
+def test_rename_axis(pdf):
+    pdf.index.name = "a"
+    pdf.columns.name = "b"
+    df = from_pandas(pdf, npartitions=10)
+    assert_eq(df.rename_axis(index="dummy"), pdf.rename_axis(index="dummy"))
+    assert_eq(df.rename_axis(columns="dummy"), pdf.rename_axis(columns="dummy"))
+    assert_eq(df.x.rename_axis(index="dummy"), pdf.x.rename_axis(index="dummy"))
 
 
 def test_isin(df, pdf):
@@ -514,6 +547,31 @@ def test_substitute(df):
     result = (df["a"].sum() + 5).substitute({df["a"]: df["b"], 5: 6})
     expected = df["b"].sum() + 6
     assert result._name == expected._name
+
+
+def test_substitute_parameters(df):
+    pdf = pd.DataFrame(
+        {
+            "a": range(100),
+            "b": range(100),
+            "c": range(100),
+            "index": range(100, 0, -1),
+        }
+    )
+    df = from_pandas(pdf, npartitions=3, sort=True)
+
+    result = df.substitute_parameters({"sort": False})
+    assert result._name != df._name
+    assert result._name == from_pandas(pdf, npartitions=3, sort=False)._name
+
+    result = df.substitute_parameters({"npartitions": 2, "sort": False})
+    assert result._name != df._name
+    assert result._name == from_pandas(pdf, npartitions=2, sort=False)._name
+
+    df2 = df[["a", "b"]]
+    result = df2.substitute_parameters({"columns": "c"})
+    assert result._name != df2._name
+    assert result._name == df["c"]._name
 
 
 def test_from_pandas(pdf):
@@ -759,6 +817,16 @@ def test_unique(df, pdf):
     assert_eq(df.index.unique(), pd.Index(pdf.index.unique()))
 
 
+def test_walk(df):
+    df2 = df[df["x"] > 1][["y"]] + 1
+    assert all(isinstance(ex, expr.Expr) for ex in df2.walk())
+    exprs = set(df2.walk())
+    assert df.expr in exprs
+    assert df["x"].expr in exprs
+    assert (df["x"] > 1).expr in exprs
+    assert 1 not in exprs
+
+
 def test_find_operations(df):
     df2 = df[df["x"] > 1][["y"]] + 1
 
@@ -771,6 +839,9 @@ def test_find_operations(df):
     adds = list(df2.find_operations(expr.Add))
     assert len(adds) == 1
     assert next(iter(adds))._name == df2._name
+
+    both = list(df2.find_operations((expr.Add, expr.Filter)))
+    assert len(both) == 2
 
 
 @pytest.mark.parametrize("subset", ["x", ["x"]])
@@ -800,6 +871,7 @@ def test_dir(df):
         ("isna", ()),
         ("round", ()),
         ("abs", ()),
+        ("fillna", ({"x": 1})),
         # ("map", (lambda x: x+1, )),  # add in when pandas 2.1 is out
     ],
 )
@@ -854,11 +926,22 @@ def test_align_different_partitions():
     assert_eq(result_2, pdf_result_2)
 
 
-def test_align_unknown_partitions():
+def test_align_unknown_partitions_same_root():
     pdf = pd.DataFrame({"a": 1}, index=[3, 2, 1])
     df = from_pandas(pdf, npartitions=2, sort=False)
+    result_1, result_2 = df.align(df)
+    pdf_result_1, pdf_result_2 = pdf.align(pdf)
+    assert_eq(result_1, pdf_result_1)
+    assert_eq(result_2, pdf_result_2)
+
+
+def test_unknown_partitions_different_root():
+    pdf = pd.DataFrame({"a": 1}, index=[3, 2, 1])
+    df = from_pandas(pdf, npartitions=2, sort=False)
+    pdf2 = pd.DataFrame({"a": 1}, index=[4, 3, 2, 1])
+    df2 = from_pandas(pdf2, npartitions=2, sort=False)
     with pytest.raises(ValueError, match="Not all divisions"):
-        df.align(df)
+        df.align(df2)
 
 
 def test_nunique_approx(df):
@@ -899,6 +982,15 @@ def test_assign_simplify_series(pdf):
     assert result._name == expected._name
 
 
+def test_assign_non_series_inputs(df, pdf):
+    assert_eq(df.assign(a=lambda x: x.x * 2), pdf.assign(a=lambda x: x.x * 2))
+    assert_eq(df.assign(a=2), pdf.assign(a=2))
+    assert_eq(df.assign(a=df.x.sum()), pdf.assign(a=pdf.x.sum()))
+
+    assert_eq(df.assign(a=lambda x: x.x * 2).y, pdf.assign(a=lambda x: x.x * 2).y)
+    assert_eq(df.assign(a=lambda x: x.x * 2).a, pdf.assign(a=lambda x: x.x * 2).a)
+
+
 def test_are_co_aligned(pdf, df):
     df2 = df.reset_index()
     assert are_co_aligned(df.expr, df2.expr)
@@ -924,3 +1016,48 @@ def test_astype_categories(df):
     result = df.astype("category")
     assert_eq(result.x._meta.cat.categories, pd.Index([UNKNOWN_CATEGORIES]))
     assert_eq(result.y._meta.cat.categories, pd.Index([UNKNOWN_CATEGORIES]))
+
+
+def test_drop_simplify(pdf, df):
+    q = df.drop(columns=["x"])[["y"]]
+    result = q.simplify()
+    expected = df[["y"]]
+    assert result._name == expected._name
+
+
+def test_op_align():
+    pdf = pd.DataFrame({"x": [1, 2, 3], "y": 1})
+    df = from_pandas(pdf, npartitions=2)
+
+    pdf2 = pd.DataFrame({"x": [1, 2, 3, 4, 5, 6], "y": 1})
+    df2 = from_pandas(pdf2, npartitions=2)
+
+    assert_eq(df - df2, pdf - pdf2)
+
+
+def test_can_co_align(df, pdf):
+    q = (df.x + df.y).optimize(fuse=False)
+    expected = df.x + df.y
+    assert q._name == expected._name
+
+    pdf["z"] = 100
+    df2 = from_pandas(pdf, npartitions=df.npartitions * 2)
+    assert df.npartitions != df2.npartitions
+    assert_eq(df.x + df.y, pdf.x + pdf.y)
+
+
+def test_avoid_alignment():
+    from dask_expr._align import AlignPartitions
+
+    a = pd.DataFrame({"x": range(100)})
+    da = from_pandas(a, npartitions=4)
+
+    b = pd.DataFrame({"y": range(100)})
+    b["z"] = b.y * 2
+    db = from_pandas(b, npartitions=3)
+
+    # Give correct results even when misaligned
+    assert_eq(a.x + b.y, da.x + db.y)
+
+    assert not any(isinstance(ex, AlignPartitions) for ex in (db.y + db.z).walk())
+    assert not any(isinstance(ex, AlignPartitions) for ex in (da.x + db.y.sum()).walk())

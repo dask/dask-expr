@@ -27,8 +27,7 @@ from dask.delayed import delayed
 from dask.utils import apply, natural_sort_key
 from fsspec.utils import stringify_path
 
-from dask_expr._util import _convert_to_list
-from dask_expr.expr import (
+from dask_expr._expr import (
     EQ,
     GE,
     GT,
@@ -45,8 +44,9 @@ from dask_expr.expr import (
     Or,
     Projection,
 )
+from dask_expr._reductions import Len
+from dask_expr._util import _convert_to_list
 from dask_expr.io import BlockwiseIO, PartitionsFiltered
-from dask_expr.reductions import Len
 
 NONE_LABEL = "__null_dask_index__"
 
@@ -91,7 +91,7 @@ class ToParquet(Expr):
     def _divisions(self):
         return (None, None)
 
-    def _simplify_down(self):
+    def _lower(self):
         return ToParquetBarrier(
             ToParquetData(
                 *self.operands,
@@ -174,7 +174,7 @@ def to_parquet(
     filesystem=None,
     **kwargs,
 ):
-    from dask_expr.collection import new_collection
+    from dask_expr._collection import new_collection
     from dask_expr.io.parquet import NONE_LABEL, ToParquet
 
     compute_kwargs = compute_kwargs or {}
@@ -427,23 +427,57 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         else:
             return _convert_to_list(columns_operand)
 
+    def _combine_similar(self, root: Expr):
+        # For ReadParquet, we can avoid redundant file-system
+        # access by aggregating multiple operations with different
+        # column projections into the same operation.
+        alike = self._find_similar_operations(root, ignore=["columns", "_series"])
+        if alike:
+            # We have other ReadParquet operations in the expression
+            # graph that can be combined with this one.
+
+            # Find the column-projection union needed to combine
+            # the qualified ReadParquet operations
+            columns = set()
+            rps = [self] + alike
+            for rp in rps:
+                if rp.operand("columns"):
+                    columns |= set(rp.operand("columns"))
+            columns = sorted(columns)
+
+            # Can bail if we are not changing columns or the "_series" operand
+            columns_operand = self.operand("columns")
+            if columns_operand == columns and (len(columns) > 1 or not self._series):
+                return
+
+            # Check if we have the operation we want elsewhere in the graph
+            for rp in rps:
+                if rp.operand("columns") == columns and not rp.operand("_series"):
+                    return (
+                        rp[columns_operand[0]] if self._series else rp[columns_operand]
+                    )
+
+            # Create the "combined" ReadParquet operation
+            subs = {"columns": columns}
+            if self._series:
+                subs["_series"] = False
+            new = self.substitute_parameters(subs)
+            return new[columns_operand[0]] if self._series else new[columns_operand]
+
+        return
+
     def _simplify_up(self, parent):
         if isinstance(parent, Index):
             # Column projection
-            operands = list(self.operands)
-            operands[self._parameters.index("columns")] = []
-            operands[self._parameters.index("_series")] = False
-            return ReadParquet(*operands)
+            return self.substitute_parameters({"columns": [], "_series": False})
 
         if isinstance(parent, Projection):
             # Column projection
-            operands = list(self.operands)
-            operands[self._parameters.index("columns")] = _convert_to_list(
-                parent.operand("columns")
-            )
-            if isinstance(parent.operand("columns"), (str, int)):
-                operands[self._parameters.index("_series")] = True
-            return ReadParquet(*operands)
+            parent_columns = parent.operand("columns")
+            substitutions = {"columns": _convert_to_list(parent_columns)}
+            if isinstance(parent_columns, (str, int)):
+                substitutions["_series"] = True
+            return self.substitute_parameters(substitutions)
 
         if isinstance(parent, Filter) and isinstance(
             parent.predicate, (LE, GE, LT, GT, EQ, NE, And, Or)

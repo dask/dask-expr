@@ -8,9 +8,10 @@ from collections import defaultdict
 from collections.abc import Generator, Mapping
 
 import dask
+import numpy as np
 import pandas as pd
 import toolz
-from dask.base import normalize_token, tokenize
+from dask.base import normalize_token
 from dask.core import flatten, ishashable
 from dask.dataframe import methods
 from dask.dataframe.core import (
@@ -26,6 +27,8 @@ from dask.dataframe.dispatch import meta_nonempty
 from dask.dataframe.utils import clear_known_categories, drop_by_shallow_copy
 from dask.utils import M, apply, funcname, import_required, is_arraylike
 from tlz import merge_sorted, unique
+
+from dask_expr._util import _tokenize_deterministic
 
 replacement_rules = []
 
@@ -145,7 +148,13 @@ class Expr:
                 return self.operands[idx]
             if is_dataframe_like(self._meta) and key in self._meta.columns:
                 return self[key]
-            raise err
+
+            link = "https://github.com/dask-contrib/dask-expr/blob/main/README.md#api-coverage"
+            raise AttributeError(
+                f"{err}\n\n"
+                "This often means that you are attempting to use an unsupported "
+                f"API function. Current API coverage is documented here: {link}."
+            )
 
     def operand(self, key):
         # Access an operand unambiguously
@@ -277,6 +286,115 @@ class Expr:
     def _simplify_up(self, parent):
         return
 
+    def lower_once(self):
+        expr = self
+
+        # Lower this node
+        out = expr._lower()
+        if out is None:
+            out = expr
+        if not isinstance(out, Expr):
+            return out
+
+        # Lower all children
+        new_operands = []
+        changed = False
+        for operand in out.operands:
+            if isinstance(operand, Expr):
+                new = operand.lower_once()
+                if new._name != operand._name:
+                    changed = True
+            else:
+                new = operand
+            new_operands.append(new)
+
+        if changed:
+            out = type(out)(*new_operands)
+
+        return out
+
+    def _lower(self):
+        return
+
+    def combine_similar(
+        self, root: Expr | None = None, _cache: dict | None = None
+    ) -> Expr:
+        """Combine similar expression nodes using global information
+
+        This leverages the ``._combine_similar`` method defined
+        on each class. The global expression-tree traversal will
+        change IO leaves first, and finish with the root expression.
+        The primary purpose of this method is to allow column
+        projections to be "pushed back up" the expression graph
+        in the case that simlar IO & Blockwise operations can
+        be captured by the same operations.
+
+        Parameters
+        ----------
+        root:
+            The root node of the global expression graph. If not
+            specified, the root is assumed to be ``self``.
+        _cache:
+            Optional dictionary to use for caching.
+
+        Returns
+        -------
+        expr:
+            output expression
+        """
+        expr = self
+        update_root = root is None
+        root = root or self
+
+        if _cache is None:
+            _cache = {}
+        elif (self._name, root._name) in _cache:
+            return _cache[(self._name, root._name)]
+
+        while True:
+            changed = False
+
+            # Call combine_similar on each dependency
+            new_operands = []
+            changed_dependency = False
+            for operand in expr.operands:
+                if isinstance(operand, Expr):
+                    new = operand.combine_similar(root=root, _cache=_cache)
+                    if new._name != operand._name:
+                        changed_dependency = True
+                else:
+                    new = operand
+                new_operands.append(new)
+
+            if changed_dependency:
+                expr = type(expr)(*new_operands)
+                changed = True
+                if update_root:
+                    root = expr
+                continue
+
+            # Execute "_combine_similar" on expr
+            out = expr._combine_similar(root)
+            if out is None:
+                out = expr
+            if not isinstance(out, Expr):
+                _cache[(self._name, root._name)] = out
+                return out
+            if out._name != expr._name:
+                changed = True
+                expr = out
+                if update_root:
+                    root = expr
+
+            if not changed:
+                break
+
+        _cache[(self._name, root._name)] = expr
+        return expr
+
+    def _combine_similar(self, root: Expr):
+        return
+
     def optimize(self, **kwargs):
         return optimize(self, **kwargs)
 
@@ -385,6 +503,17 @@ class Expr:
     def prod(self, skipna=True, numeric_only=False, min_count=0):
         return Prod(self, skipna, numeric_only, min_count)
 
+    def var(self, axis=0, skipna=True, ddof=1, numeric_only=False):
+        if axis == 0:
+            return Var(self, skipna, ddof, numeric_only)
+        elif axis == 1:
+            return VarColumns(self, skipna, ddof, numeric_only)
+        else:
+            raise ValueError(f"axis={axis} not supported. Please specify 0 or 1")
+
+    def std(self, axis=0, skipna=True, ddof=1, numeric_only=False):
+        return Sqrt(self.var(axis, skipna, ddof, numeric_only))
+
     def mean(self, skipna=True, numeric_only=False, min_count=0):
         return Mean(self, skipna=skipna, numeric_only=numeric_only)
 
@@ -439,24 +568,36 @@ class Expr:
     def replace(self, to_replace=None, value=no_default, regex=False):
         return Replace(self, to_replace=to_replace, value=value, regex=regex)
 
+    def fillna(self, value=None):
+        return Fillna(self, value=value)
+
+    def rename_axis(
+        self, mapper=no_default, index=no_default, columns=no_default, axis=0
+    ):
+        return RenameAxis(self, mapper=mapper, index=index, columns=columns, axis=axis)
+
     def align(self, other, join="outer", fill_value=None):
-        from dask_expr.collection import new_collection
-        from dask_expr.repartition import Repartition
+        from dask_expr._collection import new_collection
+        from dask_expr._repartition import Repartition
 
-        dfs = [self, other]
-        if not all(df.known_divisions for df in dfs):
-            raise ValueError(
-                "Not all divisions are known, can't align "
-                "partitions. Please use `set_index` "
-                "to set the index."
-            )
+        if are_co_aligned(self, other):
+            left = self
 
-        divisions = list(unique(merge_sorted(*[df.divisions for df in dfs])))
-        if len(divisions) == 1:  # single value for index
-            divisions = (divisions[0], divisions[0])
+        else:
+            dfs = [self, other]
+            if not all(df.known_divisions for df in dfs):
+                raise ValueError(
+                    "Not all divisions are known, can't align "
+                    "partitions. Please use `set_index` "
+                    "to set the index."
+                )
 
-        left = Repartition(self, new_divisions=divisions, force=True)
-        other = Repartition(other, new_divisions=divisions, force=True)
+            divisions = list(unique(merge_sorted(*[df.divisions for df in dfs])))
+            if len(divisions) == 1:  # single value for index
+                divisions = (divisions[0], divisions[0])
+
+            left = Repartition(self, new_divisions=divisions, force=True)
+            other = Repartition(other, new_divisions=divisions, force=True)
         aligned = _Align(left, other, join=join, fill_value=fill_value)
 
         return new_collection(AlignGetitem(aligned, position=0)), new_collection(
@@ -488,7 +629,9 @@ class Expr:
 
     @functools.cached_property
     def _name(self):
-        return funcname(type(self)).lower() + "-" + tokenize(*self.operands)
+        return (
+            funcname(type(self)).lower() + "-" + _tokenize_deterministic(*self.operands)
+        )
 
     @property
     def columns(self) -> list:
@@ -569,6 +712,56 @@ class Expr:
         if update:  # Only recreate if something changed
             return type(self)(*new)
         return self
+
+    def substitute_parameters(self, substitutions: dict) -> Expr:
+        """Substitute specific `Expr` parameters
+
+        Parameters
+        ----------
+        substitutions:
+            Mapping of parameter keys to new values. Keys that
+            are not found in ``self._parameters`` will be ignored.
+        """
+        if not substitutions:
+            return self
+
+        changed = False
+        new_operands = []
+        for i, operand in enumerate(self.operands):
+            if i < len(self._parameters) and self._parameters[i] in substitutions:
+                new_operands.append(substitutions[self._parameters[i]])
+                changed = True
+            else:
+                new_operands.append(operand)
+        if changed:
+            return type(self)(*new_operands)
+        return self
+
+    def _find_similar_operations(self, root: Expr, ignore: list | None = None):
+        # Find operations with the same type and operands.
+        # Parameter keys specified by `ignore` will not be
+        # included in the operand comparison
+        alike = [
+            op for op in root.find_operations(type(self)) if op._name != self._name
+        ]
+        if not alike:
+            # No other operations of the same type. Early return
+            return []
+
+        def _tokenize(rp):
+            # Helper function to "tokenize" the operands
+            # that are not in the `ignore` list
+            return _tokenize_deterministic(
+                *[
+                    op
+                    for i, op in enumerate(rp.operands)
+                    if i >= len(rp._parameters) or rp._parameters[i] not in ignore
+                ]
+            )
+
+        # Return subset of `alike` with the same "token"
+        token = _tokenize(self)
+        return [item for item in alike if _tokenize(item) == token]
 
     def _node_label_args(self):
         """Operands to include in the node label by `visualize`"""
@@ -672,7 +865,29 @@ class Expr:
         graphviz_to_file(g, filename, format)
         return g
 
-    def find_operations(self, operation: type) -> Generator[Expr]:
+    def walk(self) -> Generator[Expr]:
+        """Iterate through all expressions in the tree
+
+        Returns
+        -------
+        nodes
+            Generator of Expr instances in the graph.
+            Ordering is a depth-first search of the expression tree
+        """
+        stack = [self]
+        seen = set()
+        while stack:
+            node = stack.pop()
+            if node._name in seen:
+                continue
+            seen.add(node._name)
+
+            for dep in node.dependencies():
+                stack.append(dep)
+
+            yield node
+
+    def find_operations(self, operation: type | tuple[type]) -> Generator[Expr]:
         """Search the expression graph for a specific operation type
 
         Parameters
@@ -686,21 +901,12 @@ class Expr:
             Generator of `operation` instances. Ordering corresponds
             to a depth-first search of the expression graph.
         """
-
-        assert issubclass(operation, Expr), "`operation` must be `Expr` subclass"
-        stack = [self]
-        seen = set()
-        while stack:
-            node = stack.pop()
-            if node._name in seen:
-                continue
-            seen.add(node._name)
-
-            for dep in node.dependencies():
-                stack.append(dep)
-
-            if isinstance(node, operation):
-                yield node
+        assert (
+            isinstance(operation, tuple)
+            and all(issubclass(e, Expr) for e in operation)
+            or issubclass(operation, Expr)
+        ), "`operation` must be`Expr` subclass)"
+        return (expr for expr in self.walk() if isinstance(expr, operation))
 
 
 class Literal(Expr):
@@ -781,7 +987,7 @@ class Blockwise(Expr):
             head = funcname(self.operation)
         else:
             head = funcname(type(self)).lower()
-        return head + "-" + tokenize(*self.operands)
+        return head + "-" + _tokenize_deterministic(*self.operands)
 
     def _blockwise_arg(self, arg, i):
         """Return a Blockwise-task argument"""
@@ -816,6 +1022,26 @@ class Blockwise(Expr):
     def _simplify_up(self, parent):
         if self._projection_passthrough and isinstance(parent, Projection):
             return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+
+    def _combine_similar(self, root: Expr):
+        # Push projections back up through `_projection_passthrough`
+        # operations if it reduces the number of unique expression nodes.
+        if self._projection_passthrough and isinstance(self.frame, Projection):
+            common = type(self)(self.frame.frame, *self.operands[1:])
+            projection = self.frame.operand("columns")
+            push_up_projection = False
+            for op in self._find_similar_operations(root, ignore=self._parameters):
+                if (
+                    isinstance(op.frame, Projection)
+                    and (
+                        common._name == type(op)(op.frame.frame, *op.operands[1:])._name
+                    )
+                ) or common._name == op._name:
+                    push_up_projection = True
+
+            if push_up_projection:
+                return common[projection]
+        return None
 
 
 class MapPartitions(Blockwise):
@@ -931,14 +1157,6 @@ class DropnaFrame(Blockwise):
             )
 
 
-class Replace(Blockwise):
-    _projection_passthrough = True
-    _parameters = ["frame", "to_replace", "value", "regex"]
-    _defaults = {"to_replace": None, "value": no_default, "regex": False}
-    _keyword_only = ["value", "regex"]
-    operation = M.replace
-
-
 class CombineFirst(Blockwise):
     _parameters = ["frame", "other"]
     operation = M.combine_first
@@ -1021,6 +1239,22 @@ class ToFrameIndex(Blockwise):
     operation = M.to_frame
 
 
+class VarColumns(Blockwise):
+    _parameters = ["frame", "skipna", "ddof", "numeric_only"]
+    _defaults = {"skipna": True, "ddof": 1, "numeric_only": False}
+    _keyword_only = ["skipna", "ddof", "numeric_only"]
+    operation = M.var
+
+    @functools.cached_property
+    def _kwargs(self) -> dict:
+        return {"axis": 1, **super()._kwargs}
+
+
+class Sqrt(Blockwise):
+    _parameters = ["frame"]
+    operation = np.sqrt
+
+
 class Elemwise(Blockwise):
     """
     This doesn't really do anything, but we anticipate that future
@@ -1028,6 +1262,21 @@ class Elemwise(Blockwise):
     """
 
     pass
+
+
+class Fillna(Elemwise):
+    _projection_passthrough = True
+    _parameters = ["frame", "value"]
+    _defaults = {"value": None}
+    operation = M.fillna
+
+
+class Replace(Elemwise):
+    _projection_passthrough = True
+    _parameters = ["frame", "to_replace", "value", "regex"]
+    _defaults = {"to_replace": None, "value": no_default, "regex": False}
+    _keyword_only = ["value", "regex"]
+    operation = M.replace
 
 
 class Isin(Elemwise):
@@ -1124,6 +1373,19 @@ class Abs(Elemwise):
     operation = M.abs
 
 
+class RenameAxis(Elemwise):
+    _projection_passthrough = True
+    _parameters = ["frame", "mapper", "index", "columns", "axis"]
+    _defaults = {
+        "mapper": no_default,
+        "index": no_default,
+        "columns": no_default,
+        "axis": 0,
+    }
+    _keyword_only = ["mapper", "index", "columns", "axis"]
+    operation = M.rename_axis
+
+
 class Apply(Elemwise):
     """A good example of writing a less-trivial blockwise operation"""
 
@@ -1192,12 +1454,25 @@ class Drop(Elemwise):
     _defaults = {"errors": "raise"}
     operation = staticmethod(drop_by_shallow_copy)
 
+    def _simplify_down(self):
+        columns = [
+            col for col in self.frame.columns if col not in self.operand("columns")
+        ]
+        return Projection(self.frame, columns)
+
 
 class Assign(Elemwise):
     """Column Assignment"""
 
     _parameters = ["frame", "key", "value"]
     operation = staticmethod(methods.assign)
+
+    @functools.cached_property
+    def _meta(self):
+        args = [
+            meta_nonempty(op._meta) if isinstance(op, Expr) else op for op in self._args
+        ]
+        return make_meta(self.operation(*args, **self._kwargs))
 
     def _node_label_args(self):
         return [self.frame, self.key, self.value]
@@ -1388,11 +1663,13 @@ class Head(Expr):
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
+        if isinstance(self.frame, Head):
+            return Head(self.frame.frame, min(self.n, self.frame.n))
+
+    def _lower(self):
         if not isinstance(self, BlockwiseHead):
             # Lower to Blockwise
             return BlockwiseHead(Partitions(self.frame, [0]), self.n)
-        if isinstance(self.frame, Head):
-            return Head(self.frame.frame, min(self.n, self.frame.n))
 
 
 class BlockwiseHead(Head, Blockwise):
@@ -1432,13 +1709,15 @@ class Tail(Expr):
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
+        if isinstance(self.frame, Tail):
+            return Tail(self.frame.frame, min(self.n, self.frame.n))
+
+    def _lower(self):
         if not isinstance(self, BlockwiseTail):
             # Lower to Blockwise
             return BlockwiseTail(
                 Partitions(self.frame, [self.frame.npartitions - 1]), self.n
             )
-        if isinstance(self.frame, Tail):
-            return Tail(self.frame.frame, min(self.n, self.frame.n))
 
 
 class BlockwiseTail(Tail, Blockwise):
@@ -1632,11 +1911,7 @@ class Partitions(Expr):
                 partitions = self.partitions
             # We assume that expressions defining a special "_partitions"
             # parameter can internally capture the same logic as `Partitions`
-            operands = [
-                partitions if self.frame._parameters[i] == "_partitions" else op
-                for i, op in enumerate(self.frame.operands)
-            ]
-            return type(self.frame)(*operands)
+            return self.frame.substitute_parameters({"_partitions": partitions})
 
     def _node_label_args(self):
         return [self.frame, self.partitions]
@@ -1702,40 +1977,54 @@ def normalize_expression(expr):
     return expr._name
 
 
-def optimize(expr: Expr, fuse: bool = True) -> Expr:
+def optimize(expr: Expr, combine_similar: bool = True, fuse: bool = True) -> Expr:
     """High level query optimization
 
     This leverages three optimization passes:
 
     1.  Class based simplification using the ``_simplify`` function and methods
-    2.  Blockwise fusion
+    2.  Combine similar operations
+    3.  Blockwise fusion
 
     Parameters
     ----------
     expr:
         Input expression to optimize
+    combine_similar:
+        whether or not to combine similar operations
+        (like `ReadParquet`) to aggregate redundant work.
     fuse:
         whether or not to turn on blockwise fusion
 
     See Also
     --------
     simplify
+    combine_similar
     optimize_blockwise_fusion
     """
-    expr = expr.simplify()
+
+    result = expr
+    while True:
+        out = result.simplify().lower_once()
+        if out._name == result._name:
+            break
+        result = out
+
+    if combine_similar:
+        result = result.combine_similar()
 
     if fuse:
-        expr = optimize_blockwise_fusion(expr)
+        result = optimize_blockwise_fusion(result)
 
-    return expr
+    return result
 
 
-def is_broadcastable(dfs, s):
+def is_broadcastable(s):
     """
     This Series is broadcastable against another dataframe in the sequence
     """
 
-    return s.ndim <= 1 and s.npartitions == 1 and s.known_divisions
+    return s.ndim == 1 and s.npartitions == 1 and s.known_divisions or s.ndim == 0
 
 
 def non_blockwise_ancestors(expr):
@@ -1747,20 +2036,14 @@ def non_blockwise_ancestors(expr):
             yield e
         elif isinstance(e, Blockwise):
             dependencies = e.dependencies()
-            stack.extend(
-                [
-                    expr
-                    for expr in dependencies
-                    if not is_broadcastable(dependencies, expr)
-                ]
-            )
+            stack.extend([expr for expr in dependencies if not is_broadcastable(expr)])
         else:
             yield e
 
 
 def are_co_aligned(*exprs):
     """Do inputs come from different parents, modulo blockwise?"""
-    exprs = [expr for expr in exprs if not is_broadcastable(exprs, expr)]
+    exprs = [expr for expr in exprs if not is_broadcastable(expr)]
     ancestors = [set(non_blockwise_ancestors(e)) for e in exprs]
     return len(set(flatten(ancestors, container=set))) == 1
 
@@ -1933,7 +2216,7 @@ class Fused(Blockwise):
 
     @functools.cached_property
     def _name(self):
-        return f"{str(self)}-{tokenize(self.exprs)}"
+        return f"{str(self)}-{_tokenize_deterministic(self.exprs)}"
 
     def _divisions(self):
         return self.exprs[0]._divisions()
@@ -1968,8 +2251,7 @@ class Fused(Blockwise):
         return dask.core.get(graph, name)
 
 
-from dask_expr.io import IO, BlockwiseIO
-from dask_expr.reductions import (
+from dask_expr._reductions import (
     All,
     Any,
     Count,
@@ -1984,4 +2266,6 @@ from dask_expr.reductions import (
     Prod,
     Size,
     Sum,
+    Var,
 )
+from dask_expr.io import IO, BlockwiseIO

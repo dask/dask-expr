@@ -3,9 +3,9 @@ import functools
 from dask.dataframe.dispatch import make_meta, meta_nonempty
 from dask.utils import M, apply
 
-from dask_expr.expr import Blockwise, Expr, Projection
-from dask_expr.repartition import Repartition
-from dask_expr.shuffle import Shuffle, _contains_index_name
+from dask_expr._expr import Blockwise, Expr, Projection
+from dask_expr._repartition import Repartition
+from dask_expr._shuffle import Shuffle, _contains_index_name
 
 
 class Merge(Expr):
@@ -74,7 +74,7 @@ class Merge(Expr):
         npartitions = max(npartitions_left, npartitions_right)
         return (None,) * (npartitions + 1)
 
-    def _simplify_down(self):
+    def _lower(self):
         # Lower from an abstract expression
         left = self.left
         right = self.right
@@ -218,7 +218,7 @@ class BlockwiseMerge(Merge, Blockwise):
     Merge
     """
 
-    def _simplify_down(self):
+    def _lower(self):
         return None
 
     def _broadcast_dep(self, dep: Expr):
@@ -253,7 +253,7 @@ class JoinRecursive(Expr):
         npartitions = [frame.npartitions for frame in self.frames]
         return (None,) * (max(npartitions) + 1)
 
-    def _simplify_down(self):
+    def _lower(self):
         if self.how == "left":
             right = self._recursive_join(self.frames[1:])
             return Merge(

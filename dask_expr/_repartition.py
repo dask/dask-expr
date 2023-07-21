@@ -10,7 +10,7 @@ from dask.dataframe.utils import is_series_like
 from pandas.api.types import is_datetime64_any_dtype, is_numeric_dtype
 from tlz import unique
 
-from dask_expr.expr import Expr, Projection
+from dask_expr._expr import Expr, Projection
 
 
 class Repartition(Expr):
@@ -25,12 +25,13 @@ class Repartition(Expr):
 
     def _divisions(self):
         if self.n is not None:
-            return self.simplify()._divisions()
+            x = self.optimize(fuse=False)
+            return x._divisions()
         return self.new_divisions
 
-    def _simplify_down(self):
+    def _lower(self):
         if type(self) != Repartition:
-            # This simplify logic should not be inherited
+            # This lower logic should not be inherited
             return None
         if self.n is not None:
             if self.n < self.frame.npartitions:
