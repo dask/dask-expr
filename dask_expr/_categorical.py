@@ -7,8 +7,8 @@ from dask.dataframe.utils import (
 )
 from dask.utils import M
 
-from dask_expr.accessor import Accessor, PropertyMap
-from dask_expr.expr import Elemwise
+from dask_expr._accessor import Accessor, PropertyMap
+from dask_expr._expr import Elemwise
 
 
 class CategoricalAccessor(Accessor):
@@ -115,7 +115,7 @@ class CategoricalAccessor(Accessor):
                 "`df.categorize()` beforehand to ensure known categories"
             )
             raise AttributeNotImplementedError(msg)
-        from dask_expr.collection import new_collection
+        from dask_expr._collection import new_collection
 
         return new_collection(PropertyMap(self._series.expr, "cat", "codes"))
 

@@ -25,6 +25,7 @@ from tlz import first
 
 from dask_expr import _expr as expr
 from dask_expr._align import AlignPartitions
+from dask_expr._categorical import CategoricalAccessor
 from dask_expr._concat import Concat
 from dask_expr._expr import Eval, no_default
 from dask_expr._merge import JoinRecursive, Merge
@@ -42,7 +43,6 @@ from dask_expr._reductions import (
 from dask_expr._repartition import Repartition
 from dask_expr._shuffle import SetIndex, SetIndexBlockwise
 from dask_expr._util import _convert_to_list
-from dask_expr.categorical import CategoricalAccessor
 
 #
 # Utilities to wrap Expr API
