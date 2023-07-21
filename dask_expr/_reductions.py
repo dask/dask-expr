@@ -1,5 +1,6 @@
 import functools
 
+import numpy as np
 import pandas as pd
 import toolz
 from dask.dataframe import hyperloglog, methods
@@ -16,6 +17,7 @@ from dask.dataframe.core import (
 from dask.utils import M, apply
 
 from dask_expr._expr import Elemwise, Expr, Index, Projection
+from dask_expr._util import is_scalar
 
 
 class ApplyConcatApply(Expr):
@@ -196,9 +198,44 @@ class PivotTable(ApplyConcatApply):
 
     @functools.cached_property
     def _meta(self):
-        return self.frame._meta
+        df = self.frame._meta
+        columns = self.operand("columns")
+        values = self.operand("values")
+        index = self.operand("index")
+        columns_contents = pd.CategoricalIndex(df[columns].cat.categories, name=columns)
 
-    def _simplify_down(self):
+        if is_scalar(values):
+            new_columns = columns_contents
+        else:
+            new_columns = pd.MultiIndex.from_product(
+                (sorted(values), columns_contents), names=[None, columns]
+            )
+
+        if self.operand("aggfunc") in ["first", "last"]:
+            # Infer datatype as non-numeric values are allowed
+            if is_scalar(values):
+                meta = pd.DataFrame(
+                    columns=new_columns,
+                    dtype=df[values].dtype,
+                    index=pd.Index(df[index]),
+                )
+            else:
+                meta = pd.DataFrame(
+                    columns=new_columns,
+                    index=pd.Index(df[index]),
+                )
+                for value_col in values:
+                    meta[value_col] = meta[value_col].astype(
+                        df[values].dtypes[value_col]
+                    )
+        else:
+            # Use float64 as other aggregate functions require numerical data
+            meta = pd.DataFrame(
+                columns=new_columns, dtype=np.float64, index=pd.Index(df[index])
+            )
+        return meta
+
+    def _lower(self):
         args = [
             self.frame,
             self.operand("columns"),
@@ -213,17 +250,17 @@ class PivotTable(ApplyConcatApply):
             return PivotTableCount(*args)
         elif self.aggfunc == "first":
             return PivotTableFirst(*args)
-        elif self.aggfucn == "last":
+        elif self.aggfunc == "last":
             return PivotTableLast(*args)
         else:
             raise NotImplementedError(f"{self.aggfunc=} is not implemented")
 
 
 class PivotTableAbstract(PivotTable):
-    _parameters = ["frame", "columns", "index", "values"]
-    _defaults = {"columns": None, "index": None, "values": None}
+    _parameters = ["frame", "columns", "index", "values", "aggfunc"]
+    _defaults = {"columns": None, "index": None, "values": None, "aggfunc": "mean"}
 
-    def _simplify_down(self):
+    def _lower(self):
         return
 
     @property

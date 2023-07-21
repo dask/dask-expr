@@ -119,7 +119,7 @@ class FrameBase(DaskMethodsMixin):
 
     @property
     def columns(self):
-        return pd.Index(self.expr.columns, name=self._meta.columns.name)
+        return self._meta.columns
 
     def __len__(self):
         return new_collection(Len(self.expr)).compute()
@@ -875,9 +875,13 @@ class DataFrame(FrameBase):
         if not methods.is_categorical_dtype(self._meta[columns]):
             raise ValueError("'columns' must be category dtype")
         if not has_known_categories(self._meta[columns]):
-            raise ValueError("'columns' must be category dtype")
+            raise ValueError("'columns' categories must be known")
 
-        if not (is_scalar(values) or all(is_scalar(x) for x in values)):
+        if not (
+            is_scalar(values)
+            and values in self._meta[columns]
+            or all(is_scalar(x) and x in self._meta[columns] for x in values)
+        ):
             raise ValueError("'values' must refer to an existing column or columns")
 
         return new_collection(

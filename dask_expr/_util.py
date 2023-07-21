@@ -20,7 +20,7 @@ def _convert_to_list(column) -> list | None:
 
 
 def is_scalar(x):
-    return not (isinstance(x, Sequence) or hasattr(x, "dtype"))
+    return not (isinstance(x, Sequence) or hasattr(x, "dtype")) or isinstance(x, str)
 
 
 @normalize_token.register(LambdaType)
