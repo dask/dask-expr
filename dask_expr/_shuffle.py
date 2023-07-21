@@ -618,7 +618,25 @@ class AssignPartitioningIndex(Blockwise):
         return df.assign(**{name: index})
 
 
-class SetIndex(Expr):
+class BaseSetIndexSortValues(Expr):
+    def _divisions(self):
+        if self.user_divisions is not None:
+            return self.user_divisions
+        divisions, mins, maxes, presorted = _calculate_divisions(
+            self.frame, self.other, self.npartitions, self.ascending
+        )
+        if presorted:
+            divisions = mins.copy() + [maxes[-1]]
+        return divisions
+
+    @property
+    def npartitions(self):
+        if self.operand("npartitions") is not None:
+            return self.operand("npartitions")
+        return self.frame.npartitions
+
+
+class SetIndex(BaseSetIndexSortValues):
     """Abstract ``set_index`` class.
 
     Simplifies (later lowers) either to Blockwise ops if we are already sorted
@@ -655,22 +673,6 @@ class SetIndex(Expr):
         "npartitions": None,
     }
 
-    def _divisions(self):
-        if self.user_divisions is not None:
-            return self.user_divisions
-        divisions, mins, maxes, presorted = _calculate_divisions(
-            self.frame, self.other, self.npartitions, self.ascending
-        )
-        if presorted:
-            divisions = mins.copy() + [maxes[-1]]
-        return divisions
-
-    @property
-    def npartitions(self):
-        if self.operand("npartitions") is not None:
-            return self.operand("npartitions")
-        return self.frame.npartitions
-
     @property
     def _meta(self):
         if isinstance(self._other, Expr):
@@ -684,6 +686,78 @@ class SetIndex(Expr):
         if isinstance(self._other, Expr):
             return self._other
         return self.frame[self._other]
+
+    def _lower(self):
+        if self.user_divisions is None:
+            divisions = self._divisions()
+            presorted = _calculate_divisions(
+                self.frame, self.other, self.npartitions, self.ascending
+            )[3]
+
+            if presorted and self.npartitions == self.frame.npartitions:
+                index_set = SetIndexBlockwise(
+                    self.frame, self._other, self.drop, divisions
+                )
+                return SortIndexBlockwise(index_set)
+
+        else:
+            divisions = self.user_divisions
+
+        return SetPartition(self.frame, self._other, self.drop, divisions)
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            columns = parent.columns + (
+                [self._other] if not isinstance(self._other, Expr) else []
+            )
+            if self.frame.columns == columns:
+                return
+            return type(parent)(
+                type(self)(self.frame[columns], *self.operands[1:]),
+                parent.operand("columns"),
+            )
+
+
+class SortValues(BaseSetIndexSortValues):
+    _parameters = [
+        "frame",
+        "by",
+        "ascending",
+        "na_position",
+        "npartitions",
+        "partition_size",
+        "sort_function",
+        "sort_function_kwargs",
+    ]
+    _defaults = {
+        "partition_size": 128e6,
+        "ascending": True,
+        "npartitions": None,
+        "na_position": "last",
+        "sort_function": None,
+        "sort_function_kwargs": None,
+    }
+
+    @property
+    def sort_function(self):
+        if self.operand("sort_function") is not None:
+            return self.operand("sort_function")
+        return M.sort_values
+
+    @property
+    def sort_function_kwargs(self):
+        sort_kwargs = {
+            "by": self.by,
+            "ascending": self.ascending,
+            "na_position": self.na_position,
+        }
+        if self.operand("sort_function_kwargs") is not None:
+            sort_kwargs.update(self.operand("sort_function_kwargs"))
+        return sort_kwargs
+
+    @property
+    def _meta(self):
+        return self.frame._meta
 
     def _lower(self):
         if self.user_divisions is None:
