@@ -116,6 +116,7 @@ API Coverage
 - `to_timestamp`
 - `var`
 - `visualize`
+- `pivot_table`
 
 
 **`dask_expr.Series`**
@@ -268,3 +269,7 @@ API Coverage
 - `__invert__`
 - `__neg__`
 - `__pos__`
+
+**Accessors**:
+
+- `CategoricalAccessor`
