@@ -9,6 +9,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
+from dask.dataframe.accessor import CachedAccessor
 from dask.dataframe.core import (
     _concat,
     _Frame,
@@ -25,6 +26,7 @@ from tlz import first
 
 from dask_expr import _expr as expr
 from dask_expr._align import AlignPartitions
+from dask_expr._categorical import CategoricalAccessor
 from dask_expr._concat import Concat
 from dask_expr._expr import Eval, no_default
 from dask_expr._merge import JoinRecursive, Merge
@@ -148,8 +150,10 @@ class FrameBase(DaskMethodsMixin):
     def lower_once(self):
         return new_collection(self.expr.lower_once())
 
-    def optimize(self, fuse: bool = True):
-        return new_collection(self.expr.optimize(fuse=fuse))
+    def optimize(self, combine_similar: bool = True, fuse: bool = True):
+        return new_collection(
+            self.expr.optimize(combine_similar=combine_similar, fuse=fuse)
+        )
 
     @property
     def dask(self):
@@ -434,6 +438,12 @@ class FrameBase(DaskMethodsMixin):
 
     def prod(self, skipna=True, numeric_only=False, min_count=0):
         return new_collection(self.expr.prod(skipna, numeric_only, min_count))
+
+    def var(self, axis=0, skipna=True, ddof=1, numeric_only=False):
+        return new_collection(self.expr.var(axis, skipna, ddof, numeric_only))
+
+    def std(self, axis=0, skipna=True, ddof=1, numeric_only=False):
+        return new_collection(self.expr.std(axis, skipna, ddof, numeric_only))
 
     def mean(self, skipna=True, numeric_only=False, min_count=0):
         return new_collection(self.expr.mean(skipna, numeric_only))
@@ -818,6 +828,7 @@ class DataFrame(FrameBase):
         sorted=False,
         npartitions: int | None = None,
         divisions=None,
+        sort: bool = True,
     ):
         if isinstance(other, DataFrame):
             raise TypeError("other can't be of type DataFrame")
@@ -831,10 +842,18 @@ class DataFrame(FrameBase):
             check_divisions(divisions)
         other = other.expr if isinstance(other, Series) else other
 
+        if (sorted or not sort) and npartitions is not None:
+            raise ValueError(
+                "Specifying npartitions with sort=False or sorted=True is not "
+                "supported. Call `repartition` afterwards."
+            )
+
         if sorted:
             return new_collection(
                 SetIndexBlockwise(self.expr, other, drop, new_divisions=divisions)
             )
+        elif not sort:
+            return new_collection(SetIndexBlockwise(self.expr, other, drop, None))
 
         return new_collection(
             SetIndex(
@@ -953,6 +972,8 @@ class Series(FrameBase):
     def explode(self):
         return new_collection(expr.ExplodeSeries(self.expr))
 
+    cat = CachedAccessor("cat", CategoricalAccessor)
+
     def _repartition_quantiles(self, npartitions, upsample=1.0, random_state=None):
         return new_collection(
             RepartitionQuantiles(self.expr, npartitions, upsample, random_state)
@@ -1034,10 +1055,12 @@ def from_dask_dataframe(ddf: _Frame, optimize: bool = True) -> FrameBase:
     return from_graph(graph, ddf._meta, ddf.divisions, ddf._name)
 
 
-def read_csv(*args, **kwargs):
+def read_csv(path, *args, **kwargs):
     from dask_expr.io.csv import ReadCSV
 
-    return new_collection(ReadCSV(*args, **kwargs))
+    if not isinstance(path, str):
+        path = stringify_path(path)
+    return new_collection(ReadCSV(path, *args, **kwargs))
 
 
 def read_parquet(
@@ -1060,7 +1083,7 @@ def read_parquet(
 ):
     from dask_expr.io.parquet import ReadParquet
 
-    if hasattr(path, "name"):
+    if not isinstance(path, str):
         path = stringify_path(path)
 
     kwargs["dtype_backend"] = dtype_backend

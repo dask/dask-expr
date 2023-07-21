@@ -673,6 +673,22 @@ class SetIndex(BaseSetIndexSortValues):
         "npartitions": None,
     }
 
+    def _divisions(self):
+        if self.user_divisions is not None:
+            return self.user_divisions
+        divisions, mins, maxes, presorted = _calculate_divisions(
+            self.frame, self.other, self.npartitions, self.ascending
+        )
+        if presorted:
+            divisions = mins.copy() + [maxes[-1]]
+        return divisions
+
+    @property
+    def npartitions(self):
+        if self.operand("npartitions") is not None:
+            return self.operand("npartitions")
+        return self.frame.npartitions
+
     @property
     def _meta(self):
         if isinstance(self._other, Expr):
