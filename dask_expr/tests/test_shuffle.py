@@ -203,3 +203,8 @@ def test_set_index_without_sort(df, pdf):
 
     with pytest.raises(ValueError, match="Specifying npartitions with sort=False"):
         df.set_index("y", sort=False, npartitions=20)
+
+    with pytest.raises(
+        ValueError, match="Specifying npartitions with sort=False or sorted=True"
+    ):
+        df.set_index("y", sorted=True, npartitions=20)
