@@ -100,6 +100,8 @@ API Coverage
 - `partitions`
 - `prod`
 - `rename`
+- `add_prefix`
+- `add_sufix`
 - `rename_axis`
 - `repartition`
 - `replace`
