@@ -7,7 +7,7 @@ import pickle
 import dask
 import numpy as np
 import pytest
-from dask.dataframe._compat import PANDAS_GT_210
+from dask.dataframe._compat import PANDAS_GE_210
 from dask.dataframe.utils import UNKNOWN_CATEGORIES, assert_eq
 from dask.utils import M
 
@@ -293,12 +293,6 @@ def test_to_timestamp(pdf, how):
     "func",
     [
         lambda df: df.astype(int),
-        pytest.param(
-            lambda df: df.map(lambda x: x + 1),
-            marks=pytest.mark.skipif(
-                not PANDAS_GT_210, reason="Only available from 2.1"
-            ),
-        ),
         lambda df: df.clip(lower=10, upper=50),
         lambda df: df.x.clip(lower=10, upper=50),
         lambda df: df.x.between(left=10, right=50),
@@ -331,11 +325,17 @@ def test_blockwise(func, pdf, df):
     [
         lambda df: df.apply(lambda row, x, y=10: row * x + y, x=2),
         lambda df: df.index.map(lambda x: x + 1),
+        pytest.param(
+            lambda df: df.map(lambda x: x + 1),
+            marks=pytest.mark.skipif(
+                not PANDAS_GE_210, reason="Only available from 2.1"
+            ),
+        ),
         lambda df: df.combine_first(df),
         lambda df: df.x.combine_first(df.y),
     ],
 )
-def test_blockwise_cudf_fails(func, pdf, df):
+def test_blockwise_pandas_only(func, pdf, df):
     assert_eq(func(pdf), func(df))
 
 
@@ -930,7 +930,7 @@ def test_sample(df):
     assert_eq(result, expected)
 
 
-@pytest.mark.skipif(CUDF_BACKEND, reason="align not supported by cudf")
+@pytest.mark.xfail(CUDF_BACKEND, reason="align not supported by cudf")
 def test_align(df, pdf):
     result_1, result_2 = df.align(df)
     pdf_result_1, pdf_result_2 = pdf.align(pdf)
@@ -943,7 +943,7 @@ def test_align(df, pdf):
     assert_eq(result_2, pdf_result_2)
 
 
-@pytest.mark.skipif(CUDF_BACKEND, reason="align not supported by cudf")
+@pytest.mark.xfail(CUDF_BACKEND, reason="align not supported by cudf")
 def test_align_different_partitions():
     pdf = lib.DataFrame({"a": [11, 12, 31, 1, 2, 3], "b": [1, 2, 3, 4, 5, 6]})
     df = from_pandas(pdf, npartitions=2)
@@ -958,7 +958,7 @@ def test_align_different_partitions():
     assert_eq(result_2, pdf_result_2)
 
 
-@pytest.mark.skipif(CUDF_BACKEND, reason="align not supported by cudf")
+@pytest.mark.xfail(CUDF_BACKEND, reason="align not supported by cudf")
 def test_align_unknown_partitions_same_root():
     pdf = lib.DataFrame({"a": 1}, index=[3, 2, 1])
     df = from_pandas(pdf, npartitions=2, sort=False)
