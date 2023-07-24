@@ -176,7 +176,7 @@ def to_parquet(
     from dask_expr._collection import new_collection
     from dask_expr.io.parquet import NONE_LABEL, ToParquet
 
-    engine = _set_engine(meta=df._meta)
+    engine = _set_parquet_engine(meta=df._meta)
     compute_kwargs = compute_kwargs or {}
 
     partition_on = partition_on or []
@@ -686,7 +686,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
 #
 
 
-def _set_engine(engine=None, meta=None):
+def _set_parquet_engine(engine=None, meta=None):
     # Use `engine` or `meta` input to set the parquet engine
     if engine is None:
         if (

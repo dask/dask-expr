@@ -1081,7 +1081,7 @@ def read_parquet(
     engine=None,
     **kwargs,
 ):
-    from dask_expr.io.parquet import ReadParquet, _set_engine
+    from dask_expr.io.parquet import ReadParquet, _set_parquet_engine
 
     if not isinstance(path, str):
         path = stringify_path(path)
@@ -1104,7 +1104,7 @@ def read_parquet(
             aggregate_files=aggregate_files,
             parquet_file_extension=parquet_file_extension,
             filesystem=filesystem,
-            engine=_set_engine(engine),
+            engine=_set_parquet_engine(engine),
             kwargs=kwargs,
         )
     )
