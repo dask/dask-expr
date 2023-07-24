@@ -122,7 +122,7 @@ class Chunk(Blockwise):
         return self.chunk_kwargs or {}
 
     def _tree_repr_lines(self, indent=0, recursive=True):
-        header = f"{funcname(self.kind)}({funcname(type(self))}): "
+        header = f"{funcname(self.kind)}({funcname(type(self))}):"
         lines = []
         if recursive:
             for dep in self.dependencies():
@@ -206,7 +206,7 @@ class TreeReduce(Expr):
         return f"{type(self).__name__}({chunked}, kind={funcname(self.kind)}, split_every={split_every})"
 
     def _tree_repr_lines(self, indent=0, recursive=True):
-        header = f"{funcname(self.kind)}({funcname(type(self))}): "
+        header = f"{funcname(self.kind)}({funcname(type(self))}):"
         lines = []
         if recursive:
             for dep in self.dependencies():
