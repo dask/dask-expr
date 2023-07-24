@@ -42,15 +42,6 @@ class ApplyConcatApply(Expr):
     combine_kwargs = {}
     aggregate_kwargs = {}
 
-    # def __init__(self, *args, **kwargs):
-    #     super().__init__(*args, **kwargs)
-    #     if self._required_attribute:
-    #         dep = next(iter(self.dependencies()))._meta
-    #         if not hasattr(dep, self._required_attribute):
-    #             # Raise a ValueError instead of AttributeError to
-    #             # avoid infinite recursion
-    #             raise ValueError(f"{dep} has no attribute {self._required_attribute}")
-
     def __dask_postcompute__(self):
         return toolz.first, ()
 
