@@ -618,7 +618,23 @@ class AssignPartitioningIndex(Blockwise):
         return df.assign(**{name: index})
 
 
-class SetIndex(Expr):
+class BaseSetIndexSortValues(Expr):
+    def _divisions(self):
+        if self.user_divisions is not None:
+            return self.user_divisions
+        divisions, mins, maxes, presorted = _calculate_divisions(
+            self.frame, self.other, self.npartitions, self.ascending
+        )
+        if presorted:
+            divisions = mins.copy() + [maxes[-1]]
+        return divisions
+
+    @property
+    def npartitions(self):
+        return self.operand("npartitions") or self.frame.npartitions
+
+
+class SetIndex(BaseSetIndexSortValues):
     """Abstract ``set_index`` class.
 
     Simplifies (later lowers) either to Blockwise ops if we are already sorted
@@ -645,23 +661,31 @@ class SetIndex(Expr):
         "user_divisions",
         "partition_size",
         "ascending",
+        "npartitions",
     ]
     _defaults = {
         "drop": True,
         "user_divisions": None,
         "partition_size": 128e6,
         "ascending": True,
+        "npartitions": None,
     }
 
     def _divisions(self):
         if self.user_divisions is not None:
             return self.user_divisions
         divisions, mins, maxes, presorted = _calculate_divisions(
-            self.frame, self.other, self.ascending
+            self.frame, self.other, self.npartitions, self.ascending
         )
         if presorted:
             divisions = mins.copy() + [maxes[-1]]
         return divisions
+
+    @property
+    def npartitions(self):
+        if self.operand("npartitions") is not None:
+            return self.operand("npartitions")
+        return self.frame.npartitions
 
     @property
     def _meta(self):
@@ -680,9 +704,11 @@ class SetIndex(Expr):
     def _lower(self):
         if self.user_divisions is None:
             divisions = self._divisions()
-            presorted = _calculate_divisions(self.frame, self.other, self.ascending)[3]
+            presorted = _calculate_divisions(
+                self.frame, self.other, self.npartitions, self.ascending
+            )[3]
 
-            if presorted:
+            if presorted and self.npartitions == self.frame.npartitions:
                 index_set = SetIndexBlockwise(
                     self.frame, self._other, self.drop, divisions
                 )
@@ -698,6 +724,83 @@ class SetIndex(Expr):
             columns = parent.columns + (
                 [self._other] if not isinstance(self._other, Expr) else []
             )
+            if self.frame.columns == columns:
+                return
+            return type(parent)(
+                type(self)(self.frame[columns], *self.operands[1:]),
+                parent.operand("columns"),
+            )
+
+
+class SortValues(BaseSetIndexSortValues):
+    _parameters = [
+        "frame",
+        "by",
+        "ascending",
+        "na_position",
+        "npartitions",
+        "partition_size",
+        "sort_function",
+        "sort_function_kwargs",
+    ]
+    _defaults = {
+        "partition_size": 128e6,
+        "ascending": True,
+        "npartitions": None,
+        "na_position": "last",
+        "sort_function": None,
+        "sort_function_kwargs": None,
+    }
+
+    @property
+    def sort_function(self):
+        if self.operand("sort_function") is not None:
+            return self.operand("sort_function")
+        return M.sort_values
+
+    @property
+    def sort_function_kwargs(self):
+        sort_kwargs = {
+            "by": self.by,
+            "ascending": self.ascending,
+            "na_position": self.na_position,
+        }
+        if self.operand("sort_function_kwargs") is not None:
+            sort_kwargs.update(self.operand("sort_function_kwargs"))
+        return sort_kwargs
+
+    @property
+    def _meta(self):
+        return self.frame._meta
+
+    def _lower(self):
+        by = self.frame[self.by[0]]
+        divisions, _, _, presorted = _calculate_divisions(
+            self.frame, by, self.npartitions, self.ascending
+        )
+        if presorted and self.npartitions == self.frame.npartitions:
+            return SortValuesBlockwise(
+                self.frame, self.sort_function, self.sort_function_kwargs
+            )
+
+        partitions = _SetPartitionsPreSetIndex(by, by._meta._constructor(divisions))
+        assigned = Assign(self.frame, "_partitions", partitions)
+        shuffled = Shuffle(
+            assigned,
+            "_partitions",
+            npartitions_out=len(divisions) - 1,
+            ignore_index=True,
+        )
+        return SortValuesBlockwise(
+            shuffled, self.sort_function, self.sort_function_kwargs
+        )
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            parent_columns = parent.columns
+            columns = parent_columns + [
+                col for col in self.by if col not in parent_columns
+            ]
             if self.frame.columns == columns:
                 return
             return type(parent)(
@@ -779,6 +882,19 @@ class SortIndexBlockwise(Blockwise):
     operation = M.sort_index
 
 
+def sort_function(self, *args, **kwargs):
+    sort_func = kwargs.pop("sort_function")
+    sort_kwargs = kwargs.pop("sort_kwargs")
+    return sort_func(*args, **kwargs, **sort_kwargs)
+
+
+class SortValuesBlockwise(Blockwise):
+    _projection_passthrough = False
+    _parameters = ["frame", "sort_function", "sort_kwargs"]
+    operation = sort_function
+    _keyword_only = ["sort_function", "sort_kwargs"]
+
+
 class SetIndexBlockwise(Blockwise):
     _parameters = ["frame", "other", "drop", "new_divisions"]
     _keyword_only = ["drop", "new_divisions"]
@@ -806,12 +922,16 @@ class SetIndexBlockwise(Blockwise):
 
 @functools.lru_cache  # noqa: B019
 def _calculate_divisions(
-    frame, other, ascending: bool = True, partition_size: float = 128e6
+    frame,
+    other,
+    npartitions: int,
+    ascending: bool = True,
+    partition_size: float = 128e6,
 ):
     from dask_expr import RepartitionQuantiles, new_collection
 
     divisions, mins, maxes = compute(
-        new_collection(RepartitionQuantiles(other, frame.npartitions)),
+        new_collection(RepartitionQuantiles(other, npartitions)),
         new_collection(other).map_partitions(M.min),
         new_collection(other).map_partitions(M.max),
     )

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import functools
 import warnings
-from collections.abc import Hashable
+from collections.abc import Callable, Hashable, Mapping
 from numbers import Number
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
+from dask.dataframe.accessor import CachedAccessor
 from dask.dataframe.core import (
     _concat,
     _Frame,
@@ -24,6 +26,7 @@ from tlz import first
 
 from dask_expr import _expr as expr
 from dask_expr._align import AlignPartitions
+from dask_expr._categorical import CategoricalAccessor
 from dask_expr._concat import Concat
 from dask_expr._expr import Eval, no_default
 from dask_expr._merge import JoinRecursive, Merge
@@ -39,7 +42,7 @@ from dask_expr._reductions import (
     ValueCounts,
 )
 from dask_expr._repartition import Repartition
-from dask_expr._shuffle import SetIndex, SetIndexBlockwise
+from dask_expr._shuffle import SetIndex, SetIndexBlockwise, SortValues
 from dask_expr._util import _convert_to_list
 
 #
@@ -436,6 +439,12 @@ class FrameBase(DaskMethodsMixin):
     def prod(self, skipna=True, numeric_only=False, min_count=0):
         return new_collection(self.expr.prod(skipna, numeric_only, min_count))
 
+    def var(self, axis=0, skipna=True, ddof=1, numeric_only=False):
+        return new_collection(self.expr.var(axis, skipna, ddof, numeric_only))
+
+    def std(self, axis=0, skipna=True, ddof=1, numeric_only=False):
+        return new_collection(self.expr.std(axis, skipna, ddof, numeric_only))
+
     def mean(self, skipna=True, numeric_only=False, min_count=0):
         return new_collection(self.expr.mean(skipna, numeric_only))
 
@@ -812,7 +821,15 @@ class DataFrame(FrameBase):
     def eval(self, expr, **kwargs):
         return new_collection(Eval(self.expr, _expr=expr, expr_kwargs=kwargs))
 
-    def set_index(self, other, drop=True, sorted=False, divisions=None):
+    def set_index(
+        self,
+        other,
+        drop=True,
+        sorted=False,
+        npartitions: int | None = None,
+        divisions=None,
+        sort: bool = True,
+    ):
         if isinstance(other, DataFrame):
             raise TypeError("other can't be of type DataFrame")
         if isinstance(other, Series):
@@ -825,13 +842,75 @@ class DataFrame(FrameBase):
             check_divisions(divisions)
         other = other.expr if isinstance(other, Series) else other
 
+        if (sorted or not sort) and npartitions is not None:
+            raise ValueError(
+                "Specifying npartitions with sort=False or sorted=True is not "
+                "supported. Call `repartition` afterwards."
+            )
+
         if sorted:
             return new_collection(
                 SetIndexBlockwise(self.expr, other, drop, new_divisions=divisions)
             )
+        elif not sort:
+            return new_collection(SetIndexBlockwise(self.expr, other, drop, None))
 
         return new_collection(
-            SetIndex(self.expr, other, drop, user_divisions=divisions)
+            SetIndex(
+                self.expr,
+                other,
+                drop,
+                user_divisions=divisions,
+                npartitions=npartitions,
+            )
+        )
+
+    def sort_values(
+        self,
+        by: str | list[str],
+        npartitions: int | None = None,
+        ascending: bool | list[bool] = True,
+        na_position: Literal["first"] | Literal["last"] = "last",
+        partition_size: float = 128e6,
+        sort_function: Callable[[pd.DataFrame], pd.DataFrame] | None = None,
+        sort_function_kwargs: Mapping[str, Any] | None = None,
+    ):
+        """See DataFrame.sort_values for docstring"""
+        if na_position not in ("first", "last"):
+            raise ValueError("na_position must be either 'first' or 'last'")
+        if not isinstance(by, list):
+            by = [by]
+        if any(not isinstance(b, str) for b in by):
+            raise NotImplementedError(
+                "Dataframes only support sorting by named columns which must be passed as a "
+                "string or a list of strings.\n"
+                "You passed %s" % str(by)
+            )
+
+        if not isinstance(ascending, bool):
+            # support [True] as input
+            if (
+                isinstance(ascending, list)
+                and len(ascending) == 1
+                and isinstance(ascending[0], bool)
+            ):
+                ascending = ascending[0]
+            else:
+                raise NotImplementedError(
+                    f"Dask currently only supports a single boolean for ascending. You passed {str(ascending)}"
+                )
+
+        return new_collection(
+            SortValues(
+                self.expr,
+                by,
+                ascending,
+                na_position,
+                npartitions,
+                partition_size,
+                sort_function,
+                sort_function_kwargs,
+            )
         )
 
 
@@ -891,6 +970,8 @@ class Series(FrameBase):
 
     def explode(self):
         return new_collection(expr.ExplodeSeries(self.expr))
+
+    cat = CachedAccessor("cat", CategoricalAccessor)
 
     def _repartition_quantiles(self, npartitions, upsample=1.0, random_state=None):
         return new_collection(

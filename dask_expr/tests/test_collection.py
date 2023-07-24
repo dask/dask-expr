@@ -6,7 +6,7 @@ import dask
 import numpy as np
 import pandas as pd
 import pytest
-from dask.dataframe._compat import PANDAS_GT_210
+from dask.dataframe._compat import PANDAS_GE_210
 from dask.dataframe.utils import UNKNOWN_CATEGORIES, assert_eq
 from dask.utils import M
 
@@ -105,6 +105,8 @@ def test_dask(pdf, df):
         M.prod,
         M.count,
         M.mean,
+        M.std,
+        M.var,
         M.idxmin,
         M.idxmax,
         pytest.param(
@@ -123,6 +125,20 @@ def test_reductions(func, pdf, df):
     # check_dtype False because sub-selection of columns that is pushed through
     # is not reflected in the meta calculation
     assert_eq(func(df)["x"], func(pdf)["x"], check_dtype=False)
+
+
+@pytest.mark.parametrize("axis", [0, 1])
+@pytest.mark.parametrize("skipna", [True, False])
+@pytest.mark.parametrize("ddof", [1, 2])
+def test_std_kwargs(axis, skipna, ddof):
+    pdf = pd.DataFrame(
+        {"x": range(30), "y": [1, 2, None] * 10, "z": ["dog", "cat"] * 15}
+    )
+    df = from_pandas(pdf, npartitions=3)
+    assert_eq(
+        pdf.std(axis=axis, skipna=skipna, ddof=ddof, numeric_only=True),
+        df.std(axis=axis, skipna=skipna, ddof=ddof, numeric_only=True),
+    )
 
 
 def test_nbytes(pdf, df):
@@ -267,7 +283,7 @@ def test_to_timestamp(pdf, how):
         pytest.param(
             lambda df: df.map(lambda x: x + 1),
             marks=pytest.mark.skipif(
-                not PANDAS_GT_210, reason="Only available from 2.1"
+                not PANDAS_GE_210, reason="Only available from 2.1"
             ),
         ),
         lambda df: df.clip(lower=10, upper=50),

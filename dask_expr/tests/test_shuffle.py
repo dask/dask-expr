@@ -174,6 +174,13 @@ def test_set_index_pre_sorted(pdf):
     assert q._name == expected._name
 
 
+def test_set_index_repartition(df, pdf):
+    result = df.set_index("x", npartitions=2)
+    assert result.npartitions == 2
+    assert result.optimize(fuse=False).npartitions == 2
+    assert_eq(result, pdf.set_index("x"))
+
+
 def test_set_index_simplify(df, pdf):
     q = df.set_index("x")["y"].optimize(fuse=False)
     expected = df[["x", "y"]].set_index("x")["y"].optimize(fuse=False)
@@ -181,4 +188,49 @@ def test_set_index_simplify(df, pdf):
 
     q = df.set_index(df.x)["y"].optimize(fuse=False)
     expected = df[["y"]].set_index(df.x)["y"].optimize(fuse=False)
+    assert q._name == expected._name
+
+
+def test_set_index_without_sort(df, pdf):
+    result = df.set_index("y", sort=False)
+    assert_eq(result, pdf.set_index("y"))
+
+    result = result.optimize(fuse=False)
+    assert all(isinstance(ex, (FromPandas, Blockwise)) for ex in result.walk())
+
+    result = df.set_index(df.y, sort=False)
+    assert_eq(result, pdf.set_index(pdf.y))
+
+    with pytest.raises(ValueError, match="Specifying npartitions with sort=False"):
+        df.set_index("y", sort=False, npartitions=20)
+
+    with pytest.raises(
+        ValueError, match="Specifying npartitions with sort=False or sorted=True"
+    ):
+        df.set_index("y", sorted=True, npartitions=20)
+
+
+def test_sort_values(df, pdf):
+    assert_eq(df.sort_values("x"), pdf.sort_values("x"))
+    assert_eq(df.sort_values("x", npartitions=2), pdf.sort_values("x"))
+    pdf.iloc[5, 0] = -10
+    df = from_pandas(pdf, npartitions=10)
+    assert_eq(df.sort_values("x"), pdf.sort_values("x"))
+
+    with pytest.raises(NotImplementedError, match="a single boolean for ascending"):
+        df.sort_values(by=["x", "y"], ascending=[True, True])
+    with pytest.raises(NotImplementedError, match="sorting by named columns"):
+        df.sort_values(by=1)
+
+    with pytest.raises(ValueError, match="must be either 'first' or 'last'"):
+        df.sort_values(by="x", na_position="bla")
+
+
+def test_sort_values_optimize(df, pdf):
+    q = df.sort_values("x")["y"].optimize(fuse=False)
+    expected = df[["x", "y"]].sort_values("x")["y"].optimize(fuse=False)
+    assert q._name == expected._name
+
+    q = df.sort_values("x")["x"].optimize(fuse=False)
+    expected = df[["x"]].sort_values("x")["x"].optimize(fuse=False)
     assert q._name == expected._name
