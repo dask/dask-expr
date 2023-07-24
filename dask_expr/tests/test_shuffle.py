@@ -230,3 +230,7 @@ def test_sort_values_optimize(df, pdf):
     q = df.sort_values("x")["y"].optimize(fuse=False)
     expected = df[["x", "y"]].sort_values("x")["y"].optimize(fuse=False)
     assert q._name == expected._name
+
+    q = df.sort_values("x")["x"].optimize(fuse=False)
+    expected = df[["x"]].sort_values("x")["x"].optimize(fuse=False)
+    assert q._name == expected._name

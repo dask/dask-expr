@@ -797,7 +797,10 @@ class SortValues(BaseSetIndexSortValues):
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
-            columns = parent.columns + self.by
+            parent_columns = parent.columns
+            columns = parent_columns + [
+                col for col in self.by if col not in parent_columns
+            ]
             if self.frame.columns == columns:
                 return
             return type(parent)(
