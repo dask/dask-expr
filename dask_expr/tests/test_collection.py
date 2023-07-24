@@ -309,6 +309,8 @@ def test_to_timestamp(pdf, how):
         lambda df: df.x.index.to_frame(),
         lambda df: df.eval("z=x+y"),
         lambda df: df.select_dtypes(include="integer"),
+        lambda df: df.add_prefix(prefix="2_"),
+        lambda df: df.add_suffix(suffix="_2"),
     ],
 )
 def test_blockwise(func, pdf, df):

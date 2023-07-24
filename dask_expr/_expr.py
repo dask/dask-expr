@@ -1640,6 +1640,16 @@ class ResetIndex(Elemwise):
         return (None,) * (self.frame.npartitions + 1)
 
 
+class AddPrefix(Elemwise):
+    _parameters = ["frame", "prefix"]
+    operation = M.add_prefix
+
+
+class AddSuffix(Elemwise):
+    _parameters = ["frame", "suffix"]
+    operation = M.add_suffix
+
+
 class Head(Expr):
     """Take the first `n` rows of the first partition"""
 
