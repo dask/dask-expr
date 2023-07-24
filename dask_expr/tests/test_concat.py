@@ -95,3 +95,22 @@ def test_concat_simplify_projection_not_added(pdf, df):
     assert result._name == expected._name
 
     assert_eq(q, pd.concat([pdf, pdf2])[["y", "x"]])
+
+
+def test_concat_axis_one_co_aligned(pdf, df):
+    df2 = df.rename({"x": "x_2", "y": "y_2"})
+    pdf2 = pdf.add_suffix("_2")
+    assert_eq(concat([df, df2], axis=1), pd.concat([pdf, pdf2], axis=1))
+
+
+def test_concat_axis_one_all_divisions_unknown(pdf, df):
+    pdf = pdf.sort_values(by="x", ascending=False, ignore_index=True)
+    df = from_pandas(pdf, npartitions=2, sort=False)
+    pdf2 = pdf.add_suffix("_2")
+    df2 = from_pandas(pdf2, npartitions=2, sort=False)
+    with pytest.warns(UserWarning):
+        assert_eq(concat([df, df2], axis=1), pd.concat([pdf, pdf2], axis=1))
+    assert_eq(
+        concat([df, df2], axis=1, ignore_unknown_divisions=True),
+        pd.concat([pdf, pdf2], axis=1),
+    )
