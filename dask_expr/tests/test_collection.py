@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib
 import operator
 import pickle
-import re
 
 import dask
 import numpy as np
@@ -19,6 +18,7 @@ from dask_expr.datasets import timeseries
 
 # Import backend DataFrame library to test
 BACKEND = dask.config.get("dataframe.backend", "pandas")
+CUDF_BACKEND = BACKEND == "cudf"
 lib = importlib.import_module(BACKEND)
 
 
@@ -53,18 +53,16 @@ def test_setitem(pdf, df):
     assert_eq(df, pdf)
 
 
+@pytest.mark.xfail(CUDF_BACKEND, reason="https://github.com/rapidsai/cudf/issues/10271")
 def test_explode():
-    if BACKEND == "cudf":
-        pytest.xfail(reason="https://github.com/rapidsai/cudf/issues/10271")
     pdf = lib.DataFrame({"a": [[1, 2], [3, 4]]})
     df = from_pandas(pdf)
     assert_eq(pdf.explode(column="a"), df.explode(column="a"))
     assert_eq(pdf.a.explode(), df.a.explode())
 
 
+@pytest.mark.xfail(CUDF_BACKEND, reason="https://github.com/rapidsai/cudf/issues/10271")
 def test_explode_simplify(pdf):
-    if BACKEND == "cudf":
-        pytest.xfail(reason="https://github.com/rapidsai/cudf/issues/10271")
     pdf["z"] = 1
     df = from_pandas(pdf)
     q = df.explode(column="x")["y"]
@@ -126,7 +124,7 @@ def test_dask(pdf, df):
     ],
 )
 def test_reductions(func, pdf, df):
-    if BACKEND == "cudf" and func in [M.idxmin, M.idxmax]:
+    if CUDF_BACKEND and func in [M.idxmin, M.idxmax]:
         pytest.xfail(reason="https://github.com/rapidsai/cudf/issues/9602")
     result = func(df)
     assert result.known_divisions
@@ -143,7 +141,7 @@ def test_reductions(func, pdf, df):
 @pytest.mark.parametrize("skipna", [True, False])
 @pytest.mark.parametrize("ddof", [1, 2])
 def test_std_kwargs(axis, skipna, ddof):
-    if BACKEND == "cudf" and skipna is False:
+    if CUDF_BACKEND and skipna is False:
         pytest.xfail(reason="cudf requires skipna=True when nulls are present.")
     pdf = lib.DataFrame(
         {"x": range(30), "y": [1, 2, None] * 10, "z": ["dog", "cat"] * 15}
@@ -155,9 +153,8 @@ def test_std_kwargs(axis, skipna, ddof):
     )
 
 
+@pytest.mark.xfail(CUDF_BACKEND, reason="nbytes not supported by cudf")
 def test_nbytes(pdf, df):
-    if BACKEND == "cudf":
-        pytest.xfail(reason="nbytes not supported by cudf")
     with pytest.raises(NotImplementedError, match="nbytes is not implemented"):
         df.nbytes
     assert_eq(df.x.nbytes, pdf.x.nbytes)
@@ -283,10 +280,9 @@ def test_and_or(func, pdf, df):
     assert_eq(func(pdf), func(df), check_names=False)
 
 
+@pytest.mark.xfail(CUDF_BACKEND, reason="period_range not supported by cudf")
 @pytest.mark.parametrize("how", ["start", "end"])
 def test_to_timestamp(pdf, how):
-    if BACKEND == "cudf":
-        pytest.xfail(reason="period_range not supported by cudf")
     pdf.index = lib.period_range("2019-12-31", freq="D", periods=len(pdf))
     df = from_pandas(pdf)
     assert_eq(df.to_timestamp(how=how), pdf.to_timestamp(how=how))
@@ -329,6 +325,7 @@ def test_blockwise(func, pdf, df):
     assert_eq(func(pdf), func(df))
 
 
+@pytest.mark.xfail(CUDF_BACKEND, reason="func not supported by cudf")
 @pytest.mark.parametrize(
     "func",
     [
@@ -339,14 +336,11 @@ def test_blockwise(func, pdf, df):
     ],
 )
 def test_blockwise_cudf_fails(func, pdf, df):
-    if BACKEND == "cudf":
-        pytest.xfail(reason="func not supported by cudf")
     assert_eq(func(pdf), func(df))
 
 
+@pytest.mark.xfail(CUDF_BACKEND, reason="rename_axis not supported by cudf")
 def test_rename_axis(pdf):
-    if BACKEND == "cudf":
-        pytest.xfail(reason="rename_axis not supported by cudf")
     pdf.index.name = "a"
     pdf.columns.name = "b"
     df = from_pandas(pdf, npartitions=10)
@@ -378,9 +372,8 @@ def test_repr(df):
     assert "sum(skipna=False)" in s
 
 
+@pytest.mark.xfail(CUDF_BACKEND, reason="combine_first not supported by cudf")
 def test_combine_first_simplify(pdf):
-    if BACKEND == "cudf":
-        pytest.xfail(reason="combine_first not supported by cudf")
     df = from_pandas(pdf)
     pdf2 = pdf.rename(columns={"y": "z"})
     df2 = from_pandas(pdf2)
@@ -667,9 +660,8 @@ def test_serialization(pdf, df):
     assert_eq(pickle.loads(before), pickle.loads(after))
 
 
+@pytest.mark.xfail(CUDF_BACKEND, reason="Cannot apply lambda function in cudf")
 def test_size_optimized(df):
-    if BACKEND == "cudf":
-        pytest.xfail(reason="Cannot apply lambda function in cudf")
     expr = (df.x + 1).apply(lambda x: x).size
     out = optimize(expr)
     expected = optimize(df.x.size)
@@ -837,9 +829,8 @@ def test_drop_duplicates(df, pdf):
     assert_eq(df.drop_duplicates(subset=["x"]), pdf.drop_duplicates(subset=["x"]))
     assert_eq(df.x.drop_duplicates(), pdf.x.drop_duplicates())
 
-    if BACKEND == "pandas":
-        with pytest.raises(KeyError, match=re.escape("Index(['a'], dtype='object')")):
-            df.drop_duplicates(subset=["a"])
+    with pytest.raises(KeyError, match="'a'"):
+        df.drop_duplicates(subset=["a"])
 
     with pytest.raises(TypeError, match="got an unexpected keyword argument"):
         df.x.drop_duplicates(subset=["a"])
@@ -939,9 +930,8 @@ def test_sample(df):
     assert_eq(result, expected)
 
 
+@pytest.mark.skipif(CUDF_BACKEND, reason="align not supported by cudf")
 def test_align(df, pdf):
-    if BACKEND == "cudf":
-        pytest.skip(reason="align not supported by cudf")
     result_1, result_2 = df.align(df)
     pdf_result_1, pdf_result_2 = pdf.align(pdf)
     assert_eq(result_1, pdf_result_1)
@@ -953,9 +943,8 @@ def test_align(df, pdf):
     assert_eq(result_2, pdf_result_2)
 
 
+@pytest.mark.skipif(CUDF_BACKEND, reason="align not supported by cudf")
 def test_align_different_partitions():
-    if BACKEND == "cudf":
-        pytest.skip(reason="align not supported by cudf")
     pdf = lib.DataFrame({"a": [11, 12, 31, 1, 2, 3], "b": [1, 2, 3, 4, 5, 6]})
     df = from_pandas(pdf, npartitions=2)
     pdf2 = lib.DataFrame(
@@ -969,9 +958,8 @@ def test_align_different_partitions():
     assert_eq(result_2, pdf_result_2)
 
 
+@pytest.mark.skipif(CUDF_BACKEND, reason="align not supported by cudf")
 def test_align_unknown_partitions_same_root():
-    if BACKEND == "cudf":
-        pytest.skip(reason="align not supported by cudf")
     pdf = lib.DataFrame({"a": 1}, index=[3, 2, 1])
     df = from_pandas(pdf, npartitions=2, sort=False)
     result_1, result_2 = df.align(df)
@@ -980,9 +968,8 @@ def test_align_unknown_partitions_same_root():
     assert_eq(result_2, pdf_result_2)
 
 
+@pytest.mark.skipif(CUDF_BACKEND, reason="align not supported by cudf")
 def test_unknown_partitions_different_root():
-    if BACKEND == "cudf":
-        pytest.skip(reason="align not supported by cudf")
     pdf = lib.DataFrame({"a": 1}, index=[3, 2, 1])
     df = from_pandas(pdf, npartitions=2, sort=False)
     pdf2 = lib.DataFrame({"a": 1}, index=[4, 3, 2, 1])
@@ -991,9 +978,8 @@ def test_unknown_partitions_different_root():
         df.align(df2)
 
 
+@pytest.mark.xfail(CUDF_BACKEND, reason="compute_hll_array doesn't work for cudf")
 def test_nunique_approx(df):
-    if BACKEND == "cudf":
-        pytest.xfail(reason="compute_hll_array doesn't work for cudf")
     result = df.nunique_approx().compute()
     assert 99 < result < 101
 
@@ -1031,9 +1017,8 @@ def test_assign_simplify_series(pdf):
     assert result._name == expected._name
 
 
+@pytest.mark.xfail(CUDF_BACKEND, reason="assign function not supported by cudf")
 def test_assign_non_series_inputs(df, pdf):
-    if BACKEND == "cudf":
-        pytest.xfail(reason="assign function not supported by cudf")
     assert_eq(df.assign(a=lambda x: x.x * 2), pdf.assign(a=lambda x: x.x * 2))
     assert_eq(df.assign(a=2), pdf.assign(a=2))
     assert_eq(df.assign(a=df.x.sum()), pdf.assign(a=pdf.x.sum()))
@@ -1063,9 +1048,8 @@ def test_are_co_aligned(pdf, df):
     assert not are_co_aligned(merged_first.expr, df.expr)
 
 
+@pytest.mark.xfail(CUDF_BACKEND, reason="TODO")
 def test_astype_categories(df):
-    if BACKEND == "cudf":
-        pytest.xfail(reason="TODO")
     result = df.astype("category")
     assert_eq(result.x._meta.cat.categories, lib.Index([UNKNOWN_CATEGORIES]))
     assert_eq(result.y._meta.cat.categories, lib.Index([UNKNOWN_CATEGORIES]))
