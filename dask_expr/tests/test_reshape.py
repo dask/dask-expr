@@ -1,16 +1,21 @@
-import pandas as pd
+import importlib
+
+import dask
 import pytest
 from dask.dataframe import assert_eq
 
 from dask_expr import from_pandas
 
+BACKEND = dask.config.get("dataframe.backend", "pandas")
+lib = importlib.import_module(BACKEND)
+
 
 @pytest.fixture
 def pdf():
-    pdf = pd.DataFrame(
+    pdf = lib.DataFrame(
         {
             "x": [1, 2, 3, 4, 5, 6],
-            "y": pd.Series([4, 5, 8, 6, 1, 4], dtype="category"),
+            "y": lib.Series([4, 5, 8, 6, 1, 4], dtype="category"),
             "z": [4, 15, 8, 16, 1, 14],
             "a": 1,
         }
