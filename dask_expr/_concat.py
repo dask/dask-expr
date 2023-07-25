@@ -195,14 +195,10 @@ class ConcatUnindexed(Blockwise):
     _defaults = {"ignore_order": False, "_kwargs": {}}
     _keyword_only = ["ignore_order", "_kwargs"]
 
-    @property
-    def _frames(self):
-        return self.dependencies()
-
     @functools.cached_property
     def _meta(self):
         return methods.concat(
-            [df._meta for df in self._frames],
+            [df._meta for df in self.dependencies()],
             ignore_order=self.ignore_order,
             **self.operand("_kwargs"),
         )
