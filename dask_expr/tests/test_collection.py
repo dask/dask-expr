@@ -317,6 +317,18 @@ def test_blockwise(func, pdf, df):
     assert_eq(func(pdf), func(df))
 
 
+def test_simplify_add_suffix_add_prefix(df, pdf):
+    result = df.add_prefix("2_")["2_x"].simplify()
+    expected = df[["x"]].add_prefix("2_")["2_x"]
+    assert result._name == expected._name
+    assert_eq(result, pdf.add_prefix("2_")["2_x"])
+
+    result = df.add_suffix("_2")["x_2"].simplify()
+    expected = df[["x"]].add_suffix("_2")["x_2"]
+    assert result._name == expected._name
+    assert_eq(result, pdf.add_suffix("_2")["x_2"])
+
+
 def test_rename_axis(pdf):
     pdf.index.name = "a"
     pdf.columns.name = "b"

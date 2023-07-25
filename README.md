@@ -61,6 +61,8 @@ API Coverage
 **`dask_expr.DataFrame`**
 
 - `abs`
+- `add_prefix`
+- `add_sufix`
 - `align`
 - `all`
 - `any`
@@ -100,8 +102,6 @@ API Coverage
 - `partitions`
 - `prod`
 - `rename`
-- `add_prefix`
-- `add_sufix`
 - `rename_axis`
 - `repartition`
 - `replace`
