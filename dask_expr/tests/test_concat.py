@@ -98,7 +98,7 @@ def test_concat_simplify_projection_not_added(pdf, df):
 
 
 def test_concat_axis_one_co_aligned(pdf, df):
-    df2 = df.rename({"x": "x_2", "y": "y_2"})
+    df2 = df.add_suffix("_2")
     pdf2 = pdf.add_suffix("_2")
     assert_eq(concat([df, df2], axis=1), pd.concat([pdf, pdf2], axis=1))
 
