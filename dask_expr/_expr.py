@@ -1742,13 +1742,13 @@ class Binop(Elemwise):
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
-            if isinstance(self.left, Expr):
+            if isinstance(self.left, Expr) and self.left.ndim:
                 left = self.left[
                     parent.operand("columns")
                 ]  # TODO: filter just the correct columns
             else:
                 left = self.left
-            if isinstance(self.right, Expr):
+            if isinstance(self.right, Expr) and self.right.ndim:
                 right = self.right[parent.operand("columns")]
             else:
                 right = self.right
@@ -2113,7 +2113,9 @@ def optimize_blockwise_fusion(expr):
                         # of partitions, since broadcasting within
                         # a group is not allowed.
                         stack.append(dep)
-                    elif dep not in roots and dependencies[dep]:
+                    elif dependencies[dep] and dep._name not in [
+                        r._name for r in roots
+                    ]:
                         # Couldn't fuse dep, but we may be able to
                         # use it as a new root on the next pass
                         roots.append(dep)

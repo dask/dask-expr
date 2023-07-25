@@ -6,7 +6,7 @@ import dask
 import numpy as np
 import pandas as pd
 import pytest
-from dask.dataframe._compat import PANDAS_GT_210
+from dask.dataframe._compat import PANDAS_GE_210
 from dask.dataframe.utils import UNKNOWN_CATEGORIES, assert_eq
 from dask.utils import M
 
@@ -283,7 +283,7 @@ def test_to_timestamp(pdf, how):
         pytest.param(
             lambda df: df.map(lambda x: x + 1),
             marks=pytest.mark.skipif(
-                not PANDAS_GT_210, reason="Only available from 2.1"
+                not PANDAS_GE_210, reason="Only available from 2.1"
             ),
         ),
         lambda df: df.clip(lower=10, upper=50),
@@ -503,6 +503,13 @@ def test_projection_stacking_coercion(pdf):
     assert_eq(df.x[[0]], pdf.x[[0]], check_divisions=False)
 
 
+def test_projection_pushdown_dim_0(pdf, df):
+    result = (df[["x"]] + df["x"].sum(skipna=False))["x"]
+    expected = (pdf[["x"]] + pdf["x"].sum(skipna=False))["x"]
+    assert_eq(result, expected)
+    assert_eq(result.optimize(), expected)
+
+
 def test_remove_unnecessary_projections(df):
     result = (df + 1)[df.columns]
     optimized = result.simplify()
@@ -653,19 +660,31 @@ def test_tree_repr(df, fuse):
 
     df = timeseries()
     expr = ((df.x + 1).sum(skipna=False) + df.y.mean()).expr
-    expr = expr.optimize() if fuse else expr
-    s = expr.tree_repr()
 
-    assert "Sum" in s
-    assert "Add" in s
-    assert "1" in s
+    # Check result before optimization
+    s = expr.tree_repr()
+    assert "Sum:" in s
+    assert "Add:" in s
+    assert "Mean:" in s
+    assert "AlignPartitions:" in s
+    assert str(df.seed) in s.lower()
+
+    # Check result after optimization
+    optimized = expr.optimize(fuse=fuse)
+    s = optimized.tree_repr()
+    assert "Sum(Chunk):" in s
+    assert "Sum(TreeReduce): split_every=0" in s
+    assert "Add:" in s
+    assert "Mean:" not in s
+    assert "AlignPartitions:" not in s
+    assert "right=1" in s
     assert "True" not in s
     assert "None" not in s
     assert "skipna=False" in s
     assert str(df.seed) in s.lower()
     if fuse:
         assert "Fused" in s
-        assert s.count("|") == 9
+        assert "|" in s
 
 
 def test_simple_graphs(df):

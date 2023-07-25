@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import functools
 import warnings
-from collections.abc import Hashable
+from collections.abc import Callable, Hashable, Mapping
 from numbers import Number
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -44,7 +45,7 @@ from dask_expr._reductions import (
     ValueCounts,
 )
 from dask_expr._repartition import Repartition
-from dask_expr._shuffle import SetIndex, SetIndexBlockwise
+from dask_expr._shuffle import SetIndex, SetIndexBlockwise, SortValues
 from dask_expr._util import _convert_to_list, is_scalar
 
 #
@@ -831,6 +832,7 @@ class DataFrame(FrameBase):
         npartitions: int | None = None,
         divisions=None,
         sort: bool = True,
+        upsample: float = 1.0,
     ):
         if isinstance(other, DataFrame):
             raise TypeError("other can't be of type DataFrame")
@@ -864,6 +866,57 @@ class DataFrame(FrameBase):
                 drop,
                 user_divisions=divisions,
                 npartitions=npartitions,
+                upsample=upsample,
+            )
+        )
+
+    def sort_values(
+        self,
+        by: str | list[str],
+        npartitions: int | None = None,
+        ascending: bool | list[bool] = True,
+        na_position: Literal["first"] | Literal["last"] = "last",
+        partition_size: float = 128e6,
+        sort_function: Callable[[pd.DataFrame], pd.DataFrame] | None = None,
+        sort_function_kwargs: Mapping[str, Any] | None = None,
+        upsample: float = 1.0,
+    ):
+        """See DataFrame.sort_values for docstring"""
+        if na_position not in ("first", "last"):
+            raise ValueError("na_position must be either 'first' or 'last'")
+        if not isinstance(by, list):
+            by = [by]
+        if any(not isinstance(b, str) for b in by):
+            raise NotImplementedError(
+                "Dataframes only support sorting by named columns which must be passed as a "
+                "string or a list of strings.\n"
+                "You passed %s" % str(by)
+            )
+
+        if not isinstance(ascending, bool):
+            # support [True] as input
+            if (
+                isinstance(ascending, list)
+                and len(ascending) == 1
+                and isinstance(ascending[0], bool)
+            ):
+                ascending = ascending[0]
+            else:
+                raise NotImplementedError(
+                    f"Dask currently only supports a single boolean for ascending. You passed {str(ascending)}"
+                )
+
+        return new_collection(
+            SortValues(
+                self.expr,
+                by,
+                ascending,
+                na_position,
+                npartitions,
+                partition_size,
+                sort_function,
+                sort_function_kwargs,
+                upsample,
             )
         )
 
