@@ -20,6 +20,7 @@ def _convert_to_list(column) -> list | None:
 
 
 def is_scalar(x):
+    # np.isscalar does not work for some pandas scalars, for example pd.NA
     return not (isinstance(x, Sequence) or hasattr(x, "dtype")) or isinstance(x, str)
 
 
