@@ -356,12 +356,9 @@ class PivotTable(ApplyConcatApply):
             raise NotImplementedError(f"{self.aggfunc=} is not implemented")
 
 
-class PivotTableAbstract(PivotTable):
+class PivotTableAbstract(ApplyConcatApply):
     _parameters = ["frame", "columns", "index", "values", "aggfunc"]
     _defaults = {"columns": None, "index": None, "values": None, "aggfunc": "mean"}
-
-    def _lower(self):
-        return
 
     @property
     def chunk_kwargs(self):
