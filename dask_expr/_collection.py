@@ -829,6 +829,7 @@ class DataFrame(FrameBase):
         npartitions: int | None = None,
         divisions=None,
         sort: bool = True,
+        upsample: float = 1.0,
     ):
         if isinstance(other, DataFrame):
             raise TypeError("other can't be of type DataFrame")
@@ -862,6 +863,7 @@ class DataFrame(FrameBase):
                 drop,
                 user_divisions=divisions,
                 npartitions=npartitions,
+                upsample=upsample,
             )
         )
 
@@ -874,6 +876,7 @@ class DataFrame(FrameBase):
         partition_size: float = 128e6,
         sort_function: Callable[[pd.DataFrame], pd.DataFrame] | None = None,
         sort_function_kwargs: Mapping[str, Any] | None = None,
+        upsample: float = 1.0,
     ):
         """See DataFrame.sort_values for docstring"""
         if na_position not in ("first", "last"):
@@ -910,8 +913,15 @@ class DataFrame(FrameBase):
                 partition_size,
                 sort_function,
                 sort_function_kwargs,
+                upsample,
             )
         )
+
+    def add_prefix(self, prefix):
+        return new_collection(expr.AddPrefix(self.expr, prefix))
+
+    def add_suffix(self, suffix):
+        return new_collection(expr.AddSuffix(self.expr, suffix))
 
 
 class Series(FrameBase):
@@ -1118,13 +1128,6 @@ def concat(
     ignore_order=False,
     **kwargs,
 ):
-    if axis == 1:
-        # TODO: implement
-        raise NotImplementedError
-    if ignore_unknown_divisions:
-        # TODO: implement
-        raise NotImplementedError
-
     if not isinstance(dfs, list):
         raise TypeError("dfs must be a list of DataFrames/Series objects")
     if len(dfs) == 0:
@@ -1137,11 +1140,16 @@ def concat(
 
     dfs = [from_pandas(df) if not is_dask_collection(df) else df for df in dfs]
 
+    if axis == 1:
+        dfs = [df for df in dfs if len(df.columns) > 0]
+
     return new_collection(
         Concat(
             join,
             ignore_order,
             kwargs,
+            axis,
+            ignore_unknown_divisions,
             *[df.expr for df in dfs],
         )
     )

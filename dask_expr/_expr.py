@@ -1664,6 +1664,34 @@ class ResetIndex(Elemwise):
         return (None,) * (self.frame.npartitions + 1)
 
 
+class AddPrefix(Elemwise):
+    _parameters = ["frame", "prefix"]
+    operation = M.add_prefix
+
+    def _convert_columns(self, columns):
+        len_prefix = len(self.prefix)
+        return [col[len_prefix:] for col in columns]
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            columns = self._convert_columns(parent.columns)
+            if columns == self.frame.columns:
+                return
+            return type(parent)(
+                type(self)(self.frame[columns], self.operands[1]),
+                parent.operand("columns"),
+            )
+
+
+class AddSuffix(AddPrefix):
+    _parameters = ["frame", "suffix"]
+    operation = M.add_suffix
+
+    def _convert_columns(self, columns):
+        len_suffix = len(self.suffix)
+        return [col[:-len_suffix] for col in columns]
+
+
 class Head(Expr):
     """Take the first `n` rows of the first partition"""
 
@@ -1766,13 +1794,13 @@ class Binop(Elemwise):
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
-            if isinstance(self.left, Expr):
+            if isinstance(self.left, Expr) and self.left.ndim:
                 left = self.left[
                     parent.operand("columns")
                 ]  # TODO: filter just the correct columns
             else:
                 left = self.left
-            if isinstance(self.right, Expr):
+            if isinstance(self.right, Expr) and self.right.ndim:
                 right = self.right[parent.operand("columns")]
             else:
                 right = self.right
@@ -2137,7 +2165,9 @@ def optimize_blockwise_fusion(expr):
                         # of partitions, since broadcasting within
                         # a group is not allowed.
                         stack.append(dep)
-                    elif dep not in roots and dependencies[dep]:
+                    elif dependencies[dep] and dep._name not in [
+                        r._name for r in roots
+                    ]:
                         # Couldn't fuse dep, but we may be able to
                         # use it as a new root on the next pass
                         roots.append(dep)

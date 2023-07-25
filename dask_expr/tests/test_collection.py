@@ -313,6 +313,8 @@ def test_to_timestamp(pdf, how):
         lambda df: df.x.index.to_frame(),
         lambda df: df.eval("z=x+y"),
         lambda df: df.select_dtypes(include="integer"),
+        lambda df: df.add_prefix(prefix="2_"),
+        lambda df: df.add_suffix(suffix="_2"),
     ],
 )
 def test_blockwise(func, pdf, df):
@@ -337,6 +339,18 @@ def test_blockwise(func, pdf, df):
 )
 def test_blockwise_pandas_only(func, pdf, df):
     assert_eq(func(pdf), func(df))
+
+
+def test_simplify_add_suffix_add_prefix(df, pdf):
+    result = df.add_prefix("2_")["2_x"].simplify()
+    expected = df[["x"]].add_prefix("2_")["2_x"]
+    assert result._name == expected._name
+    assert_eq(result, pdf.add_prefix("2_")["2_x"])
+
+    result = df.add_suffix("_2")["x_2"].simplify()
+    expected = df[["x"]].add_suffix("_2")["x_2"]
+    assert result._name == expected._name
+    assert_eq(result, pdf.add_suffix("_2")["x_2"])
 
 
 @pytest.mark.xfail(CUDF_BACKEND, reason="rename_axis not supported by cudf")
@@ -529,6 +543,13 @@ def test_projection_stacking_coercion(pdf):
     assert_eq(df.x[[0]], pdf.x[[0]], check_divisions=False)
 
 
+def test_projection_pushdown_dim_0(pdf, df):
+    result = (df[["x"]] + df["x"].sum(skipna=False))["x"]
+    expected = (pdf[["x"]] + pdf["x"].sum(skipna=False))["x"]
+    assert_eq(result, expected)
+    assert_eq(result.optimize(), expected)
+
+
 def test_remove_unnecessary_projections(df):
     result = (df + 1)[df.columns]
     optimized = result.simplify()
@@ -683,19 +704,31 @@ def test_tree_repr(fuse):
 
     df = timeseries()
     expr = ((df.x + 1).sum(skipna=False) + df.y.mean()).expr
-    expr = expr.optimize() if fuse else expr
-    s = expr.tree_repr()
 
-    assert "Sum" in s
-    assert "Add" in s
-    assert "1" in s
+    # Check result before optimization
+    s = expr.tree_repr()
+    assert "Sum:" in s
+    assert "Add:" in s
+    assert "Mean:" in s
+    assert "AlignPartitions:" in s
+    assert str(df.seed) in s.lower()
+
+    # Check result after optimization
+    optimized = expr.optimize(fuse=fuse)
+    s = optimized.tree_repr()
+    assert "Sum(Chunk):" in s
+    assert "Sum(TreeReduce): split_every=0" in s
+    assert "Add:" in s
+    assert "Mean:" not in s
+    assert "AlignPartitions:" not in s
+    assert "right=1" in s
     assert "True" not in s
     assert "None" not in s
     assert "skipna=False" in s
     assert str(df.seed) in s.lower()
     if fuse:
         assert "Fused" in s
-        assert s.count("|") == 9
+        assert "|" in s
 
 
 def test_simple_graphs(df):
