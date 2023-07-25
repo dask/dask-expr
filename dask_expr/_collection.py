@@ -920,6 +920,12 @@ class DataFrame(FrameBase):
             )
         )
 
+    def add_prefix(self, prefix):
+        return new_collection(expr.AddPrefix(self.expr, prefix))
+
+    def add_suffix(self, suffix):
+        return new_collection(expr.AddSuffix(self.expr, suffix))
+
     def pivot_table(self, index, columns, values, aggfunc="mean"):
         if not is_scalar(index) or index not in self._meta.columns:
             raise ValueError("'index' must be the name of an existing column")
