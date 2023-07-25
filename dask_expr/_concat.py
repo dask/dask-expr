@@ -145,6 +145,7 @@ class Concat(Expr):
             frames = [
                 frame[cols] if cols != sorted(frame.columns) else frame
                 for frame, cols in zip(self._frames, columns_frame)
+                if len(cols) > 0
             ]
             return type(parent)(
                 type(self)(

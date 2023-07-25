@@ -114,3 +114,14 @@ def test_concat_axis_one_all_divisions_unknown(pdf, df):
         concat([df, df2], axis=1, ignore_unknown_divisions=True),
         pd.concat([pdf, pdf2], axis=1),
     )
+
+
+def test_concat_axis_one_drop_dfs_not_selected(pdf, df):
+    df2 = df.rename({"x": "x_2", "y": "y_2"})
+    pdf2 = pdf.add_suffix("_2")
+    df3 = df.rename({"x": "x_3", "y": "y_3"})
+    pdf3 = pdf.add_suffix("_3")
+    result = concat([df, df2, df3], axis=1)[["x", "y", "x_2"]].simplify()
+    expected = concat([df, df2[["x_2"]]], axis=1).simplify()
+    assert result._name == expected._name
+    assert_eq(result, pd.concat([pdf, pdf2, pdf3], axis=1)[["x", "y", "x_2"]])
