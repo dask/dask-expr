@@ -103,7 +103,7 @@ def test_concat_axis_one_co_aligned(pdf, df):
     assert_eq(concat([df, df2], axis=1), pd.concat([pdf, pdf2], axis=1))
 
 
-def test_concat_axis_one_all_divisions_unknown(pdf, df):
+def test_concat_axis_one_all_divisions_unknown(pdf):
     pdf = pdf.sort_values(by="x", ascending=False, ignore_index=True)
     df = from_pandas(pdf, npartitions=2, sort=False)
     pdf2 = pdf.add_suffix("_2")
