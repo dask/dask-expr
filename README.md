@@ -100,6 +100,7 @@ API Coverage
 - `nsmallest`
 - `nunique_approx`
 - `partitions`
+- `pivot_table`
 - `prod`
 - `rename`
 - `rename_axis`
@@ -119,7 +120,6 @@ API Coverage
 - `to_timestamp`
 - `var`
 - `visualize`
-- `pivot_table`
 
 
 **`dask_expr.Series`**
