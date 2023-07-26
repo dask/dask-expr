@@ -69,6 +69,7 @@ class SingleAggregation(ApplyConcatApply):
         "dropna",
         "chunk_kwargs",
         "aggregate_kwargs",
+        "split_out",
         "_slice",
     ]
     _defaults = {
@@ -76,11 +77,16 @@ class SingleAggregation(ApplyConcatApply):
         "dropna": None,
         "chunk_kwargs": None,
         "aggregate_kwargs": None,
+        "split_out": 1,
         "_slice": None,
     }
 
     groupby_chunk = None
     groupby_aggregate = None
+
+    @property
+    def split_by(self):
+        return self.by
 
     @classmethod
     def chunk(cls, df, by=None, **kwargs):
@@ -159,11 +165,13 @@ class GroupbyAggregation(ApplyConcatApply):
         "observed",
         "dropna",
         "split_every",
+        "split_out",
     ]
     _defaults = {
         "observed": None,
         "dropna": None,
         "split_every": 8,
+        "split_out": 1,
     }
 
     @functools.cached_property
@@ -435,8 +443,8 @@ class GroupBy:
     def _single_agg(
         self, expr_cls, split_out=1, chunk_kwargs=None, aggregate_kwargs=None
     ):
-        if split_out > 1:
-            raise NotImplementedError("split_out>1 not yet supported")
+        # if split_out > 1:
+        #    raise NotImplementedError("split_out>1 not yet supported")
         return new_collection(
             expr_cls(
                 self.obj.expr,
@@ -445,17 +453,19 @@ class GroupBy:
                 self.dropna,
                 chunk_kwargs=chunk_kwargs,
                 aggregate_kwargs=aggregate_kwargs,
+                split_out=split_out,
                 _slice=self._slice,
             )
         )
 
     def _aca_agg(self, expr_cls, split_out=1, **kwargs):
-        if split_out > 1:
-            raise NotImplementedError("split_out>1 not yet supported")
+        # if split_out > 1:
+        #    raise NotImplementedError("split_out>1 not yet supported")
         x = new_collection(
             expr_cls(
                 self.obj.expr,
                 by=self.by,
+                split_out=split_out,
                 **kwargs,
                 # TODO: Add observed and dropna when supported in dask/dask
             )
@@ -530,8 +540,8 @@ class GroupBy:
         if arg is None:
             raise NotImplementedError("arg=None not supported")
 
-        if split_out > 1:
-            raise NotImplementedError("split_out>1 not yet supported")
+        # if split_out > 1:
+        #    raise NotImplementedError("split_out>1 not yet supported")
 
         return new_collection(
             GroupbyAggregation(
@@ -541,6 +551,7 @@ class GroupBy:
                 self.observed,
                 self.dropna,
                 split_every,
+                split_out,
             )
         )
 

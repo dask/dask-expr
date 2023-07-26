@@ -52,10 +52,10 @@ def test_groupby_no_numeric_only(pdf, func):
     assert_eq(agg, expect)
 
 
-def test_groupby_mean_slice(pdf, df):
+@pytest.mark.parametrize("split_out", [1, 2])
+def test_groupby_mean_slice(pdf, df, split_out):
     g = df.groupby("x")
-    agg = g.y.mean()
-
+    agg = g.y.mean(split_out=split_out)
     expect = pdf.groupby("x").y.mean()
     assert_eq(agg, expect)
 
