@@ -1144,3 +1144,10 @@ def test_filter_pushdown(df, pdf):
     result = df[df.x > 5].optimize(fuse=False)
     expected = df[df.x > 5]
     assert result._name == expected._name
+
+    pdf["z"] = 1
+    df = from_pandas(pdf, npartitions=10)
+    df = df.dropna().replace(1, 5)
+    result = df[df.x > 5][["x", "y"]].optimize(fuse=False)
+    expected = df[["x", "y"]][df.x > 5]
+    assert result._name == expected._name

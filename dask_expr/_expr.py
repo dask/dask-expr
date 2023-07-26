@@ -1051,14 +1051,18 @@ class Blockwise(Expr):
             or self._filter_passthrough
             and isinstance(self.frame, Filter)
         ):
-            try:
-                common = type(self)(self.frame.frame, *self.operands[1:])
-            except ValueError:
-                # May have encountered a problem with `_required_attribute`.
-                # (There is no guarentee that the same method will exist for
-                # both a Series and DataFrame)
-                return None
-            operation = self.frame.operands[1]
+            frame, operations = self.frame, []
+            while isinstance(frame, (Filter, Projection)):
+                operations.append(frame.operands[1])
+                frame = frame.frame
+            else:
+                try:
+                    common = type(self)(frame, *self.operands[1:])
+                except ValueError:
+                    # May have encountered a problem with `_required_attribute`.
+                    # (There is no guarentee that the same method will exist for
+                    # both a Series and DataFrame)
+                    return None
             push_up_op = False
             for op in self._find_similar_operations(root, ignore=self._parameters):
                 if (
@@ -1071,8 +1075,42 @@ class Blockwise(Expr):
                     break
 
             if push_up_op:
-                return common[operation]
+                for op in reversed(operations):
+                    common = common[op]
+                return common
         return None
+
+    # def _combine_similar(self, root: Expr):
+    #     # Push projections back up through `_projection_passthrough`
+    #     # operations if it reduces the number of unique expression nodes.
+    #     if (
+    #         self._projection_passthrough
+    #         and isinstance(self.frame, Projection)
+    #         or self._filter_passthrough
+    #         and isinstance(self.frame, Filter)
+    #     ):
+    #         try:
+    #             common = type(self)(self.frame.frame, *self.operands[1:])
+    #         except ValueError:
+    #             # May have encountered a problem with `_required_attribute`.
+    #             # (There is no guarentee that the same method will exist for
+    #             # both a Series and DataFrame)
+    #             return None
+    #         operation = self.frame.operands[1]
+    #         push_up_op = False
+    #         for op in self._find_similar_operations(root, ignore=self._parameters):
+    #             if (
+    #                 isinstance(op.frame, (Projection, Filter))
+    #                 and (
+    #                     common._name == type(op)(op.frame.frame, *op.operands[1:])._name
+    #                 )
+    #             ) or common._name == op._name:
+    #                 push_up_op = True
+    #                 break
+    #
+    #         if push_up_op:
+    #             return common[operation]
+    #     return None
 
 
 class MapPartitions(Blockwise):
