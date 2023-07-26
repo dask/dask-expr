@@ -81,6 +81,18 @@ class SingleAggregation(ApplyConcatApply):
 
     groupby_chunk = None
     groupby_aggregate = None
+    _required_groupby_attribute = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self._required_groupby_attribute:
+            g = self.frame._meta.groupby(self.by)
+            if not hasattr(g, self._required_groupby_attribute):
+                # Raise a ValueError instead of AttributeError to
+                # avoid infinite recursion
+                raise ValueError(
+                    f"{g} has no attribute {self._required_groupby_attribute}"
+                )
 
     @classmethod
     def chunk(cls, df, by=None, **kwargs):
@@ -274,6 +286,7 @@ class Size(SingleAggregation):
 class ValueCounts(SingleAggregation):
     groupby_chunk = staticmethod(_value_counts)
     groupby_aggregate = staticmethod(_value_counts_aggregate)
+    _required_groupby_attribute = "value_counts"
 
 
 class Var(Reduction):
