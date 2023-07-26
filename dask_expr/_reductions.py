@@ -530,7 +530,6 @@ class IdxMin(Reduction):
     reduction_chunk = idxmaxmin_chunk
     reduction_combine = idxmaxmin_combine
     reduction_aggregate = idxmaxmin_agg
-    _required_attribute = "idxmin"
     _fn = "idxmin"
 
     @property
@@ -548,7 +547,6 @@ class IdxMin(Reduction):
 
 
 class IdxMax(IdxMin):
-    _required_attribute = "idxmax"
     _fn = "idxmax"
 
 
