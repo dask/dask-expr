@@ -16,8 +16,13 @@ from dask_expr._expr import Expr, Projection
 class Repartition(Expr):
     """Abstract repartitioning expression"""
 
-    _parameters = ["frame", "n", "new_divisions", "force"]
-    _defaults = {"n": None, "new_divisions": None, "force": False}
+    _parameters = ["frame", "n", "new_divisions", "force", "partition_size"]
+    _defaults = {
+        "n": None,
+        "new_divisions": None,
+        "force": False,
+        "partition_size": None,
+    }
 
     @property
     def _meta(self):
@@ -81,6 +86,8 @@ class Repartition(Expr):
             if tuple(self.new_divisions) == self.frame.divisions:
                 return self.frame
             return RepartitionDivisions(self.frame, self.new_divisions, self.force)
+        elif self.partition_size is not None:
+            return RepartitionSize(self.frame, self.partition_size)
         else:
             raise NotImplementedError()
 
@@ -314,3 +321,10 @@ class RepartitionDivisions(Repartition):
                 d[(out2, j - 1)] = (methods.concat, tmp)
             j += 1
         return d
+
+
+class RepartitionSize(Repartition):
+    def _divisions(self):
+        pass
+
+    pass

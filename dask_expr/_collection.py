@@ -392,7 +392,9 @@ class FrameBase(DaskMethodsMixin):
         )
         return new_collection(new_expr)
 
-    def repartition(self, npartitions=None, divisions=None, force=False):
+    def repartition(
+        self, npartitions=None, divisions=None, force=False, partition_size=None
+    ):
         """Repartition a collection
 
         Exactly one of `divisions` or `npartitions` should be specified.
@@ -421,7 +423,9 @@ class FrameBase(DaskMethodsMixin):
                 "``divisions=`` keyword arguments."
             )
 
-        return new_collection(Repartition(self.expr, npartitions, divisions, force))
+        return new_collection(
+            Repartition(self.expr, npartitions, divisions, force, partition_size)
+        )
 
     def to_dask_dataframe(self, optimize: bool = True, **optimize_kwargs) -> _Frame:
         """Convert to a dask-dataframe collection
