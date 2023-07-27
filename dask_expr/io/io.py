@@ -3,6 +3,7 @@ from __future__ import annotations
 import functools
 import math
 
+from dask.dataframe.core import is_dataframe_like
 from dask.dataframe.io.io import sorted_division_locations
 
 from dask_expr._expr import (
@@ -50,7 +51,11 @@ class BlockwiseIO(Blockwise, IO):
     _absorb_projections = False
 
     def _simplify_up(self, parent):
-        if self._absorb_projections and isinstance(parent, Projection):
+        if (
+            self._absorb_projections
+            and isinstance(parent, Projection)
+            and is_dataframe_like(self._meta)
+        ):
             # Column projection
             parent_columns = parent.operand("columns")
             substitutions = {"columns": _convert_to_list(parent_columns)}

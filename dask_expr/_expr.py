@@ -1629,6 +1629,10 @@ class Projection(Elemwise):
         if (
             str(self.frame.columns) == str(self.columns)
             and self._meta.ndim == self.frame._meta.ndim
+            and (
+                not isinstance(self.frame, BlockwiseIO)
+                or not self.frame._absorb_projections
+            )
         ):
             # TODO: we should get more precise around Expr.columns types
             return self.frame
@@ -1646,35 +1650,6 @@ class Projection(Elemwise):
                 assert b in a
 
             return self.frame.frame[b]
-
-    # def _combine_similar(self, root: Expr):
-
-    #     projections = self._find_similar_operations(root, ignore=["columns"])
-    #     if projections:
-    #         # We have other Projection operations in the expression
-    #         # graph that can be combined with this one.
-
-    #         # Find the column-projection union
-    #         columns = set()
-    #         all_projections = [self] + projections
-    #         for projection in all_projections:
-    #             if projection.operand("columns"):
-    #                 columns |= set(projection.operand("columns"))
-    #         columns = sorted(columns)
-
-    #         # Can bail if we are not changing columns
-    #         columns_operand = self.operand("columns")
-    #         if columns_operand == columns:
-    #             return
-
-    #         # Check if we have the operation we want elsewhere in the graph
-    #         for projection in all_projections:
-    #             if projection.operand("columns") == columns:
-    #                 return projection[columns_operand]
-
-    #         # Create the "combined" Projection operation
-    #         subs = {"columns": columns}
-    #         return self.substitute_parameters(subs)[columns_operand]
 
 
 class Index(Elemwise):
