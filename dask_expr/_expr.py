@@ -1085,8 +1085,10 @@ class Blockwise(Expr):
 
             if push_up_op:
                 # Add operations back in the same order
-                for op in reversed(operations):
+                for i, op in enumerate(reversed(operations)):
                     common = common[op]
+                    if i > 0:
+                        common = common._simplify_down() or common
                 return common
         return None
 
@@ -1191,6 +1193,10 @@ class DropnaFrame(Blockwise):
     _keyword_only = ["how", "subset", "thresh"]
     operation = M.dropna
 
+    @property
+    def _projection_passthrough(self):
+        return self.subset is None
+
     def _simplify_up(self, parent):
         if self.subset is not None:
             columns = set(parent.columns).union(self.subset)
@@ -1200,6 +1206,14 @@ class DropnaFrame(Blockwise):
 
             return type(parent)(
                 type(self)(self.frame[sorted(columns)], *self.operands[1:]),
+                *parent.operands[1:],
+            )
+        elif isinstance(parent, Projection):
+            if set(parent.columns) == set(self.frame.columns):
+                # Don't add unnecessary Projections
+                return
+            return type(parent)(
+                self.substitute_parameters({"frame": self.frame[parent.columns]}),
                 *parent.operands[1:],
             )
 
@@ -1632,6 +1646,35 @@ class Projection(Elemwise):
                 assert b in a
 
             return self.frame.frame[b]
+
+    # def _combine_similar(self, root: Expr):
+
+    #     projections = self._find_similar_operations(root, ignore=["columns"])
+    #     if projections:
+    #         # We have other Projection operations in the expression
+    #         # graph that can be combined with this one.
+
+    #         # Find the column-projection union
+    #         columns = set()
+    #         all_projections = [self] + projections
+    #         for projection in all_projections:
+    #             if projection.operand("columns"):
+    #                 columns |= set(projection.operand("columns"))
+    #         columns = sorted(columns)
+
+    #         # Can bail if we are not changing columns
+    #         columns_operand = self.operand("columns")
+    #         if columns_operand == columns:
+    #             return
+
+    #         # Check if we have the operation we want elsewhere in the graph
+    #         for projection in all_projections:
+    #             if projection.operand("columns") == columns:
+    #                 return projection[columns_operand]
+
+    #         # Create the "combined" Projection operation
+    #         subs = {"columns": columns}
+    #         return self.substitute_parameters(subs)[columns_operand]
 
 
 class Index(Elemwise):

@@ -5,8 +5,16 @@ import math
 
 from dask.dataframe.io.io import sorted_division_locations
 
-from dask_expr._expr import Blockwise, Expr, Lengths, Literal, PartitionsFiltered
+from dask_expr._expr import (
+    Blockwise,
+    Expr,
+    Lengths,
+    Literal,
+    PartitionsFiltered,
+    Projection,
+)
 from dask_expr._reductions import Len
+from dask_expr._util import _convert_to_list
 
 
 class IO(Expr):
@@ -39,19 +47,98 @@ class FromGraph(IO):
 
 
 class BlockwiseIO(Blockwise, IO):
-    pass
+    _absorb_projections = False
+
+    def _simplify_up(self, parent):
+        if self._absorb_projections and isinstance(parent, Projection):
+            # Column projection
+            parent_columns = parent.operand("columns")
+            substitutions = {"columns": _convert_to_list(parent_columns)}
+            if isinstance(parent_columns, (str, int)):
+                substitutions["_series"] = True
+            return self.substitute_parameters(substitutions)
+
+    def _combine_similar(self, root: Expr):
+        if self._absorb_projections:
+            # For ReadParquet, we can avoid redundant file-system
+            # access by aggregating multiple operations with different
+            # column projections into the same operation.
+            alike = self._find_similar_operations(root, ignore=["columns", "_series"])
+            if alike:
+                # We have other ReadParquet operations in the expression
+                # graph that can be combined with this one.
+
+                # Find the column-projection union needed to combine
+                # the qualified ReadParquet operations
+                columns_operand = self.operand("columns")
+                if columns_operand is None:
+                    columns_operand = self.columns
+                columns = set(columns_operand)
+                rps = [self] + alike
+                for rp in alike:
+                    rp_columns = rp.operand("columns")
+                    if rp_columns is None:
+                        rp_columns = rp.columns
+                    columns |= set(rp_columns)
+                columns = sorted(columns)
+
+                # Can bail if we are not changing columns or the "_series" operand
+                if columns_operand == columns and (
+                    len(columns) > 1 or not self._series
+                ):
+                    return
+
+                # Check if we have the operation we want elsewhere in the graph
+                for rp in rps:
+                    # if rp.operand("columns") == columns and not rp.operand("_series"):
+                    if rp.columns == columns and not rp.operand("_series"):
+                        return (
+                            rp[columns_operand[0]]
+                            if self._series
+                            else rp[columns_operand]
+                        )
+
+                # Create the "combined" ReadParquet operation
+                subs = {"columns": columns}
+                if self._series:
+                    subs["_series"] = False
+                new = self.substitute_parameters(subs)
+                return new[columns_operand[0]] if self._series else new[columns_operand]
+
+        return
 
 
 class FromPandas(PartitionsFiltered, BlockwiseIO):
     """The only way today to get a real dataframe"""
 
-    _parameters = ["frame", "npartitions", "sort", "_partitions"]
-    _defaults = {"npartitions": 1, "sort": True, "_partitions": None}
+    _parameters = ["frame", "npartitions", "sort", "columns", "_partitions", "_series"]
+    _defaults = {
+        "npartitions": 1,
+        "sort": True,
+        "columns": None,
+        "_partitions": None,
+        "_series": False,
+    }
     _pd_length_stats = None
+    _absorb_projections = True
 
     @property
     def _meta(self):
-        return self.frame.head(0)
+        meta = self.frame.head(0)
+        if self.columns:
+            return meta[self.columns[0]] if self._series else meta[self.columns]
+        return meta
+
+    @functools.cached_property
+    def columns(self):
+        columns_operand = self.operand("columns")
+        if columns_operand is None:
+            try:
+                return list(self.frame.columns)
+            except AttributeError:
+                return []
+        else:
+            return _convert_to_list(columns_operand)
 
     @functools.cached_property
     def _divisions_and_locations(self):
@@ -93,6 +180,9 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
             if _lengths:
                 return Literal(sum(_lengths))
 
+        if isinstance(parent, Projection):
+            return super()._simplify_up(parent)
+
     def _divisions(self):
         return self._divisions_and_locations[0]
 
@@ -101,7 +191,10 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
 
     def _filtered_task(self, index: int):
         start, stop = self._locations()[index : index + 2]
-        return self.frame.iloc[start:stop]
+        part = self.frame.iloc[start:stop]
+        if self.columns:
+            return part[self.columns[0]] if self._series else part[self.columns]
+        return part
 
     def __str__(self):
         return "df"

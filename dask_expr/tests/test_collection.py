@@ -65,7 +65,7 @@ def test_explode_simplify(pdf):
     df = from_pandas(pdf)
     q = df.explode(column="x")["y"]
     result = optimize(q, fuse=False)
-    expected = df[["x", "y"]].explode(column="x")["y"]
+    expected = optimize(df[["x", "y"]], fuse=False).explode(column="x")["y"]
     assert result._name == expected._name
 
 
@@ -538,7 +538,7 @@ def test_tail_repartition(df):
 def test_projection_stacking(df):
     result = df[["x", "y"]]["x"]
     optimized = result.simplify()
-    expected = df["x"]
+    expected = df["x"].optimize()
 
     assert optimized._name == expected._name
 
