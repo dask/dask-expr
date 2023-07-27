@@ -1052,6 +1052,7 @@ class Blockwise(Expr):
             and isinstance(self.frame, Filter)
         ):
             frame, operations = self.frame, []
+            # We have to go back until we reach an operation that was not pushed down
             while isinstance(frame, (Filter, Projection)):
                 operations.append(frame.operands[1])
                 frame = frame.frame
@@ -1075,6 +1076,7 @@ class Blockwise(Expr):
                     break
 
             if push_up_op:
+                # Add operations back in the same order
                 for op in reversed(operations):
                     common = common[op]
                 return common
