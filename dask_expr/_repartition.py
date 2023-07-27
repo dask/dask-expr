@@ -4,13 +4,20 @@ from pprint import pformat
 
 import numpy as np
 import pandas as pd
+from dask.base import tokenize
 from dask.dataframe import methods
-from dask.dataframe.core import split_evenly
+from dask.dataframe.core import (
+    _repartition_from_boundaries,
+    _split_partitions,
+    split_evenly,
+)
 from dask.dataframe.utils import is_series_like
+from dask.utils import iter_chunks, parse_bytes
 from pandas.api.types import is_datetime64_any_dtype, is_numeric_dtype
 from tlz import unique
 
 from dask_expr._expr import Expr, Projection
+from dask_expr._reductions import TotalMemoryUsageFrame
 
 
 class Repartition(Expr):
@@ -324,7 +331,40 @@ class RepartitionDivisions(Repartition):
 
 
 class RepartitionSize(Repartition):
+    @property
+    def size(self):
+        size = self.operand("size")
+        if isinstance(size, str):
+            size = parse_bytes(size)
+        return int(size)
+
     def _divisions(self):
-        pass
+        from dask_expr._collection import new_collection
+
+        return new_collection(TotalMemoryUsageFrame(self, deep=True)).compute()
 
     pass
+
+
+def repartition_size_divisions(mem_usages, df, size):
+    """
+    Repartition dataframe so that new partitions have approximately `size` memory usage each
+    """
+
+    # 1. split each partition that is larger than partition_size
+    nsplits = 1 + mem_usages // size
+    if np.any(nsplits > 1):
+        split_name = f"repartition-split-{size}-{tokenize(df)}"
+        df = _split_partitions(df, nsplits, split_name)
+        # update mem_usages to account for the split partitions
+        split_mem_usages = []
+        for n, usage in zip(nsplits, mem_usages):
+            split_mem_usages.extend([usage / n] * n)
+        mem_usages = pd.Series(split_mem_usages)
+
+    # 2. now that all partitions are less than size, concat them up to size
+    assert np.all(mem_usages <= size)
+    new_npartitions = list(map(len, iter_chunks(mem_usages, size)))
+    new_partitions_boundaries = np.cumsum(new_npartitions)
+    new_name = f"repartition-{size}-{tokenize(df)}"
+    return _repartition_from_boundaries(df, new_partitions_boundaries, new_name)
