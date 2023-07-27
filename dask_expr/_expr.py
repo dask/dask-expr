@@ -1564,10 +1564,9 @@ class Filter(Blockwise):
 class Projection(Elemwise):
     """Column Selection"""
 
-    _filter_passthrough = False
-
     _parameters = ["frame", "columns"]
     operation = operator.getitem
+    _filter_passthrough = False
 
     @property
     def columns(self):
