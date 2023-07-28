@@ -523,11 +523,15 @@ class GroupBy:
         numeric_kwargs = self._numeric_only_kwargs(numeric_only)
         return self._single_agg(Max, **kwargs, **numeric_kwargs)
 
-    def first(self, numeric_only=False, **kwargs):
+    def first(self, numeric_only=False, sort=None, **kwargs):
+        if sort:
+            raise NotImplementedError()
         numeric_kwargs = self._numeric_only_kwargs(numeric_only)
         return self._single_agg(First, **kwargs, **numeric_kwargs)
 
-    def last(self, numeric_only=False, **kwargs):
+    def last(self, numeric_only=False, sort=None, **kwargs):
+        if sort:
+            raise NotImplementedError()
         numeric_kwargs = self._numeric_only_kwargs(numeric_only)
         return self._single_agg(Last, **kwargs, **numeric_kwargs)
 
