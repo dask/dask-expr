@@ -1,15 +1,18 @@
-import pandas as pd
 import pytest
 from dask.dataframe.utils import assert_eq
 
 from dask_expr import SetIndexBlockwise, from_pandas
 from dask_expr._expr import Blockwise
 from dask_expr.io import FromPandas
+from dask_expr.tests._util import _backend_library
+
+# Set DataFrame backend for this module
+lib = _backend_library()
 
 
 @pytest.fixture
 def pdf():
-    return pd.DataFrame({"x": list(range(20)) * 5, "y": range(100)})
+    return lib.DataFrame({"x": list(range(20)) * 5, "y": range(100)})
 
 
 @pytest.fixture
@@ -132,10 +135,17 @@ def test_shuffle_reductions_after_projection(df):
     assert df.shuffle("x").y.sum().simplify()._name == df.y.sum()._name
 
 
+@pytest.mark.parametrize("partition_size", [128e6, 128e5])
 @pytest.mark.parametrize("upsample", [1.0, 2.0])
-def test_set_index(df, pdf, upsample):
-    assert_eq(df.set_index("x", upsample=upsample), pdf.set_index("x"))
-    assert_eq(df.set_index(df.x, upsample=upsample), pdf.set_index(pdf.x))
+def test_set_index(df, pdf, upsample, partition_size):
+    assert_eq(
+        df.set_index("x", upsample=upsample, partition_size=partition_size),
+        pdf.set_index("x"),
+    )
+    assert_eq(
+        df.set_index(df.x, upsample=upsample, partition_size=partition_size),
+        pdf.set_index(pdf.x),
+    )
 
     with pytest.raises(TypeError, match="can't be of type DataFrame"):
         df.set_index(df)
