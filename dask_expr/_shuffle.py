@@ -620,7 +620,7 @@ class AssignPartitioningIndex(Blockwise):
 
 class BaseSetIndexSortValues(Expr):
     def _divisions(self):
-        if self.user_divisions is not None:
+        if getattr(self, "user_divisions", None) is not None:
             return self.user_divisions
         divisions, mins, maxes, presorted = _calculate_divisions(
             self.frame,

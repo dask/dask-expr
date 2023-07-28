@@ -16,7 +16,15 @@ from dask.dataframe.core import (
 )
 from dask.utils import M, apply, funcname
 
-from dask_expr._expr import Blockwise, Elemwise, Expr, Index, Projection, ResetIndex
+from dask_expr._expr import (
+    Blockwise,
+    Elemwise,
+    Expr,
+    Index,
+    Projection,
+    RenameFrame,
+    ResetIndex,
+)
 from dask_expr._util import is_scalar
 
 
@@ -113,17 +121,20 @@ class ApplyConcatApply(Expr):
                 drop=False,
             )
 
-            # TODO: Handle sort=True
+            # TODO: Why do we need this band-aid?
+            map_columns = {col: str(col) for col in chunked.columns if col != str(col)}
+            unmap_columns = {v: k for k, v in map_columns.items()}
+            if map_columns:
+                chunked = RenameFrame(chunked, map_columns)
 
-            # Shuffle and aggregate
+            # Sort or shuffle
             shuffle_npartitions = max(
                 chunked.npartitions // split_every,
                 self.split_out,
             )
-
-            # sort = getattr(self, "sort", False)
-            sort = True
-            if sort:
+            divisions = (None,) * (shuffle_npartitions + 1)
+            if aggregate_kwargs.get("sort", False):
+                # TODO: Use sorted divisions info
                 shuffled = SortValues(
                     chunked,
                     self.split_by,
@@ -137,7 +148,10 @@ class ApplyConcatApply(Expr):
                     ignore_index=True,
                 )
 
-            divisions = (None,) * (shuffled.npartitions + 1)
+            if unmap_columns:
+                shuffled = RenameFrame(shuffled, unmap_columns)
+
+            # Set sorted/shuffled index and aggregate
             shuffled = SetIndexBlockwise(shuffled, self.split_by, True, divisions)
             result = Aggregate(
                 shuffled,

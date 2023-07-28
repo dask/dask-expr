@@ -70,12 +70,25 @@ def test_groupby_no_numeric_only(pdf, func):
     assert_eq(agg, expect)
 
 
-@pytest.mark.parametrize("split_out", [1, 2])
-def test_groupby_mean_slice(pdf, df, split_out):
+def test_groupby_mean_slice(pdf, df):
     g = df.groupby("x")
-    agg = g.y.mean(split_out=split_out)
+    agg = g.y.mean()
+
     expect = pdf.groupby("x").y.mean()
     assert_eq(agg, expect)
+
+
+@pytest.mark.parametrize(
+    "api", ["sum", "mean", "min", "max", "prod", "first", "last", "var", "std"]
+)
+@pytest.mark.parametrize("sort", [True, False])
+@pytest.mark.parametrize("split_out", [1, 2])
+def test_groupby_single_agg_split_out(pdf, df, api, sort, split_out):
+    g = df.groupby("x", sort=sort)
+    agg = getattr(g, api)(split_out=split_out)
+
+    expect = getattr(pdf.groupby("x", sort=sort), api)()
+    assert_eq(agg, expect, sort_results=not sort)
 
 
 def test_groupby_series(pdf, df):
@@ -108,6 +121,27 @@ def test_groupby_agg(pdf, df, spec):
 
     expect = pdf.groupby("x").agg(spec)
     assert_eq(agg, expect)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"x": "count"},
+        {"x": ["count"]},
+        {"x": ["count"], "y": "mean"},
+        {"x": ["sum", "mean"]},
+        ["min", "mean"],
+        "sum",
+    ],
+)
+@pytest.mark.parametrize("sort", [True, False])
+@pytest.mark.parametrize("split_out", [1, 2])
+def test_groupby_agg_split_out(pdf, df, spec, sort, split_out):
+    g = df.groupby("x", sort=sort)
+    agg = g.agg(spec, split_out=split_out)
+
+    expect = pdf.groupby("x", sort=sort).agg(spec)
+    assert_eq(agg, expect, sort_results=not sort)
 
 
 def test_groupby_getitem_agg(pdf, df):
