@@ -58,33 +58,41 @@ class BlockwiseIO(Blockwise, IO):
         ):
             # Column projection
             parent_columns = parent.operand("columns")
+            proposed_columns = _convert_to_list(parent_columns)
+            make_series = isinstance(parent_columns, (str, int)) and not self._series
+            if set(proposed_columns) == set(self.columns) and not make_series:
+                # Already projected
+                return
             substitutions = {"columns": _convert_to_list(parent_columns)}
-            if isinstance(parent_columns, (str, int)):
+            if make_series:
                 substitutions["_series"] = True
             return self.substitute_parameters(substitutions)
 
     def _combine_similar(self, root: Expr):
         if self._absorb_projections:
-            # For ReadParquet, we can avoid redundant file-system
-            # access by aggregating multiple operations with different
-            # column projections into the same operation.
+            # For BlockwiseIO expressions with "columns"/"_series"
+            # attributes (`_absorb_projections == True`), we can avoid
+            # redundant file-system access by aggregating multiple
+            # operations with different column projections into the
+            # same operation.
             alike = self._find_similar_operations(root, ignore=["columns", "_series"])
             if alike:
-                # We have other ReadParquet operations in the expression
-                # graph that can be combined with this one.
+                # We have other BlockwiseIO operations (of the same
+                # sub-type) in the expression graph that can be combined
+                # with this one.
 
                 # Find the column-projection union needed to combine
-                # the qualified ReadParquet operations
+                # the qualified BlockwiseIO operations
                 columns_operand = self.operand("columns")
                 if columns_operand is None:
                     columns_operand = self.columns
                 columns = set(columns_operand)
-                rps = [self] + alike
-                for rp in alike:
-                    rp_columns = rp.operand("columns")
-                    if rp_columns is None:
-                        rp_columns = rp.columns
-                    columns |= set(rp_columns)
+                ops = [self] + alike
+                for op in alike:
+                    op_columns = op.operand("columns")
+                    if op_columns is None:
+                        op_columns = op.columns
+                    columns |= set(op_columns)
                 columns = sorted(columns)
 
                 # Can bail if we are not changing columns or the "_series" operand
@@ -94,13 +102,12 @@ class BlockwiseIO(Blockwise, IO):
                     return
 
                 # Check if we have the operation we want elsewhere in the graph
-                for rp in rps:
-                    # if rp.operand("columns") == columns and not rp.operand("_series"):
-                    if rp.columns == columns and not rp.operand("_series"):
+                for op in ops:
+                    if op.columns == columns and not op.operand("_series"):
                         return (
-                            rp[columns_operand[0]]
+                            op[columns_operand[0]]
                             if self._series
-                            else rp[columns_operand]
+                            else op[columns_operand]
                         )
 
                 # Create the "combined" ReadParquet operation
@@ -202,6 +209,10 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
         return part
 
     def __str__(self):
+        if self._absorb_projections and self.operand("columns"):
+            if self._series:
+                return f"df[{self.columns[0]}]"
+            return f"df[{self.columns}]"
         return "df"
 
     __repr__ = __str__

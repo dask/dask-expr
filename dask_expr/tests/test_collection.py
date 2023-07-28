@@ -411,7 +411,10 @@ def test_rename_traverse_filter(df):
     assert str(result) == str(expected)
 
 
-def test_columns_traverse_filters(df):
+def test_columns_traverse_filters(pdf):
+    pdf = pdf.copy()
+    pdf["z"] = pdf["x"]
+    df = from_pandas(pdf, npartitions=10)
     result = df[df.x > 5].y.optimize(fuse=False)
     df_opt = df[["x", "y"]].simplify()
     expected = df_opt.y[df_opt.x > 5]
