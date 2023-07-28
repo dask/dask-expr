@@ -1077,6 +1077,7 @@ class Blockwise(Expr):
                 for i, op in enumerate(reversed(operations)):
                     common = common[op]
                     if i > 0:
+                        # Combine stacked projections
                         common = common._simplify_down() or common
                 return common
         return None
