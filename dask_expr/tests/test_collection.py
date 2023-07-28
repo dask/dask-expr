@@ -400,7 +400,7 @@ def test_combine_first_simplify(pdf):
 
     q = df.combine_first(df2)[["z", "y"]]
     result = q.simplify()
-    expected = df[["y"]].simplify().combine_first(df2[["z"]])[["z", "y"]]
+    expected = df[["y"]].simplify().combine_first(df2[["z"]].simplify())[["z", "y"]]
     assert result._name == expected._name
     assert_eq(result, pdf.combine_first(pdf2)[["z", "y"]])
 
@@ -421,7 +421,7 @@ def test_columns_traverse_filters(df):
 
 def test_clip_traverse_filters(df):
     result = df.clip(lower=10).y.simplify()
-    expected = df.y.clip(lower=10)
+    expected = df.y.simplify().clip(lower=10)
 
     assert result._name == expected._name
 
@@ -432,7 +432,7 @@ def test_clip_traverse_filters(df):
 
     arg = df.clip(lower=10)[["x"]]
     result = arg.simplify()
-    expected = df[["x"]].clip(lower=10)
+    expected = df[["x"]].simplify().clip(lower=10)
 
     assert result._name == expected._name
 
@@ -443,7 +443,7 @@ def test_drop_duplicates_subset_simplify(pdf, subset, projection):
     pdf["zz"] = 1
     df = from_pandas(pdf)
     result = df.drop_duplicates(subset=subset)[projection].simplify()
-    expected = df[["x", "zz"]].drop_duplicates(subset=subset)[projection]
+    expected = df[["x", "zz"]].simplify().drop_duplicates(subset=subset)[projection]
 
     assert str(result) == str(expected)
 
