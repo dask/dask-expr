@@ -417,7 +417,16 @@ class FrameBase(DaskMethodsMixin):
             the same as the old divisions'.
         """
 
-        if sum([divisions is not None, npartitions is not None]) != 1:
+        if (
+            sum(
+                [
+                    divisions is not None,
+                    npartitions is not None,
+                    partition_size is not None,
+                ]
+            )
+            != 1
+        ):
             raise ValueError(
                 "Please provide exactly one of the ``npartitions=`` or "
                 "``divisions=`` keyword arguments."
