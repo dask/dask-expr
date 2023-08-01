@@ -376,9 +376,6 @@ def to_parquet(
 class ReadParquet(PartitionsFiltered, BlockwiseIO):
     """Read a parquet dataset"""
 
-    def __str__(self):
-        return super().__str__()
-
     _parameters = [
         "path",
         "columns",
