@@ -18,6 +18,7 @@ class Repartition(Expr):
 
     _parameters = ["frame", "n", "new_divisions", "force"]
     _defaults = {"n": None, "new_divisions": None, "force": False}
+    _is_length_preserving = True
 
     @property
     def _meta(self):
