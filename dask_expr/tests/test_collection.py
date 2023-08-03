@@ -1153,6 +1153,14 @@ def test_len_shuffle_repartition(df, pdf):
     assert result == len(df)
 
 
+def test_columns_setter(df, pdf):
+    df.columns = ["a", "b"]
+    result = df[["a"]]
+    pdf.columns = ["a", "b"]
+    expecetd = pdf[["a"]]
+    assert_eq(result, expecetd)
+
+
 def test_filter_pushdown(df, pdf):
     indexer = df.x > 5
     result = df.replace(1, 5)[indexer].optimize(fuse=False)
