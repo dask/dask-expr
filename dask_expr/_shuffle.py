@@ -1,3 +1,4 @@
+import functools
 import math
 import operator
 import uuid
@@ -850,8 +851,7 @@ class SetPartition(SetIndex):
     def _divisions(self):
         return self.new_divisions
 
-    # @functools.cached_property
-    @property
+    @functools.cached_property
     def new_divisions(self):
         # TODO: Adjust for categoricals and NA values
         return self.other._meta._constructor(self.operand("new_divisions"))
