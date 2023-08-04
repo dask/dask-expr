@@ -13,10 +13,11 @@ from dask.dataframe.core import (
     is_series_like,
     make_meta,
     meta_nonempty,
+    total_mem_usage,
 )
 from dask.utils import M, apply, funcname
 
-from dask_expr._expr import Blockwise, Elemwise, Expr, Index, Projection
+from dask_expr._expr import Blockwise, Expr, Index, Projection
 from dask_expr._util import is_scalar
 
 
@@ -558,11 +559,11 @@ class Len(Reduction):
         from dask_expr.io.io import IO
 
         # We introduce Index nodes sometimes.  We special case around them.
-        if isinstance(self.frame, Index) and isinstance(self.frame.frame, Elemwise):
+        if isinstance(self.frame, Index) and self.frame.frame._is_length_preserving:
             return Len(self.frame.frame)
 
         # Pass through Elemwises, unless we just introduced an Index
-        if isinstance(self.frame, Elemwise) and not isinstance(self.frame, Index):
+        if self.frame._is_length_preserving and not isinstance(self.frame, Index):
             child = max(self.frame.dependencies(), key=lambda expr: expr.npartitions)
             return Len(child)
 
@@ -868,3 +869,11 @@ class MemoryUsageFrame(MemoryUsage):
         if is_dataframe:
             return x.groupby(x.index).sum()
         return x.sum()
+
+
+class TotalMemoryUsageFrame(MemoryUsageFrame):
+    reduction_chunk = total_mem_usage
+
+    @staticmethod
+    def reduction_combine(x, is_dataframe):
+        return x

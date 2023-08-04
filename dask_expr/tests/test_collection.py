@@ -830,6 +830,18 @@ def test_repartition_no_op(df):
     assert result._name == df._name
 
 
+def test_repartition_partition_size(df):
+    df2 = df.repartition(partition_size="0.25kb")
+    assert df2.npartitions == 20
+    assert_eq(df, df2, check_divisions=False)
+    assert all(div is None for div in df2.divisions)
+
+    df2 = df.repartition(partition_size="1kb")
+    assert df2.npartitions == 4
+    assert_eq(df, df2)
+    assert all(div is not None for div in df2.divisions)
+
+
 def test_len(df, pdf):
     df2 = df[["x"]] + 1
     assert len(df2) == len(pdf)
@@ -1137,6 +1149,31 @@ def test_avoid_alignment():
 
     assert not any(isinstance(ex, AlignPartitions) for ex in (db.y + db.z).walk())
     assert not any(isinstance(ex, AlignPartitions) for ex in (da.x + db.y.sum()).walk())
+
+
+def test_len_shuffle_repartition(df, pdf):
+    df2 = df.set_index("x")
+    assert isinstance(Len(df2.expr).optimize(), expr.Literal)
+    result = len(df2)
+    assert result == len(pdf.set_index("x"))
+
+    df2 = df.repartition(npartitions=3)
+    assert isinstance(Len(df2.expr).optimize(), expr.Literal)
+    result = len(df2)
+    assert result == len(df)
+
+    df2 = df.shuffle("x")
+    assert isinstance(Len(df2.expr).optimize(), expr.Literal)
+    result = len(df2)
+    assert result == len(df)
+
+
+def test_columns_setter(df, pdf):
+    df.columns = ["a", "b"]
+    result = df[["a"]]
+    pdf.columns = ["a", "b"]
+    expecetd = pdf[["a"]]
+    assert_eq(result, expecetd)
 
 
 def test_filter_pushdown(df, pdf):

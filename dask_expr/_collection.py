@@ -114,6 +114,10 @@ class FrameBase(DaskMethodsMixin):
     def _meta(self):
         return self.expr._meta
 
+    @functools.cached_property
+    def _meta_nonempty(self):
+        return meta_nonempty(self._meta)
+
     @property
     def size(self):
         return new_collection(self.expr.size)
@@ -121,6 +125,10 @@ class FrameBase(DaskMethodsMixin):
     @property
     def columns(self):
         return self._meta.columns
+
+    @columns.setter
+    def columns(self, columns):
+        self._expr = self.rename(dict(zip(self.columns, columns)))._expr
 
     def __len__(self):
         return new_collection(Len(self.expr)).compute()
@@ -392,7 +400,9 @@ class FrameBase(DaskMethodsMixin):
         )
         return new_collection(new_expr)
 
-    def repartition(self, npartitions=None, divisions=None, force=False):
+    def repartition(
+        self, npartitions=None, divisions=None, force=False, partition_size=None
+    ):
         """Repartition a collection
 
         Exactly one of `divisions` or `npartitions` should be specified.
@@ -415,13 +425,24 @@ class FrameBase(DaskMethodsMixin):
             the same as the old divisions'.
         """
 
-        if sum([divisions is not None, npartitions is not None]) != 1:
+        if (
+            sum(
+                [
+                    divisions is not None,
+                    npartitions is not None,
+                    partition_size is not None,
+                ]
+            )
+            != 1
+        ):
             raise ValueError(
                 "Please provide exactly one of the ``npartitions=`` or "
                 "``divisions=`` keyword arguments."
             )
 
-        return new_collection(Repartition(self.expr, npartitions, divisions, force))
+        return new_collection(
+            Repartition(self.expr, npartitions, divisions, force, partition_size)
+        )
 
     def to_dask_dataframe(self, optimize: bool = True, **optimize_kwargs) -> _Frame:
         """Convert to a dask-dataframe collection
@@ -833,6 +854,7 @@ class DataFrame(FrameBase):
         divisions=None,
         sort: bool = True,
         upsample: float = 1.0,
+        partition_size: float = 128e6,
     ):
         if isinstance(other, DataFrame):
             raise TypeError("other can't be of type DataFrame")
@@ -867,6 +889,7 @@ class DataFrame(FrameBase):
                 user_divisions=divisions,
                 npartitions=npartitions,
                 upsample=upsample,
+                partition_size=partition_size,
             )
         )
 
