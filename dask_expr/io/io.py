@@ -94,7 +94,8 @@ class BlockwiseIO(Blockwise, IO):
                         op_columns = op.columns
                     columns |= set(op_columns)
                 columns = sorted(columns)
-
+                if columns_operand is None:
+                    columns_operand = self.columns
                 # Can bail if we are not changing columns or the "_series" operand
                 if columns_operand == columns and (
                     len(columns) > 1 or not self._series
