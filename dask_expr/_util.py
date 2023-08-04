@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections import OrderedDict, UserDict
+from collections.abc import Hashable, Sequence
 from types import LambdaType
+from typing import TypeVar, cast
 
 from dask import config
 from dask.base import normalize_token, tokenize
+
+K = TypeVar("K", bound=Hashable)
+V = TypeVar("V")
 
 
 def _convert_to_list(column) -> list | None:
@@ -33,3 +38,22 @@ def _tokenize_deterministic(*args, **kwargs):
     # Utility to be strict about deterministic tokens
     with config.set({"tokenize.ensure-deterministic": True}):
         return tokenize(*args, **kwargs)
+
+
+class LRU(UserDict[K, V]):
+    """Limited size mapping, evicting the least recently looked-up key when full"""
+
+    def __init__(self, maxsize: float) -> None:
+        super().__init__()
+        self.data = OrderedDict()
+        self.maxsize = maxsize
+
+    def __getitem__(self, key: K) -> V:
+        value = super().__getitem__(key)
+        cast(OrderedDict, self.data).move_to_end(key)
+        return value
+
+    def __setitem__(self, key: K, value: V) -> None:
+        if len(self) >= self.maxsize:
+            cast(OrderedDict, self.data).popitem(last=False)
+        super().__setitem__(key, value)
