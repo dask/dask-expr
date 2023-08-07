@@ -2,7 +2,7 @@ from dask.dataframe.utils import assert_eq
 
 from dask_expr import new_collection
 from dask_expr._expr import Lengths
-from dask_expr.datasets import timeseries
+from dask_expr.datasets import Timeseries, timeseries
 
 
 def test_timeseries():
@@ -16,7 +16,7 @@ def test_optimization():
     result = df[["x"]].optimize()
     assert expected._name == result._name
 
-    expected = timeseries(dtypes={"x": int}, seed=123)["x"]
+    expected = timeseries(dtypes={"x": int}, seed=123)["x"].simplify()
     result = df["x"].optimize(fuse=False)
     assert expected._name == result._name
 
@@ -48,7 +48,7 @@ def test_persist():
     b = a.persist()
 
     assert_eq(a, b)
-    assert len(a.dask) > len(b.dask)
+    assert len(a.dask) == len(b.dask)
     assert len(b.dask) == b.npartitions
 
 
@@ -61,3 +61,20 @@ def test_timeseries_empty_projection():
     ts = timeseries(end="2000-01-02", dtypes={})
     expected = timeseries(end="2000-01-02")
     assert len(ts) == len(expected)
+
+
+def test_combine_similar(tmpdir):
+    df = timeseries(end="2000-01-02")
+    pdf = df.compute()
+    got = df[df["name"] == "a"][["id"]]
+
+    expected = pdf[pdf["name"] == "a"][["id"]]
+    assert_eq(got, expected)
+    assert_eq(got.optimize(fuse=False), expected)
+    assert_eq(got.optimize(fuse=True), expected)
+
+    # We should only have one Timeseries node, and
+    # it should not include "z" in the dtypes
+    timeseries_nodes = list(got.optimize(fuse=False).find_operations(Timeseries))
+    assert len(timeseries_nodes) == 1
+    assert set(timeseries_nodes[0].dtypes.keys()) == {"id", "name"}

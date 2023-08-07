@@ -1,11 +1,13 @@
 import functools
+import operator
 
 import numpy as np
 import pandas as pd
-from dask.utils import random_state_data
+from dask.utils import funcname, is_dataframe_like, random_state_data
 
 from dask_expr._collection import new_collection
-from dask_expr._expr import Projection
+from dask_expr._expr import Expr, Projection
+from dask_expr._util import _tokenize_deterministic, is_scalar
 from dask_expr.io import BlockwiseIO, PartitionsFiltered
 
 __all__ = ["timeseries"]
@@ -21,6 +23,8 @@ class Timeseries(PartitionsFiltered, BlockwiseIO):
         "seed",
         "kwargs",
         "_partitions",
+        "_token_dtypes",
+        "_series",
     ]
     _defaults = {
         "start": "2000-01-01",
@@ -31,15 +35,34 @@ class Timeseries(PartitionsFiltered, BlockwiseIO):
         "seed": None,
         "kwargs": {},
         "_partitions": None,
+        "_series": False,
     }
 
     @functools.cached_property
     def _meta(self):
         dtypes = self.operand("dtypes")
         states = [0] * len(dtypes)
-        return make_timeseries_part(
+        result = make_timeseries_part(
             "2000", "2000", dtypes, list(dtypes.keys()), "1H", states, self.kwargs
         ).iloc[:0]
+        if self._series:
+            return result[result.columns[0]]
+        return result
+
+    @functools.cached_property
+    def _name(self):
+        head = funcname(type(self)).lower()
+        return (
+            head
+            + "-"
+            + _tokenize_deterministic(
+                *[
+                    op
+                    for i, op in enumerate(self.operands)
+                    if self._parameters[i] != "_token_dtypes"
+                ]
+            )
+        )
 
     def _divisions(self):
         return pd.date_range(start=self.start, end=self.end, freq=self.partition_freq)
@@ -62,21 +85,25 @@ class Timeseries(PartitionsFiltered, BlockwiseIO):
         if self.seed is not None and len(column_states) > 0:
             # These will be the same anyway, so avoid serializing all of them
             column_states = [column_states[0]]
-        return (
+        task = (
             make_timeseries_part,
             full_divisions[index],
             full_divisions[index + 1],
             self.operand("dtypes"),
-            self.columns,
+            list(self.operand("dtypes").keys()),
             self.freq,
             column_states,
             self.kwargs,
         )
+        if self._series:
+            return (operator.getitem, task, list(self.operand("dtypes").keys())[0])
+        return task
 
     def _simplify_up(self, parent):
-        if isinstance(parent, Projection) and len(self.dtypes) > 1:
+        if isinstance(parent, Projection) and is_dataframe_like(self._meta):
             dtypes = {col: self.operand("dtypes")[col] for col in parent.columns}
-            out = Timeseries(
+            make_series = is_scalar(parent.operand("columns")) and not self._series
+            return Timeseries(
                 self.start,
                 self.end,
                 dtypes=dtypes,
@@ -85,10 +112,42 @@ class Timeseries(PartitionsFiltered, BlockwiseIO):
                 seed=self.seed,
                 kwargs=self.kwargs,
                 _partitions=self.operand("_partitions"),
+                _token_dtypes=self._token_dtypes,
+                _series=make_series,
             )
-            if not isinstance(parent.operand("columns"), (list, pd.Index)):  # series
-                out = out[parent.operand("columns")]
-            return out
+
+    def _combine_similar(self, root: Expr):
+        alike = self._find_similar_operations(root, ignore=["dtypes", "_series"])
+        if alike:
+            # We have other Timeseries calls with the same root
+
+            dtypes_operand = self.operand("dtypes")
+            dtypes = dtypes_operand.copy()
+            ops = [self] + alike
+
+            for op in alike:
+                dtypes.update(op.operand("dtypes"))
+            # Can bail if we are not changing anything
+            if sorted(dtypes_operand.keys()) == sorted(dtypes.keys()) and (
+                len(dtypes) > 1 or not self._series
+            ):
+                return
+
+            # Check if we have the operation we want elsewhere in the graph
+            for op in ops:
+                if sorted(op.operand("dtypes").keys()) == sorted(
+                    dtypes.keys()
+                ) and not op.operand("_series"):
+                    return op[self._meta.name] if self._series else op[self.columns]
+
+            # Create the "combined" Timeseries op
+            subs = {"dtypes": dtypes}
+            if self._series:
+                subs["_series"] = False
+            new = self.substitute_parameters(subs)
+            return new[self._meta.name] if self._series else new[self.columns]
+
+        return
 
 
 names = [
@@ -224,5 +283,16 @@ def timeseries(
     if seed is None:
         seed = np.random.randint(2e9)
 
-    expr = Timeseries(start, end, dtypes, freq, partition_freq, seed, kwargs)
+    token_dtypes = _tokenize_deterministic(dtypes)
+
+    expr = Timeseries(
+        start,
+        end,
+        dtypes,
+        freq,
+        partition_freq,
+        seed,
+        kwargs,
+        _token_dtypes=token_dtypes,
+    )
     return new_collection(expr)
