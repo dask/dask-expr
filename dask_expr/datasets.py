@@ -283,6 +283,8 @@ def timeseries(
     if seed is None:
         seed = np.random.randint(2e9)
 
+    # Add a token for dtypes to be able to identify operations that where the
+    # same before going through optimizations (needed in combine_similar)
     token_dtypes = _tokenize_deterministic(dtypes)
 
     expr = Timeseries(
