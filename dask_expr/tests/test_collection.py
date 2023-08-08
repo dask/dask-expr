@@ -709,7 +709,7 @@ def test_tree_repr(fuse):
     s = from_pandas(lib.Series(range(10))).expr.tree_repr()
     assert ("<pandas>" in s) or ("<series>" in s)
 
-    df = timeseries()
+    df = timeseries(seed=1)
     expr = ((df.x + 1).sum(skipna=False) + df.y.mean()).expr
 
     # Check result before optimization

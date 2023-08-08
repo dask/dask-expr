@@ -221,8 +221,5 @@ def timeseries(
     if dtypes is None:
         dtypes = {"name": "string", "id": int, "x": float, "y": float}
 
-    if seed is None:
-        seed = np.random.randint(2e9)
-
     expr = Timeseries(start, end, dtypes, freq, partition_freq, seed, kwargs)
     return new_collection(expr)
