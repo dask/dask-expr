@@ -14,11 +14,11 @@ def test_optimization():
     df = timeseries(dtypes={"x": int, "y": float}, seed=123)
     expected = timeseries(dtypes={"x": int}, seed=123)
     result = df[["x"]].optimize()
-    assert expected._name == result._name
+    assert result.expr.operand("dtypes") == expected.expr.operand("dtypes")
 
     expected = timeseries(dtypes={"x": int}, seed=123)["x"].simplify()
     result = df["x"].optimize(fuse=False)
-    assert expected._name == result._name
+    assert expected.expr.operand("dtypes") == result.expr.operand("dtypes")
 
 
 def test_column_projection_deterministic():

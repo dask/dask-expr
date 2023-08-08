@@ -3,7 +3,7 @@ import operator
 
 import numpy as np
 import pandas as pd
-from dask.utils import funcname, is_dataframe_like, random_state_data
+from dask.utils import is_dataframe_like, random_state_data
 
 from dask_expr._collection import new_collection
 from dask_expr._expr import Expr, Projection
@@ -48,21 +48,6 @@ class Timeseries(PartitionsFiltered, BlockwiseIO):
         if self._series:
             return result[result.columns[0]]
         return result
-
-    @functools.cached_property
-    def _name(self):
-        head = funcname(type(self)).lower()
-        return (
-            head
-            + "-"
-            + _tokenize_deterministic(
-                *[
-                    op
-                    for i, op in enumerate(self.operands)
-                    if self._parameters[i] != "_token_dtypes"
-                ]
-            )
-        )
 
     def _divisions(self):
         return pd.date_range(start=self.start, end=self.end, freq=self.partition_freq)
@@ -284,8 +269,9 @@ def timeseries(
         seed = np.random.randint(2e9)
 
     # Add a token for dtypes to be able to identify operations that where the
-    # same before going through optimizations (needed in combine_similar)
-    token_dtypes = _tokenize_deterministic(dtypes)
+    # same before going through optimizations (needed in combine_similar), but
+    # distinguish for different calls with the same dtypes
+    token_dtypes = _tokenize_deterministic(dtypes, np.random.randint(2e9))
 
     expr = Timeseries(
         start,
