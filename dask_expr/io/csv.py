@@ -37,7 +37,10 @@ class ReadCSV(PartitionsFiltered, BlockwiseIO):
 
     @property
     def _meta(self):
-        return self._ddf._meta
+        meta = self._ddf._meta
+        if self.operand("columns") is not None:
+            return meta[self.columns[0]] if self._series else meta[self.columns]
+        return meta
 
     @functools.cached_property
     def columns(self):
