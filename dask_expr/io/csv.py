@@ -21,7 +21,7 @@ class ReadCSV(PartitionsFiltered, BlockwiseIO):
         "storage_options": None,
         "_series": False,
     }
-    _absorb_projections = False
+    _absorb_projections = True
 
     @functools.cached_property
     def _ddf(self):
