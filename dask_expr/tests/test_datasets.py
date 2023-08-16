@@ -88,3 +88,9 @@ def test_combine_similar(tmpdir):
     assert len(timeseries_nodes) == 2
     with pytest.raises(AssertionError):
         assert_eq(df + df2, 2 * df)
+
+
+@pytest.mark.parametrize("seed", [42, None])
+def test_timeseries_deterministic_head(seed):
+    df = timeseries(end="2000-01-02", seed=seed)
+    assert_eq(df.head(), df.head())
