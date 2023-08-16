@@ -1,3 +1,4 @@
+import pytest
 from dask.dataframe.utils import assert_eq
 
 from dask_expr import new_collection
@@ -78,3 +79,12 @@ def test_combine_similar(tmpdir):
     timeseries_nodes = list(got.optimize(fuse=False).find_operations(Timeseries))
     assert len(timeseries_nodes) == 1
     assert set(timeseries_nodes[0].dtypes.keys()) == {"id", "name"}
+
+    df = timeseries(end="2000-01-02")
+    df2 = timeseries(end="2000-01-02")
+
+    got = df + df2
+    timeseries_nodes = list(got.optimize(fuse=False).find_operations(Timeseries))
+    assert len(timeseries_nodes) == 2
+    with pytest.raises(AssertionError):
+        assert_eq(df + df2, 2 * df)
