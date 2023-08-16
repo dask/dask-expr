@@ -3,11 +3,10 @@ import operator
 
 import numpy as np
 import pandas as pd
-from dask.utils import is_dataframe_like, random_state_data
+from dask.utils import random_state_data
 
 from dask_expr._collection import new_collection
-from dask_expr._expr import Projection
-from dask_expr._util import _tokenize_deterministic, is_scalar
+from dask_expr._util import _tokenize_deterministic
 from dask_expr.io import BlockwiseIO, PartitionsFiltered
 
 __all__ = ["timeseries"]
@@ -24,10 +23,10 @@ class Timeseries(PartitionsFiltered, BlockwiseIO):
         "partition_freq",
         "seed",
         "kwargs",
+        "columns",
         "_partitions",
         "_token_dtypes",
         "_series",
-        "columns",
     ]
     _defaults = {
         "start": "2000-01-01",
@@ -39,7 +38,6 @@ class Timeseries(PartitionsFiltered, BlockwiseIO):
         "kwargs": {},
         "_partitions": None,
         "_series": False,
-        "columns": None,
     }
 
     @functools.cached_property
@@ -92,23 +90,6 @@ class Timeseries(PartitionsFiltered, BlockwiseIO):
         if self._series:
             return (operator.getitem, task, self.operand("columns")[0])
         return task
-
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection) and is_dataframe_like(self._meta):
-            make_series = is_scalar(parent.operand("columns")) and not self._series
-            return Timeseries(
-                self.start,
-                self.end,
-                dtypes=self.operand("dtypes"),
-                freq=self.freq,
-                partition_freq=self.partition_freq,
-                seed=self.seed,
-                kwargs=self.kwargs,
-                _partitions=self.operand("_partitions"),
-                _token_dtypes=self._token_dtypes,
-                _series=make_series,
-                columns=parent.columns,
-            )
 
 
 names = [
