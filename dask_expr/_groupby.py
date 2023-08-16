@@ -20,7 +20,7 @@ from dask.dataframe.groupby import (
 from dask.utils import M, is_index_like
 
 from dask_expr._collection import DataFrame, Index, Series, new_collection
-from dask_expr._expr import MapPartitions, Projection
+from dask_expr._expr import Expr, MapPartitions, Projection
 from dask_expr._reductions import ApplyConcatApply, Reduction
 
 
@@ -120,7 +120,8 @@ class SingleAggregation(ApplyConcatApply):
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
-            columns = sorted(set(parent.columns + self.by))
+            by_columns = self.by if not isinstance(self.by, Expr) else []
+            columns = sorted(set(parent.columns + by_columns))
             if columns == self.frame.columns:
                 return
             return type(parent)(
@@ -173,7 +174,10 @@ class GroupbyAggregation(ApplyConcatApply):
     def spec(self):
         # Converts the `arg` operand into specific
         # chunk, aggregate, and finalizer functions
-        group_columns = set(self.by)
+        if isinstance(self.by, Expr):
+            group_columns = []
+        else:
+            group_columns = set(self.by)
         non_group_columns = [
             col for col in self.frame.columns if col not in group_columns
         ]
@@ -233,9 +237,10 @@ class GroupbyAggregation(ApplyConcatApply):
     def _simplify_down(self):
         # Use agg-spec information to add column projection
         column_projection = None
+        by_columns = self.by if not isinstance(self.by, Expr) else []
         if isinstance(self.arg, dict):
             column_projection = (
-                set(self.by).union(self.arg.keys()).intersection(self.frame.columns)
+                set(by_columns).union(self.arg.keys()).intersection(self.frame.columns)
             )
         if column_projection and column_projection < set(self.frame.columns):
             return type(self)(self.frame[list(column_projection)], *self.operands[1:])
@@ -315,7 +320,8 @@ class Var(Reduction):
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
-            columns = sorted(set(parent.columns + self.by))
+            by_columns = self.by if not isinstance(self.by, Expr) else []
+            columns = sorted(set(parent.columns + by_columns))
             if columns == self.frame.columns:
                 return
             return type(parent)(
