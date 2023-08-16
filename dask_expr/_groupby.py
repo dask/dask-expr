@@ -206,7 +206,6 @@ class GroupbyAggregation(ApplyConcatApply):
         return {
             "funcs": self.spec["chunk_funcs"],
             "sort": False,
-            "by": self.by,
             **_as_dict("observed", self.observed),
             **_as_dict("dropna", self.dropna),
         }
@@ -286,8 +285,10 @@ class Var(Reduction):
     reduction_aggregate = _var_agg
     reduction_combine = _var_combine
 
-    def chunk(self, frame, **kwargs):
-        return _var_chunk(frame, *self.by, **kwargs)
+    def chunk(self, frame, by, **kwargs):
+        if hasattr(by, "dtype"):
+            by = [by]
+        return _var_chunk(frame, *by, **kwargs)
 
     @functools.cached_property
     def levels(self):

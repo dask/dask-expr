@@ -128,7 +128,7 @@ class Chunk(Blockwise):
 
     def operation(self, df, by, *args, **kwargs):
         if by is None:
-            self.chunk(df, *args, **kwargs)
+            return self.chunk(df, *args, **kwargs)
         else:
             return self.chunk(df, by, *args, **kwargs)
 
