@@ -437,9 +437,7 @@ class GroupBy:
         if isinstance(by, Index):
             self.by = by
         else:
-            self.by = (
-                [by] if np.isscalar(by) else by if isinstance(by, Index) else list(by)
-            )
+            self.by = [by] if np.isscalar(by) else list(by)
             for key in self.by:
                 if not (np.isscalar(key) and key in self.obj.columns):
                     raise NotImplementedError(
