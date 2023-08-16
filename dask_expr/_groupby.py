@@ -19,7 +19,7 @@ from dask.dataframe.groupby import (
 )
 from dask.utils import M, is_index_like
 
-from dask_expr._collection import DataFrame, Series, new_collection
+from dask_expr._collection import DataFrame, Index, Series, new_collection
 from dask_expr._expr import MapPartitions, Projection
 from dask_expr._reductions import ApplyConcatApply, Reduction
 
@@ -86,6 +86,8 @@ class SingleAggregation(ApplyConcatApply):
 
     @classmethod
     def chunk(cls, df, by=None, **kwargs):
+        if hasattr(by, "dtype"):
+            by = [by]
         return _apply_chunk(df, *by, **kwargs)
 
     @classmethod
@@ -99,7 +101,6 @@ class SingleAggregation(ApplyConcatApply):
         return {
             "chunk": self.groupby_chunk,
             "columns": columns,
-            "by": self.by,
             **_as_dict("observed", self.observed),
             **_as_dict("dropna", self.dropna),
             **chunk_kwargs,
@@ -188,6 +189,8 @@ class GroupbyAggregation(ApplyConcatApply):
 
     @classmethod
     def chunk(cls, df, by=None, **kwargs):
+        if hasattr(by, "dtype"):
+            by = [by]
         return _groupby_apply_funcs(df, *by, **kwargs)
 
     @classmethod
@@ -391,6 +394,8 @@ class GroupBy:
             and by._name == obj[by.name]._name
         ):
             by = by.name
+        elif isinstance(by, Index) and by._name == obj.index._name:
+            pass
         elif isinstance(by, Series):
             # TODO: Implement this
             raise ValueError("by must be in the DataFrames columns.")
@@ -412,7 +417,6 @@ class GroupBy:
             )
             projection = [c for c in obj.columns if c in projection]
 
-        self.by = [by] if np.isscalar(by) else list(by)
         self.obj = obj[projection] if projection is not None else obj
         self.sort = sort
         self.observed = observed
@@ -423,9 +427,17 @@ class GroupBy:
                 "groupby only supports DataFrame collections for now."
             )
 
-        for key in self.by:
-            if not (np.isscalar(key) and key in self.obj.columns):
-                raise NotImplementedError("Can only group on column names (for now).")
+        if isinstance(by, Index):
+            self.by = by
+        else:
+            self.by = (
+                [by] if np.isscalar(by) else by if isinstance(by, Index) else list(by)
+            )
+            for key in self.by:
+                if not (np.isscalar(key) and key in self.obj.columns):
+                    raise NotImplementedError(
+                        "Can only group on column names (for now)."
+                    )
 
         if self.sort:
             raise NotImplementedError("sort=True not yet supported.")
@@ -447,7 +459,7 @@ class GroupBy:
         return new_collection(
             expr_cls(
                 self.obj.expr,
-                self.by,
+                self.by if not isinstance(self.by, Series) else self.by.expr,
                 self.observed,
                 self.dropna,
                 chunk_kwargs=chunk_kwargs,
@@ -463,7 +475,7 @@ class GroupBy:
         x = new_collection(
             expr_cls(
                 self.obj.expr,
-                by=self.by,
+                by=self.by if not isinstance(self.by, Series) else self.by.expr,
                 **kwargs,
                 # TODO: Add observed and dropna when supported in dask/dask
             )
@@ -544,7 +556,7 @@ class GroupBy:
         return new_collection(
             GroupbyAggregation(
                 self.obj.expr,
-                self.by,
+                self.by if not isinstance(self.by, Series) else self.by.expr,
                 arg,
                 self.observed,
                 self.dropna,

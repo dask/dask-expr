@@ -51,10 +51,21 @@ class ApplyConcatApply(Expr):
         # This is an abstract expression
         raise NotImplementedError()
 
+    @property
+    def _by(self):
+        return None if "by" not in self._parameters else self.operand("by")
+
     @functools.cached_property
     def _meta(self):
         meta = meta_nonempty(self.frame._meta)
-        meta = self.chunk(meta, **self.chunk_kwargs)
+        by = self._by
+        if by is None:
+            args = [meta]
+        else:
+            by = by if not isinstance(by, Expr) else meta_nonempty(by._meta)
+            args = [meta, by]
+
+        meta = self.chunk(*args, **self.chunk_kwargs)
         aggregate = self.aggregate or (lambda x: x)
         if self.combine:
             combine = self.combine
@@ -91,7 +102,7 @@ class ApplyConcatApply(Expr):
         # Decompose ApplyConcatApply into Chunk and TreeReduce
         aca_type = type(self)
         return TreeReduce(
-            Chunk(self.frame, aca_type, chunk, chunk_kwargs),
+            Chunk(self.frame, aca_type, chunk, chunk_kwargs, self._by),
             aca_type,
             self._meta,
             combine,
@@ -112,14 +123,18 @@ class Chunk(Blockwise):
     ApplyConcatApply
     """
 
-    _parameters = ["frame", "kind", "chunk", "chunk_kwargs"]
+    _parameters = ["frame", "kind", "chunk", "chunk_kwargs", "by"]
+    _defaults = {"by": None}
 
-    def operation(self, *args, **kwargs):
-        return self.chunk(*args, **kwargs)
+    def operation(self, df, by, *args, **kwargs):
+        if by is None:
+            self.chunk(df, *args, **kwargs)
+        else:
+            return self.chunk(df, by, *args, **kwargs)
 
     @functools.cached_property
     def _args(self) -> list:
-        return [self.frame]
+        return [self.frame, self.by]
 
     @functools.cached_property
     def _kwargs(self) -> dict:
