@@ -435,7 +435,7 @@ class GroupBy:
             )
 
         if isinstance(by, Index):
-            self.by = by
+            self.by = by.expr
         else:
             self.by = [by] if np.isscalar(by) else list(by)
             for key in self.by:
@@ -464,7 +464,7 @@ class GroupBy:
         return new_collection(
             expr_cls(
                 self.obj.expr,
-                self.by if not isinstance(self.by, Series) else self.by.expr,
+                self.by,
                 self.observed,
                 self.dropna,
                 chunk_kwargs=chunk_kwargs,
@@ -480,7 +480,7 @@ class GroupBy:
         x = new_collection(
             expr_cls(
                 self.obj.expr,
-                by=self.by if not isinstance(self.by, Series) else self.by.expr,
+                by=self.by,
                 **kwargs,
                 # TODO: Add observed and dropna when supported in dask/dask
             )
@@ -561,7 +561,7 @@ class GroupBy:
         return new_collection(
             GroupbyAggregation(
                 self.obj.expr,
-                self.by if not isinstance(self.by, Series) else self.by.expr,
+                self.by,
                 arg,
                 self.observed,
                 self.dropna,
