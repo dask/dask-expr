@@ -166,6 +166,7 @@ class Merge(Expr):
             # Reorder the column projection to
             # occur before the Merge
             if isinstance(parent, Index):
+                # Index creates an empty column projection
                 projection, parent_columns = [], None
             else:
                 projection, parent_columns = parent.operand("columns"), parent.operand(
