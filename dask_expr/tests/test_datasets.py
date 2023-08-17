@@ -1,3 +1,6 @@
+import pickle
+import sys
+
 import pytest
 from dask.dataframe.utils import assert_eq
 
@@ -94,3 +97,9 @@ def test_combine_similar(tmpdir):
 def test_timeseries_deterministic_head(seed):
     df = timeseries(end="2000-01-02", seed=seed)
     assert_eq(df.head(), df.head())
+
+
+def test_timeseries_gaph_size():
+    df = timeseries(end="2000-01-03", seed=42)
+    graph_size = sys.getsizeof(pickle.dumps(df.dask))
+    assert graph_size < 1024
