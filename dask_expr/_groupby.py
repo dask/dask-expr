@@ -19,8 +19,8 @@ from dask.dataframe.groupby import (
 )
 from dask.utils import M, is_index_like
 
-from dask_expr._collection import DataFrame, Series, new_collection
-from dask_expr._expr import MapPartitions, Projection
+from dask_expr._collection import DataFrame, Index, Series, new_collection
+from dask_expr._expr import Expr, MapPartitions, Projection
 from dask_expr._reductions import ApplyConcatApply, Reduction
 
 
@@ -86,6 +86,8 @@ class SingleAggregation(ApplyConcatApply):
 
     @classmethod
     def chunk(cls, df, by=None, **kwargs):
+        if hasattr(by, "dtype"):
+            by = [by]
         return _apply_chunk(df, *by, **kwargs)
 
     @classmethod
@@ -99,7 +101,6 @@ class SingleAggregation(ApplyConcatApply):
         return {
             "chunk": self.groupby_chunk,
             "columns": columns,
-            "by": self.by,
             **_as_dict("observed", self.observed),
             **_as_dict("dropna", self.dropna),
             **chunk_kwargs,
@@ -119,7 +120,8 @@ class SingleAggregation(ApplyConcatApply):
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
-            columns = sorted(set(parent.columns + self.by))
+            by_columns = self.by if not isinstance(self.by, Expr) else []
+            columns = sorted(set(parent.columns + by_columns))
             if columns == self.frame.columns:
                 return
             return type(parent)(
@@ -172,7 +174,10 @@ class GroupbyAggregation(ApplyConcatApply):
     def spec(self):
         # Converts the `arg` operand into specific
         # chunk, aggregate, and finalizer functions
-        group_columns = set(self.by)
+        if isinstance(self.by, Expr):
+            group_columns = []
+        else:
+            group_columns = set(self.by)
         non_group_columns = [
             col for col in self.frame.columns if col not in group_columns
         ]
@@ -188,6 +193,8 @@ class GroupbyAggregation(ApplyConcatApply):
 
     @classmethod
     def chunk(cls, df, by=None, **kwargs):
+        if hasattr(by, "dtype"):
+            by = [by]
         return _groupby_apply_funcs(df, *by, **kwargs)
 
     @classmethod
@@ -203,7 +210,6 @@ class GroupbyAggregation(ApplyConcatApply):
         return {
             "funcs": self.spec["chunk_funcs"],
             "sort": False,
-            "by": self.by,
             **_as_dict("observed", self.observed),
             **_as_dict("dropna", self.dropna),
         }
@@ -231,9 +237,10 @@ class GroupbyAggregation(ApplyConcatApply):
     def _simplify_down(self):
         # Use agg-spec information to add column projection
         column_projection = None
+        by_columns = self.by if not isinstance(self.by, Expr) else []
         if isinstance(self.arg, dict):
             column_projection = (
-                set(self.by).union(self.arg.keys()).intersection(self.frame.columns)
+                set(by_columns).union(self.arg.keys()).intersection(self.frame.columns)
             )
         if column_projection and column_projection < set(self.frame.columns):
             return type(self)(self.frame[list(column_projection)], *self.operands[1:])
@@ -283,8 +290,10 @@ class Var(Reduction):
     reduction_aggregate = _var_agg
     reduction_combine = _var_combine
 
-    def chunk(self, frame, **kwargs):
-        return _var_chunk(frame, *self.by, **kwargs)
+    def chunk(self, frame, by, **kwargs):
+        if hasattr(by, "dtype"):
+            by = [by]
+        return _var_chunk(frame, *by, **kwargs)
 
     @functools.cached_property
     def levels(self):
@@ -311,7 +320,8 @@ class Var(Reduction):
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
-            columns = sorted(set(parent.columns + self.by))
+            by_columns = self.by if not isinstance(self.by, Expr) else []
+            columns = sorted(set(parent.columns + by_columns))
             if columns == self.frame.columns:
                 return
             return type(parent)(
@@ -391,6 +401,8 @@ class GroupBy:
             and by._name == obj[by.name]._name
         ):
             by = by.name
+        elif isinstance(by, Index) and by._name == obj.index._name:
+            pass
         elif isinstance(by, Series):
             # TODO: Implement this
             raise ValueError("by must be in the DataFrames columns.")
@@ -412,7 +424,6 @@ class GroupBy:
             )
             projection = [c for c in obj.columns if c in projection]
 
-        self.by = [by] if np.isscalar(by) else list(by)
         self.obj = obj[projection] if projection is not None else obj
         self.sort = sort
         self.observed = observed
@@ -423,9 +434,15 @@ class GroupBy:
                 "groupby only supports DataFrame collections for now."
             )
 
-        for key in self.by:
-            if not (np.isscalar(key) and key in self.obj.columns):
-                raise NotImplementedError("Can only group on column names (for now).")
+        if isinstance(by, Index):
+            self.by = by.expr
+        else:
+            self.by = [by] if np.isscalar(by) else list(by)
+            for key in self.by:
+                if not (np.isscalar(key) and key in self.obj.columns):
+                    raise NotImplementedError(
+                        "Can only group on column names (for now)."
+                    )
 
         if self.sort:
             raise NotImplementedError("sort=True not yet supported.")
