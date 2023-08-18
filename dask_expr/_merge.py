@@ -3,7 +3,7 @@ import functools
 from dask.dataframe.dispatch import make_meta, meta_nonempty
 from dask.utils import M, apply
 
-from dask_expr._expr import Blockwise, Expr, Index, Projection
+from dask_expr._expr import Blockwise, Expr, Index, PartitionsFiltered, Projection
 from dask_expr._repartition import Repartition
 from dask_expr._shuffle import Shuffle, _contains_index_name
 
@@ -211,6 +211,30 @@ class Merge(Expr):
                 if parent_columns is None:
                     return type(parent)(result)
                 return result[parent_columns]
+
+
+class HashJoinP2P(Merge, PartitionsFiltered):
+    _parameters = [
+        "left",
+        "right",
+        "how",
+        "left_on",
+        "right_on",
+        "left_index",
+        "right_index",
+        "suffixes",
+        "indicator",
+    ]
+    _defaults = {
+        "how": "inner",
+        "left_on": None,
+        "right_on": None,
+        "left_index": False,
+        "right_index": False,
+        "suffixes": ("_x", "_y"),
+        "indicator": False,
+        "shuffle_backend": None,
+    }
 
 
 class BlockwiseMerge(Merge, Blockwise):
