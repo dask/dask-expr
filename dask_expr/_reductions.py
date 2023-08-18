@@ -32,8 +32,7 @@ class Chunk(Blockwise):
     ApplyConcatApply
     """
 
-    _parameters = ["frame", "kind", "chunk", "chunk_kwargs", "by"]
-    _defaults = {"by": None}
+    _parameters = ["frame", "kind", "chunk", "chunk_kwargs"]
 
     def operation(self, df, *args, **kwargs):
         return self.chunk(df, *args, **kwargs)
