@@ -37,8 +37,8 @@ def _as_dict(key, value):
 
 
 class GroupByChunk(Chunk):
-    _parameters = ["frame", "kind", "chunk", "chunk_kwargs", "by"]
-    _defaults = {"by": None}
+    _parameters = Chunk._parameters + ["by"]
+    _defaults = Chunk._defaults | {"by": None}
 
     def operation(self, df, by, *args, **kwargs):
         return self.chunk(df, by, *args, **kwargs)
