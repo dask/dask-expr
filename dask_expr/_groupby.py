@@ -3,6 +3,7 @@ import functools
 import numpy as np
 from dask import is_dask_collection
 from dask.dataframe.core import _concat, is_dataframe_like, is_series_like
+from dask.dataframe.dispatch import meta_nonempty
 from dask.dataframe.groupby import (
     _agg_finalize,
     _apply_chunk,
@@ -21,7 +22,7 @@ from dask.utils import M, is_index_like
 
 from dask_expr._collection import DataFrame, Index, Series, new_collection
 from dask_expr._expr import Expr, MapPartitions, Projection
-from dask_expr._reductions import ApplyConcatApply, Reduction
+from dask_expr._reductions import ApplyConcatApply, Chunk, Reduction
 
 
 def _as_dict(key, value):
@@ -35,16 +36,42 @@ def _as_dict(key, value):
 ###
 
 
-class SingleAggregation(ApplyConcatApply):
+class GroupByChunk(Chunk):
+    _parameters = ["frame", "kind", "chunk", "chunk_kwargs", "by"]
+    _defaults = {"by": None}
+
+    def operation(self, df, by, *args, **kwargs):
+        return self.chunk(df, by, *args, **kwargs)
+
+    @functools.cached_property
+    def _args(self) -> list:
+        return [self.frame, self.by]
+
+
+class GroupByApplyConcatApply(ApplyConcatApply):
+    _chunk_cls = GroupByChunk
+
+    @functools.cached_property
+    def _meta_chunk(self):
+        meta = meta_nonempty(self.frame._meta)
+        by = self.by if not isinstance(self.by, Expr) else meta_nonempty(self.by._meta)
+        return self.chunk(meta, by, **self.chunk_kwargs)
+
+    @property
+    def _chunk_cls_args(self):
+        return [self.by]
+
+
+class SingleAggregation(GroupByApplyConcatApply):
     """Single groupby aggregation
 
     This is an abstract class. Sub-classes must implement
     the following methods:
 
     -   `groupby_chunk`: Applied to each group within
-        the `chunk` method of `ApplyConcatApply`
+        the `chunk` method of `GroupByApplyConcatApply`
     -   `groupby_aggregate`: Applied to each group within
-        the `aggregate` method of `ApplyConcatApply`
+        the `aggregate` method of `GroupByApplyConcatApply`
 
     Parameters
     ----------
@@ -130,7 +157,7 @@ class SingleAggregation(ApplyConcatApply):
             )
 
 
-class GroupbyAggregation(ApplyConcatApply):
+class GroupbyAggregation(GroupByApplyConcatApply):
     """General groupby aggregation
 
     This class can be used directly to perform a general
@@ -285,7 +312,21 @@ class ValueCounts(SingleAggregation):
     groupby_aggregate = staticmethod(_value_counts_aggregate)
 
 
-class Var(Reduction):
+class GroupByReduction(Reduction):
+    _chunk_cls = GroupByChunk
+
+    @property
+    def _chunk_cls_args(self):
+        return [self.by]
+
+    @functools.cached_property
+    def _meta_chunk(self):
+        meta = meta_nonempty(self.frame._meta)
+        by = self.by if not isinstance(self.by, Expr) else meta_nonempty(self.by._meta)
+        return self.chunk(meta, by, **self.chunk_kwargs)
+
+
+class Var(GroupByReduction):
     _parameters = ["frame", "by", "ddof", "numeric_only"]
     reduction_aggregate = _var_agg
     reduction_combine = _var_combine
