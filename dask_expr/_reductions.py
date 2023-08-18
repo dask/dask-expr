@@ -99,7 +99,7 @@ class ApplyConcatApply(Expr):
     @functools.cached_property
     def _meta_chunk(self):
         meta = meta_nonempty(self.frame._meta)
-        return self.chunk(meta**self.chunk_kwargs)
+        return self.chunk(meta, **self.chunk_kwargs)
 
     @functools.cached_property
     def _meta(self):
