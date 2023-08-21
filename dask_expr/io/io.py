@@ -216,7 +216,8 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
 
     def _filtered_task(self, index: int):
         start, stop = self._locations()[index : index + 2]
-        part = self._sorted_data.iloc[start:stop]
+        data = self.frame if not self.sort else self._sorted_data
+        part = data.iloc[start:stop]
         if self.columns:
             return part[self.columns[0]] if self._series else part[self.columns]
         return part
