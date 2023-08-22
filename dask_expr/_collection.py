@@ -145,13 +145,17 @@ class FrameBase(DaskMethodsMixin):
             return new_collection(self.expr.__getitem__(other.expr))
         return new_collection(self.expr.__getitem__(other))
 
-    def persist(self, **kwargs):
-        out = self.optimize()
-        return DaskMethodsMixin.persist(out, **kwargs)
+    def persist(self, fuse=True, combine_similar=True, **kwargs):
+        out = self.optimize(combine_similar=combine_similar, fuse=fuse)
+        return DaskMethodsMixin.persist(
+            out, combine_similar=combine_similar, fuse=fuse, **kwargs
+        )
 
-    def compute(self, **kwargs):
-        out = self.optimize()
-        return DaskMethodsMixin.compute(out, **kwargs)
+    def compute(self, fuse=True, combine_similar=True, **kwargs):
+        out = self.optimize(combine_similar=combine_similar, fuse=fuse)
+        return DaskMethodsMixin.compute(
+            out, combine_similar=combine_similar, fuse=fuse, **kwargs
+        )
 
     def __dask_graph__(self):
         out = self.expr
