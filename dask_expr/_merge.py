@@ -159,10 +159,12 @@ class Merge(Expr):
             return HashJoinP2P(
                 left,
                 right,
-                left_on=shuffle_left_on,
-                right_on=shuffle_right_on,
+                left_on=left_on,
+                right_on=right_on,
                 suffixes=self.suffixes,
                 indicator=self.indicator,
+                left_index=left_index,
+                right_index=right_index,
             )
 
         if shuffle_left_on:
@@ -245,6 +247,8 @@ class HashJoinP2P(Merge, PartitionsFiltered):
         "how",
         "left_on",
         "right_on",
+        "left_index",
+        "right_index",
         "suffixes",
         "indicator",
         "_partitions",
@@ -253,6 +257,8 @@ class HashJoinP2P(Merge, PartitionsFiltered):
         "how": "inner",
         "left_on": None,
         "right_on": None,
+        "left_index": None,
+        "right_index": None,
         "suffixes": ("_x", "_y"),
         "indicator": False,
         "_partitions": None,
@@ -271,6 +277,8 @@ class HashJoinP2P(Merge, PartitionsFiltered):
             right_on=self.right_on,
             indicator=self.indicator,
             suffixes=self.suffixes,
+            left_index=self.left_index,
+            right_index=self.right_index,
         )
 
     def _layer(self) -> dict:
@@ -324,6 +332,8 @@ class HashJoinP2P(Merge, PartitionsFiltered):
                 self.right._meta.drop(columns=_HASH_COLUMN_NAME),
                 self._meta,
                 self.suffixes,
+                self.left_index,
+                self.right_index,
             )
         return dsk
 

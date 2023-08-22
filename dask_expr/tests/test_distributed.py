@@ -52,3 +52,21 @@ async def test_merge_p2p_shuffle(c, s, a, b, npartitions_left):
     x = c.compute(out)
     x = await x
     lib.testing.assert_frame_equal(x.reset_index(drop=True), df_left.merge(df_right))
+
+
+@pytest.mark.parametrize("npartitions_left", [5, 6])
+@gen_cluster(client=True)
+async def test_index_merge_p2p_shuffle(c, s, a, b, npartitions_left):
+    df_left = lib.DataFrame({"a": [1, 2, 3] * 100, "b": 2}).set_index("a")
+    df_right = lib.DataFrame({"a": [4, 2, 3] * 100, "c": 2})
+    left = from_pandas(df_left, npartitions=npartitions_left, sort=False)
+    right = from_pandas(df_right, npartitions=5)
+
+    out = left.merge(right, left_index=True, right_on="a", shuffle_backend="p2p")
+    assert out.npartitions == npartitions_left
+    x = c.compute(out)
+    x = await x
+    lib.testing.assert_frame_equal(
+        x.sort_index(),
+        df_left.merge(df_right, left_index=True, right_on="a").sort_index(),
+    )
