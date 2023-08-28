@@ -1197,3 +1197,18 @@ def test_filter_pushdown(df, pdf):
     df_opt = df[["x", "y"]].simplify().replace(1, 5)
     expected = df_opt[df_opt.x > 5]
     assert result._name == expected._name
+
+
+def test_shape(df, pdf):
+    result = df.shape
+    assert result[0]._name == (df.size / 2)._name
+    assert assert_eq(result[0], 100)
+    assert result[1] == 2
+
+    result = df.x.shape
+    assert result[0]._name == (df.x.size)._name
+    assert assert_eq(result[0], 100)
+
+
+def test_size(df, pdf):
+    assert_eq(df.size, pdf.size)
