@@ -55,6 +55,12 @@ _cached_dataset_info = {}
 _cached_plan = {}
 
 
+def _control_cached_dataset_info(key):
+    if len(_cached_dataset_info) > 10 and key not in _cached_dataset_info:
+        key_to_pop = list(_cached_dataset_info.keys())[0]
+        _cached_dataset_info.pop(key_to_pop)
+
+
 @normalize_token.register(pa_ds.Dataset)
 def normalize_pa_ds(ds):
     return (ds.files, ds.schema)
@@ -526,7 +532,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         )
         dataset_token = tokenize(*args)
         if dataset_token not in _cached_dataset_info:
-            _cached_dataset_info.clear()
+            _control_cached_dataset_info(dataset_token)
             _cached_dataset_info[dataset_token] = self.engine._collect_dataset_info(
                 *args
             )
