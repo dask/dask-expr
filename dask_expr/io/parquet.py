@@ -52,7 +52,7 @@ NONE_LABEL = "__null_dask_index__"
 
 _cached_dataset_info = {}
 _CACHED_DATASET_SIZE = 10
-# TODO: Allow _cached__plan to contain >1 item?
+# TODO: Allow _cached_plan to contain >1 item?
 _cached_plan = {}
 
 
