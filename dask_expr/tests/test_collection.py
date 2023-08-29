@@ -1212,3 +1212,11 @@ def test_shape(df, pdf):
 
 def test_size(df, pdf):
     assert_eq(df.size, pdf.size)
+
+
+def test_object_caching(df):
+    a = df + 1
+    b = df + 1
+    assert a._expr is b._expr
+    assert a._meta is b._meta
+    del a, b
