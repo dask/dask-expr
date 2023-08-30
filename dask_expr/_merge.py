@@ -217,7 +217,7 @@ class Merge(Expr):
 
             # Find columns to project on the left
             for col in left.columns:
-                if left_on is not None and col in left_on or col in projection:
+                if col in left_on or col in projection:
                     project_left.append(col)
                 elif f"{col}{left_suffix}" in projection:
                     project_left.append(col)
@@ -228,7 +228,7 @@ class Merge(Expr):
 
             # Find columns to project on the right
             for col in right.columns:
-                if right_on is not None and col in right_on or col in projection:
+                if col in right_on or col in projection:
                     project_right.append(col)
                 elif f"{col}{right_suffix}" in projection:
                     project_right.append(col)
