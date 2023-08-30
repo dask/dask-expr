@@ -37,7 +37,6 @@ class Merge(Expr):
         "suffixes",
         "indicator",
         "shuffle_backend",
-        "_meta",
     ]
     _defaults = {
         "how": "inner",
@@ -48,8 +47,11 @@ class Merge(Expr):
         "suffixes": ("_x", "_y"),
         "indicator": False,
         "shuffle_backend": None,
-        "_meta": None,
     }
+
+    def __init__(self, *args, _precomputed_meta=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._precomputed_meta = _precomputed_meta
 
     def __str__(self):
         return f"Merge({self._name[-7:]})"
@@ -71,8 +73,8 @@ class Merge(Expr):
 
     @functools.cached_property
     def _meta(self):
-        if self.operand("_meta") is not None:
-            return self.operand("_meta")
+        if self._precomputed_meta is not None:
+            return self._precomputed_meta
         left = meta_nonempty(self.left._meta)
         right = meta_nonempty(self.right._meta)
         return make_meta(left.merge(right, **self.kwargs))
@@ -108,7 +110,9 @@ class Merge(Expr):
             or right.npartitions == 1
             and how in ("left", "inner")
         ):
-            return BlockwiseMerge(left, right, **self.kwargs, _meta=self._meta)
+            return BlockwiseMerge(
+                left, right, **self.kwargs, _precomputed_meta=self._meta
+            )
 
         # Check if we are merging on indices with known divisions
         merge_indexed_left = (
@@ -169,7 +173,7 @@ class Merge(Expr):
                 indicator=self.indicator,
                 left_index=left_index,
                 right_index=right_index,
-                _meta=self._meta,
+                _precomputed_meta=self._meta,
             )
 
         if shuffle_left_on:
@@ -191,7 +195,7 @@ class Merge(Expr):
             )
 
         # Blockwise merge
-        return BlockwiseMerge(left, right, **self.kwargs, _meta=self._meta)
+        return BlockwiseMerge(left, right, **self.kwargs, _precomputed_meta=self._meta)
 
     def _simplify_up(self, parent):
         if isinstance(parent, (Projection, Index)):
@@ -250,7 +254,7 @@ class Merge(Expr):
                     left[project_left],
                     right[project_right],
                     *self.operands[2:-1],
-                    _meta=self._meta[meta_cols],
+                    _precomputed_meta=self._meta[meta_cols],
                 )
                 if parent_columns is None:
                     return type(parent)(result)
@@ -288,7 +292,7 @@ class HashJoinP2P(Merge, PartitionsFiltered):
 
     @functools.cached_property
     def _meta(self):
-        return self.operand("_meta")
+        return self._precomputed_meta
 
     def _layer(self) -> dict:
         dsk = {}
