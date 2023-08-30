@@ -203,7 +203,14 @@ class Merge(Expr):
                     projection = [projection]
 
             left, right = self.left, self.right
-            left_on, right_on = self.left_on, self.right_on
+            if isinstance(self.left_on, list):
+                left_on = self.left_on
+            else:
+                left_on = [self.left_on] if self.left_on is not None else []
+            if isinstance(self.right_on, list):
+                right_on = self.right_on
+            else:
+                right_on = [self.right_on] if self.right_on is not None else []
             left_suffix, right_suffix = self.suffixes[0], self.suffixes[1]
             project_left, project_right = [], []
 
