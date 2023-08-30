@@ -253,7 +253,7 @@ class Merge(Expr):
                 result = type(self)(
                     left[project_left],
                     right[project_right],
-                    *self.operands[2:-1],
+                    *self.operands[2:],
                     _precomputed_meta=self._meta[meta_cols],
                 )
                 if parent_columns is None:
@@ -273,7 +273,6 @@ class HashJoinP2P(Merge, PartitionsFiltered):
         "suffixes",
         "indicator",
         "_partitions",
-        "_meta",
     ]
     _defaults = {
         "how": "inner",
@@ -284,7 +283,6 @@ class HashJoinP2P(Merge, PartitionsFiltered):
         "suffixes": ("_x", "_y"),
         "indicator": False,
         "_partitions": None,
-        "_meta": None,
     }
 
     def _lower(self):
