@@ -37,6 +37,7 @@ class Merge(Expr):
         "suffixes",
         "indicator",
         "shuffle_backend",
+        "_meta",
     ]
     _defaults = {
         "how": "inner",
@@ -47,6 +48,7 @@ class Merge(Expr):
         "suffixes": ("_x", "_y"),
         "indicator": False,
         "shuffle_backend": None,
+        "_meta": None,
     }
 
     def __str__(self):
@@ -69,6 +71,8 @@ class Merge(Expr):
 
     @functools.cached_property
     def _meta(self):
+        if self.operand("_meta") is not None:
+            return self.operand("_meta")
         left = meta_nonempty(self.left._meta)
         right = meta_nonempty(self.right._meta)
         return make_meta(left.merge(right, **self.kwargs))
@@ -104,7 +108,7 @@ class Merge(Expr):
             or right.npartitions == 1
             and how in ("left", "inner")
         ):
-            return BlockwiseMerge(left, right, **self.kwargs)
+            return BlockwiseMerge(left, right, **self.kwargs, _meta=self._meta)
 
         # Check if we are merging on indices with known divisions
         merge_indexed_left = (
@@ -165,6 +169,7 @@ class Merge(Expr):
                 indicator=self.indicator,
                 left_index=left_index,
                 right_index=right_index,
+                _meta=self._meta,
             )
 
         if shuffle_left_on:
@@ -186,7 +191,7 @@ class Merge(Expr):
             )
 
         # Blockwise merge
-        return BlockwiseMerge(left, right, **self.kwargs)
+        return BlockwiseMerge(left, right, **self.kwargs, _meta=self._meta)
 
     def _simplify_up(self, parent):
         if isinstance(parent, (Projection, Index)):
@@ -203,13 +208,20 @@ class Merge(Expr):
                     projection = [projection]
 
             left, right = self.left, self.right
-            left_on, right_on = self.left_on, self.right_on
+            if isinstance(self.left_on, list):
+                left_on = self.left_on
+            else:
+                left_on = [self.left_on] if self.left_on is not None else []
+            if isinstance(self.right_on, list):
+                right_on = self.right_on
+            else:
+                right_on = [self.right_on] if self.right_on is not None else []
             left_suffix, right_suffix = self.suffixes[0], self.suffixes[1]
             project_left, project_right = [], []
 
             # Find columns to project on the left
             for col in left.columns:
-                if left_on is not None and col in left_on or col in projection:
+                if col in left_on or col in projection:
                     project_left.append(col)
                 elif f"{col}{left_suffix}" in projection:
                     project_left.append(col)
@@ -220,7 +232,7 @@ class Merge(Expr):
 
             # Find columns to project on the right
             for col in right.columns:
-                if right_on is not None and col in right_on or col in projection:
+                if col in right_on or col in projection:
                     project_right.append(col)
                 elif f"{col}{right_suffix}" in projection:
                     project_right.append(col)
@@ -232,8 +244,13 @@ class Merge(Expr):
             if set(project_left) < set(left.columns) or set(project_right) < set(
                 right.columns
             ):
+                columns = left_on + right_on + projection
+                meta_cols = [col for col in self.columns if col in columns]
                 result = type(self)(
-                    left[project_left], right[project_right], *self.operands[2:]
+                    left[project_left],
+                    right[project_right],
+                    *self.operands[2:-1],
+                    _meta=self._meta[meta_cols],
                 )
                 if parent_columns is None:
                     return type(parent)(result)
@@ -252,6 +269,7 @@ class HashJoinP2P(Merge, PartitionsFiltered):
         "suffixes",
         "indicator",
         "_partitions",
+        "_meta",
     ]
     _defaults = {
         "how": "inner",
@@ -262,6 +280,7 @@ class HashJoinP2P(Merge, PartitionsFiltered):
         "suffixes": ("_x", "_y"),
         "indicator": False,
         "_partitions": None,
+        "_meta": None,
     }
 
     def _lower(self):
@@ -269,17 +288,7 @@ class HashJoinP2P(Merge, PartitionsFiltered):
 
     @functools.cached_property
     def _meta(self):
-        left = self.left._meta.drop(columns=_HASH_COLUMN_NAME)
-        right = self.right._meta.drop(columns=_HASH_COLUMN_NAME)
-        return left.merge(
-            right,
-            left_on=self.left_on,
-            right_on=self.right_on,
-            indicator=self.indicator,
-            suffixes=self.suffixes,
-            left_index=self.left_index,
-            right_index=self.right_index,
-        )
+        return self.operand("_meta")
 
     def _layer(self) -> dict:
         dsk = {}
