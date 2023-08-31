@@ -256,7 +256,6 @@ class Merge(Expr):
 
     def _combine_similar(self, root: Expr):
         # Push projections back up to avoid performing the same merge multiple times
-        # return
 
         def _remove_projections(frame):
             operations, columns = [], []
