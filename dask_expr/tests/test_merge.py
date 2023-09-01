@@ -196,12 +196,12 @@ def test_merge_combine_similar():
 
     query = df.merge(df2)
     query["new"] = query.b + query.c
-    query = query.groupby(["a", "e"]).new.sum()
+    query = query.groupby(["a", "e", "x"]).new.sum()
     assert (
         len(query.optimize().__dask_graph__()) <= 25
     )  # 45 is the non-combined version
 
     expected = pdf.merge(pdf2)
     expected["new"] = expected.b + expected.c
-    expected = expected.groupby(["a", "e"]).new.sum()
+    expected = expected.groupby(["a", "e", "x"]).new.sum()
     assert_eq(query, expected)
