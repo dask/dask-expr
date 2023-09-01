@@ -110,13 +110,18 @@ class StringAccessor(Accessor):
 
 class CatBlockwise(Blockwise):
     _parameters = ["frame", "others", "sep", "na_rep"]
-    operation = lambda _, ser, *args, **kwargs: ser.str.cat(*args, **kwargs)
+
+    def operation(self, ser, *args, **kwargs):
+        return ser.str.cat(*args, **kwargs)
 
 
 class Cat(Reduction):
     _parameters = ["frame", "sep", "na_rep"]
-    reduction_chunk = lambda ser, **kwargs: ser.str.cat(**kwargs)
 
     @property
     def chunk_kwargs(self):
         return {"sep": self.sep, "na_rep": self.na_rep}
+
+    @staticmethod
+    def reduction_chunk(ser, *args, **kwargs):
+        return ser.str.cat(*args, **kwargs)
