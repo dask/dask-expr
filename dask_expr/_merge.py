@@ -304,9 +304,10 @@ class Merge(Expr):
                 break
 
         if push_up_op:
-            columns_left += [col for col in columns_right if col not in columns_left]
-            if sorted(common.columns) != sorted(columns_left):
-                common = common[columns_left]
+            columns = columns_left.copy()
+            columns += [col for col in columns_right if col not in columns_left]
+            if sorted(common.columns) != sorted(columns):
+                common = common[columns]
             common = common._simplify_down() or common
             return common
 
