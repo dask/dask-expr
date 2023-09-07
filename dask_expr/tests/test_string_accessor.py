@@ -14,9 +14,7 @@ def ser():
 
 @pytest.fixture()
 def dser(ser):
-    return from_pandas(
-        lib.Series(["a", "b", "1", "aaa", "bbb", "ccc", "ddd", "abcd"]), npartitions=3
-    )
+    return from_pandas(ser, npartitions=3)
 
 
 @pytest.mark.parametrize(
