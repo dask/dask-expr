@@ -1,4 +1,3 @@
-import pandas as pd
 import pytest
 from dask.dataframe import assert_eq
 
@@ -16,7 +15,7 @@ def ser():
 @pytest.fixture()
 def dser(ser):
     return from_pandas(
-        pd.Series(["a", "b", "1", "aaa", "bbb", "ccc", "ddd", "abcd"]), npartitions=3
+        lib.Series(["a", "b", "1", "aaa", "bbb", "ccc", "ddd", "abcd"]), npartitions=3
     )
 
 
