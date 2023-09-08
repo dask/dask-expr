@@ -230,9 +230,7 @@ def test_merge_combine_similar(npartitions_left, npartitions_right):
     query = df.merge(df2)
     query["new"] = query.b + query.c
     query = query.groupby(["a", "e", "x"]).new.sum()
-    assert (
-        len(query.optimize().__dask_graph__()) <= 25
-    )  # 45 is the non-combined version
+    assert len(query.optimize().materialize()) <= 25  # 45 is the non-combined version
 
     expected = pdf.merge(pdf2)
     expected["new"] = expected.b + expected.c

@@ -509,7 +509,7 @@ class DiskShuffle(SimpleShuffle):
         name = "shuffle-partition-" + always_new_token
         dsk2 = {
             (name, i): (self._shuffle_group, key, column, self._partitions, p)
-            for i, key in enumerate(df.__dask_keys__())
+            for i, key in enumerate(df.__dask_output_keys__())
         }
 
         # Barrier
@@ -1293,6 +1293,7 @@ def _calculate_divisions(
                 f"This is probably due to the presence of nulls, which Dask does not entirely support in the index.\n"
                 f"We suggest you try with {suggested_method}."
             ) from e
+        raise NotImplementedError("Unhandled exception encountered") from e
     sizes = []
 
     empty_dataframe_detected = pd.isna(divisions).all()

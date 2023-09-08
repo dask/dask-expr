@@ -319,7 +319,7 @@ class TreeReduce(Expr):
         # apply combine to batches of intermediate results
         j = 1
         d = {}
-        keys = self.frame.__dask_keys__()
+        keys = self.frame.__dask_output_keys__()
         split_every = self.split_every
         while len(keys) > 1:
             new_keys = []

@@ -159,7 +159,7 @@ class ToParquetBarrier(Expr):
                     apply,
                     self.engine.write_metadata,
                     [
-                        self.frame.__dask_keys__(),
+                        self.frame.__dask_output_keys__(),
                         self.fmd,
                         self.fs,
                         self.path,
@@ -168,7 +168,9 @@ class ToParquetBarrier(Expr):
                 )
             }
         else:
-            return {(self._name, 0): (lambda x: None, self.frame.__dask_keys__())}
+            return {
+                (self._name, 0): (lambda x: None, self.frame.__dask_output_keys__())
+            }
 
 
 def to_parquet(
