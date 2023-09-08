@@ -22,8 +22,17 @@ from dask.dataframe.groupby import (
 from dask.utils import M, is_index_like
 
 from dask_expr._collection import DataFrame, Index, Series, new_collection
-from dask_expr._expr import Blockwise, Expr, MapPartitions, Projection, no_default
+from dask_expr._expr import (
+    Assign,
+    Blockwise,
+    Expr,
+    MapPartitions,
+    Projection,
+    no_default,
+)
 from dask_expr._reductions import ApplyConcatApply, Chunk, Reduction
+from dask_expr._shuffle import Shuffle
+from dask_expr._util import is_scalar
 
 
 def _as_dict(key, value):
@@ -429,10 +438,31 @@ class GroupByApply(Expr):
     def _meta(self):
         return _meta_apply(self)
 
+    def _divisions(self):
+        # TODO: Can we do better? Divisions might change if we have to shuffle, so using
+        # self.frame.divisions is not an option.
+        return (None,) * (self.frame.npartitions + 1)
+
     def _lower(self):
+        df = self.frame
+        by = self.by
+
+        if any(div is None for div in self.frame.divisions) or not _contains_index_name(
+            self.frame._meta.index.name, self.by
+        ):
+            if isinstance(self.by, Expr):
+                df = Assign(df, "_by", self.by)
+
+            df = Shuffle(df, self.by, df.npartitions)
+            if isinstance(self.by, Expr):
+                by = Projection(df, self.by.name)
+                by.name = self.by.name
+                df = Projection(df, [col for col in df.columns if col != "_by"])
+
         return GroupByApplyBlockwise(
-            self.frame,
-            self.by,
+            df,
+            by,
+            self._slice,
             self.func,
             self.observed,
             self.dropna,
@@ -440,9 +470,21 @@ class GroupByApply(Expr):
             self.operand("kwargs"),
         )
 
+    def _simplify_up(self, parent):
+        return super()._simplify_up(parent)
+
 
 class GroupByApplyBlockwise(Blockwise):
-    _parameters = ["frame", "by", "func", "observed", "dropna", "args", "kwargs"]
+    _parameters = [
+        "frame",
+        "by",
+        "_slice",
+        "func",
+        "observed",
+        "dropna",
+        "args",
+        "kwargs",
+    ]
     _defaults = {"observed": None, "dropna": None}
 
     @functools.cached_property
@@ -450,7 +492,15 @@ class GroupByApplyBlockwise(Blockwise):
         return _meta_apply(self)
 
     def operation(
-        self, frame, by, func, observed=None, dropna=None, args=None, kwargs=None
+        self,
+        frame,
+        by,
+        _slice,
+        func,
+        observed=None,
+        dropna=None,
+        args=None,
+        kwargs=None,
     ):
         if args is None:
             args = ()
@@ -460,12 +510,25 @@ class GroupByApplyBlockwise(Blockwise):
             frame,
             by,
             func=func,
-            key=None,
+            key=_slice,
             observed=observed,
             dropna=dropna,
             *args,
             **kwargs,
         )
+
+
+def _contains_index_name(index_name, by):
+    if index_name is None:
+        return False
+
+    if isinstance(by, Expr):
+        return False
+
+    if not is_scalar(by):
+        return False
+
+    return index_name == by
 
 
 def _meta_apply(obj):
@@ -479,7 +542,7 @@ def _meta_apply(obj):
             meta_nonempty(obj.frame._meta),
             by_meta,
             func=obj.func,
-            key=None,
+            key=obj._slice,
             observed=obj.observed,
             dropna=obj.dropna,
             *meta_args,
@@ -716,6 +779,7 @@ class GroupBy:
                 self.by,
                 self.observed,
                 self.dropna,
+                _slice=self._slice,
                 func=func,
                 args=args,
                 kwargs=kwargs,

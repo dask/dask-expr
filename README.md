@@ -225,6 +225,7 @@ API Coverage
 
 - `agg`
 - `aggregate`
+- `apply`
 - `count`
 - `first`
 - `last`
