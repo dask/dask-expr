@@ -158,7 +158,7 @@ class Shuffle(Expr):
             f"before generating a task graph."
         )
 
-    @property
+    @functools.cached_property
     def _meta(self):
         return self.frame._meta
 
@@ -703,7 +703,7 @@ class SetIndex(BaseSetIndexSortValues):
             return self.operand("npartitions")
         return self.frame.npartitions
 
-    @property
+    @functools.cached_property
     def _meta(self):
         if isinstance(self._other, Expr):
             other = self._other._meta
@@ -791,7 +791,7 @@ class SortValues(BaseSetIndexSortValues):
             sort_kwargs.update(self.operand("sort_function_kwargs"))
         return sort_kwargs
 
-    @property
+    @functools.cached_property
     def _meta(self):
         return self.frame._meta
 
@@ -805,7 +805,9 @@ class SortValues(BaseSetIndexSortValues):
                 self.frame, self.sort_function, self.sort_function_kwargs
             )
 
-        partitions = _SetPartitionsPreSetIndex(by, by._meta._constructor(divisions))
+        partitions = _SetPartitionsPreSetIndex(
+            by, by._meta._constructor(divisions).sort_values(ascending=self.ascending)
+        )
         assigned = Assign(self.frame, "_partitions", partitions)
         shuffled = Shuffle(
             assigned,
@@ -887,7 +889,7 @@ class _SetPartitionsPreSetIndex(Blockwise):
     operation = staticmethod(set_partitions_pre)
     _is_length_preserving = True
 
-    @property
+    @functools.cached_property
     def _meta(self):
         return self.frame._meta._constructor([0])
 
@@ -907,18 +909,20 @@ class SortIndexBlockwise(Blockwise):
     _is_length_preserving = True
 
 
-def sort_function(self, *args, **kwargs):
-    sort_func = kwargs.pop("sort_function")
-    sort_kwargs = kwargs.pop("sort_kwargs")
-    return sort_func(*args, **kwargs, **sort_kwargs)
-
-
 class SortValuesBlockwise(Blockwise):
     _projection_passthrough = False
     _parameters = ["frame", "sort_function", "sort_kwargs"]
-    operation = sort_function
     _keyword_only = ["sort_function", "sort_kwargs"]
     _is_length_preserving = True
+
+    def operation(self, *args, **kwargs):
+        sort_func = kwargs.pop("sort_function")
+        sort_kwargs = kwargs.pop("sort_kwargs")
+        return sort_func(*args, **kwargs, **sort_kwargs)
+
+    @functools.cached_property
+    def _meta(self):
+        return self.frame._meta
 
 
 class SetIndexBlockwise(Blockwise):

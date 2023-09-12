@@ -25,14 +25,13 @@ from dask.dataframe.core import (
 )
 from dask.dataframe.dispatch import meta_nonempty
 from dask.dataframe.utils import clear_known_categories, drop_by_shallow_copy
+from dask.typing import no_default
 from dask.utils import M, apply, funcname, import_required, is_arraylike
 from tlz import merge_sorted, unique
 
 from dask_expr._util import _tokenize_deterministic, _tokenize_partial
 
 replacement_rules = []
-
-no_default = "__no_default__"
 
 
 class Expr:
@@ -333,6 +332,32 @@ class Expr:
             out = type(out)(*new_operands)
 
         return out
+
+    def lower_completely(self) -> Expr:
+        """Lower an expression completely
+
+        This calls the ``lower_once`` method in a loop
+        until nothing changes. This function does not
+        apply any other optimizations (like ``simplify``).
+
+        Returns
+        -------
+        expr:
+            output expression
+
+        See Also
+        --------
+        Expr.lower_once
+        Expr._lower
+        """
+        # Lower until nothing changes
+        expr = self
+        while True:
+            new = expr.lower_once()
+            if new._name == expr._name:
+                break
+            expr = new
+        return expr
 
     def _lower(self):
         return
@@ -965,7 +990,7 @@ class Literal(Expr):
     def _divisions(self):
         return (None, None)
 
-    @property
+    @functools.cached_property
     def _meta(self):
         return make_meta(self.value)
 
@@ -1478,7 +1503,7 @@ class Apply(Elemwise):
     _defaults = {"args": (), "kwargs": {}}
     operation = M.apply
 
-    @property
+    @functools.cached_property
     def _meta(self):
         return self.frame._meta.apply(self.function, *self.args, **self.kwargs)
 
@@ -1501,7 +1526,7 @@ class Map(Elemwise):
     _defaults = {"na_action": None}
     operation = M.map
 
-    @property
+    @functools.cached_property
     def _meta(self):
         return self.frame._meta
 
@@ -1616,7 +1641,7 @@ class Projection(Elemwise):
         else:
             return [self.operand("columns")]
 
-    @property
+    @functools.cached_property
     def _meta(self):
         if is_dataframe_like(self.frame._meta):
             return super()._meta
@@ -1672,7 +1697,7 @@ class Index(Elemwise):
     operation = getattr
     _filter_passthrough = False
 
-    @property
+    @functools.cached_property
     def _meta(self):
         meta = self.frame._meta
         # Handle scalar results
@@ -1693,7 +1718,7 @@ class Lengths(Expr):
 
     _parameters = ["frame"]
 
-    @property
+    @functools.cached_property
     def _meta(self):
         return tuple()
 
@@ -1761,7 +1786,7 @@ class Head(Expr):
     _parameters = ["frame", "n"]
     _defaults = {"n": 5}
 
-    @property
+    @functools.cached_property
     def _meta(self):
         return self.frame._meta
 
@@ -1807,7 +1832,7 @@ class Tail(Expr):
     _parameters = ["frame", "n"]
     _defaults = {"n": 5}
 
-    @property
+    @functools.cached_property
     def _meta(self):
         return self.frame._meta
 
@@ -1995,7 +2020,7 @@ class Partitions(Expr):
 
     _parameters = ["frame", "partitions"]
 
-    @property
+    @functools.cached_property
     def _meta(self):
         return self.frame._meta
 

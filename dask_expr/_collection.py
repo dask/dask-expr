@@ -46,6 +46,7 @@ from dask_expr._reductions import (
 )
 from dask_expr._repartition import Repartition
 from dask_expr._shuffle import SetIndex, SetIndexBlockwise, SortValues
+from dask_expr._str_accessor import StringAccessor
 from dask_expr._util import _convert_to_list, is_scalar
 
 #
@@ -155,12 +156,12 @@ class FrameBase(DaskMethodsMixin):
 
     def __dask_graph__(self):
         out = self.expr
-        out = out.optimize(fuse=False)
+        out = out.lower_completely()
         return out.__dask_graph__()
 
     def __dask_keys__(self):
         out = self.expr
-        out = out.optimize(fuse=False)
+        out = out.lower_completely()
         return out.__dask_keys__()
 
     def simplify(self):
@@ -179,13 +180,13 @@ class FrameBase(DaskMethodsMixin):
         return self.__dask_graph__()
 
     def __dask_postcompute__(self):
-        state = self.optimize(fuse=False)
+        state = new_collection(self.expr.lower_completely())
         if type(self) != type(state):
             return state.__dask_postcompute__()
         return _concat, ()
 
     def __dask_postpersist__(self):
-        state = self.optimize(fuse=False)
+        state = new_collection(self.expr.lower_completely())
         return from_graph, (state._meta, state.divisions, state._name)
 
     def __getattr__(self, key):
@@ -1051,6 +1052,7 @@ class Series(FrameBase):
         return new_collection(expr.ExplodeSeries(self.expr))
 
     cat = CachedAccessor("cat", CategoricalAccessor)
+    str = CachedAccessor("str", StringAccessor)
 
     def _repartition_quantiles(self, npartitions, upsample=1.0, random_state=None):
         return new_collection(
