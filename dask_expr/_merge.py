@@ -104,7 +104,7 @@ class Merge(Expr):
         #  2. Add multi-partition broadcast merge
         #  3. Add/leverage partition statistics
 
-        # # Check for "trivial" broadcast (single partition)
+        # Check for "trivial" broadcast (single partition)
         npartitions = max(left.npartitions, right.npartitions)
         if (
             npartitions == 1
