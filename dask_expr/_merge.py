@@ -1,5 +1,6 @@
 import functools
 
+from dask.core import flatten
 from dask.dataframe.dispatch import make_meta, meta_nonempty
 from dask.utils import M, apply, get_default_shuffle_method
 from distributed.shuffle._core import ShuffleId, barrier_key
@@ -254,42 +255,31 @@ class Merge(Expr):
                     return type(parent)(result)
                 return result[parent_columns]
 
+    def _validate_same_operations(self, common, op, remove_ops, skip_ops):
+        # Travers left and right to check if we can find the same operation
+        # more than once. We have to account for potential projections on both sides
+        name = common._name
+        if name == op._name:
+            return True
+        op_left, _ = self._remove_operations(op.left, remove_ops, skip_ops)
+        op_right, _ = self._remove_operations(op.right, remove_ops, skip_ops)
+        return type(op)(op_left, op_right, *op.operands[2:])._name == name
+
     def _combine_similar(self, root: Expr):
         # Push projections back up to avoid performing the same merge multiple times
+        skip_ops = (Filter, AssignPartitioningIndex, Shuffle)
+        remove_ops = (Projection,)
 
-        def _remove_projections(frame):
-            operations, columns = [], []
-            frame_base = frame
-            while isinstance(
-                frame, (AssignPartitioningIndex, Shuffle, Filter, Projection)
-            ):
-                # Have to respect ops that were injected while lowering or filters
-                if isinstance(frame, Projection):
-                    columns.extend([col for col in frame.columns if col not in columns])
-                else:
-                    operations.append((type(frame), frame.operands[1:]))
-                frame = frame.frame
-
-            if len(columns) > 0:
-                # Remove the projections but build the remaining things back up
-                for op_type, operands in reversed(operations):
-                    frame = op_type(frame, *operands)
-                return frame, columns
+        def _flatten_columns(columns):
+            if len(columns) == 0:
+                return self.left.columns
             else:
-                return frame_base, frame_base.columns
+                return list(set(flatten(columns)))
 
-        def _validate_same_operations(common, op):
-            # Travers left and right to check if we can find the same operation
-            # more than once. We have to account for potential projections on both sides
-            name = common._name
-            if name == op._name:
-                return True
-            op_left, _ = _remove_projections(op.left)
-            op_right, _ = _remove_projections(op.right)
-            return type(op)(op_left, op_right, *op.operands[2:])._name == name
-
-        left, columns_left = _remove_projections(self.left)
-        right, columns_right = _remove_projections(self.right)
+        left, columns_left = self._remove_operations(self.left, remove_ops, skip_ops)
+        columns_left = _flatten_columns(columns_left)
+        right, columns_right = self._remove_operations(self.right, remove_ops, skip_ops)
+        columns_right = _flatten_columns(columns_right)
 
         if left._name == self.left._name and right._name == self.right._name:
             # There aren't any ops we can remove, so bail
@@ -299,7 +289,7 @@ class Merge(Expr):
 
         push_up_op = False
         for op in self._find_similar_operations(root, ignore=self._parameters):
-            if _validate_same_operations(common, op):
+            if self._validate_same_operations(common, op, remove_ops, skip_ops):
                 push_up_op = True
                 break
 
