@@ -821,7 +821,6 @@ class SortValues(BaseSetIndexSortValues):
 
     def _simplify_up(self, parent):
         from dask_expr._expr import Head, Tail
-        from dask_expr._reductions import NLargest, NSmallest
 
         if isinstance(parent, Head):
             if self.ascending:
