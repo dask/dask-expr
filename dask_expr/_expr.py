@@ -545,7 +545,9 @@ class Expr:
         return GE(other, self)
 
     def __eq__(self, other):
-        return EQ(self, other)
+        if isinstance(other, Expr):
+            return self._name == other._name
+        return False
 
     def __ne__(self, other):
         return NE(self, other)

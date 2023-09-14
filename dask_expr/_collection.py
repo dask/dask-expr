@@ -108,6 +108,11 @@ class FrameBase(DaskMethodsMixin):
     def __init__(self, expr):
         self._expr = expr
 
+    def __eq__(self, other):
+        if isinstance(other, FrameBase):
+            other = other.expr
+        return new_collection(expr.EQ(self.expr, other))
+
     @property
     def expr(self) -> expr.Expr:
         return self._expr
@@ -569,7 +574,6 @@ for op in [
     "__rle__",
     "__ge__",
     "__rge__",
-    "__eq__",
     "__ne__",
     "__and__",
     "__rand__",
