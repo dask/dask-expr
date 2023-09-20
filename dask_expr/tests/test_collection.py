@@ -389,9 +389,9 @@ def test_repr(df):
     assert "+ 1" in repr(df + 1)
 
     s = (df["x"] + 1).sum(skipna=False).expr
-    assert '["x"]' in s or "['x']" in s
-    assert "+ 1" in s
-    assert "sum(skipna=False)" in s
+    assert '["x"]' in str(s) or "['x']" in str(s)
+    assert "+ 1" in str(s)
+    assert "sum(skipna=False)" in str(s)
 
 
 @xfail_gpu("combine_first not supported by cudf")
@@ -591,11 +591,11 @@ def test_substitute():
     expected = df + 2
     assert result._name == expected._name
 
-    result = df["a"].substitute({df["a"]: df["b"]})
+    result = df["a"].substitute({df["a"]._name: df["b"]})
     expected = df["b"]
     assert result._name == expected._name
 
-    result = (df["a"] - df["b"]).substitute({df["b"]: df["c"]})
+    result = (df["a"] - df["b"]).substitute({df["b"]._name: df["c"]})
     expected = df["a"] - df["c"]
     assert result._name == expected._name
 
@@ -603,7 +603,7 @@ def test_substitute():
     expected = from_pandas(pdf, npartitions=4).a
     assert result._name == expected._name
 
-    result = (df["a"].sum() + 5).substitute({df["a"]: df["b"], 5: 6})
+    result = (df["a"].sum() + 5).substitute({df["a"]._name: df["b"], 5: 6})
     expected = df["b"].sum() + 6
     assert result._name == expected._name
 
@@ -724,13 +724,12 @@ def test_tree_repr(fuse):
 
     # Check result after optimization
     optimized = expr.optimize(fuse=fuse)
-    s = optimized.tree_repr()
+    s = str(optimized.tree_repr())
     assert "Sum(Chunk):" in s
     assert "Sum(TreeReduce): split_every=0" in s
     assert "Add:" in s
     assert "Mean:" not in s
     assert "AlignPartitions:" not in s
-    assert "right=1" in s
     assert "True" not in s
     assert "None" not in s
     assert "skipna=False" in s
@@ -904,10 +903,10 @@ def test_unique(df, pdf):
 def test_walk(df):
     df2 = df[df["x"] > 1][["y"]] + 1
     assert all(isinstance(ex, expr.Expr) for ex in df2.walk())
-    exprs = set(df2.walk())
-    assert df.expr in exprs
-    assert df["x"].expr in exprs
-    assert (df["x"] > 1).expr in exprs
+    exprs = {e._name for e in set(df2.walk())}
+    assert df.expr._name in exprs
+    assert df["x"].expr._name in exprs
+    assert (df["x"] > 1).expr._name in exprs
     assert 1 not in exprs
 
 

@@ -79,7 +79,7 @@ class Expr:
         s = ", ".join(
             str(param) + "=" + str(operand)
             for param, operand in zip(self._parameters, self.operands)
-            if operand != self._defaults.get(param)
+            if isinstance(operand, Expr) or operand != self._defaults.get(param)
         )
         return f"{type(self).__name__}({s})"
 
@@ -390,7 +390,7 @@ class Expr:
         """
         expr = self
         update_root = root is None
-        root = root or self
+        root = root if root is not None else self
 
         if _cache is None:
             _cache = {}
@@ -495,6 +495,12 @@ class Expr:
             return Filter(self, other)  # df[df.x > 1]
         else:
             return Projection(self, other)  # df[["a", "b", "c"]]
+
+    def __bool__(self):
+        raise ValueError(
+            f"The truth value of a {self.__class__.__name__} is ambiguous. "
+            "Use a.any() or a.all()."
+        )
 
     def __add__(self, other):
         return Add(self, other)
@@ -772,8 +778,8 @@ class Expr:
         if not substitutions:
             return self
 
-        if self in substitutions:
-            return substitutions[self]
+        if self._name in substitutions:
+            return substitutions[self._name]
 
         new = []
         update = False
@@ -781,6 +787,7 @@ class Expr:
             if (
                 not isinstance(operand, bool)
                 and ishashable(operand)
+                and not isinstance(operand, Expr)
                 and operand in substitutions
             ):
                 new.append(substitutions[operand])
@@ -2206,6 +2213,8 @@ def optimize_blockwise_fusion(expr):
         stack = [expr]
         dependents = defaultdict(set)
         dependencies = {}
+        expr_mapping = {}
+
         while stack:
             next = stack.pop()
 
@@ -2214,23 +2223,25 @@ def optimize_blockwise_fusion(expr):
             seen.add(next._name)
 
             if isinstance(next, Blockwise):
-                dependencies[next] = set()
-                if next not in dependents:
-                    dependents[next] = set()
+                dependencies[next._name] = set()
+                if next._name not in dependents:
+                    dependents[next._name] = set()
+                    expr_mapping[next._name] = next
 
             for operand in next.operands:
                 if isinstance(operand, Expr):
                     stack.append(operand)
                     if isinstance(operand, Blockwise):
-                        if next in dependencies:
-                            dependencies[next].add(operand)
-                        dependents[operand].add(next)
+                        if next._name in dependencies:
+                            dependencies[next._name].add(operand._name)
+                        dependents[operand._name].add(next._name)
+                        expr_mapping[operand._name] = operand
 
         # Traverse each "root" until we find a fusable sub-group.
         # Here we use root to refer to a Blockwise Expr node that
         # has no Blockwise dependents
         roots = [
-            k
+            expr_mapping[k]
             for k, v in dependents.items()
             if v == set() or all(not isinstance(_expr, Blockwise) for _expr in v)
         ]
@@ -2247,9 +2258,13 @@ def optimize_blockwise_fusion(expr):
                 seen.add(next._name)
 
                 group.append(next)
-                for dep in dependencies[next]:
+                for dep_name in dependencies[next._name]:
+                    dep = expr_mapping[dep_name]
+
+                    stack_names = {s._name for s in stack}
+                    group_names = {g._name for g in group}
                     if (dep.npartitions == root.npartitions) and not (
-                        dependents[dep] - set(stack) - set(group)
+                        dependents[dep._name] - stack_names - group_names
                     ):
                         # All of deps dependents are contained
                         # in the local group (or the local stack
@@ -2259,7 +2274,7 @@ def optimize_blockwise_fusion(expr):
                         # of partitions, since broadcasting within
                         # a group is not allowed.
                         stack.append(dep)
-                    elif dependencies[dep] and dep._name not in [
+                    elif dependencies[dep._name] and dep._name not in [
                         r._name for r in roots
                     ]:
                         # Couldn't fuse dep, but we may be able to
@@ -2276,7 +2291,7 @@ def optimize_blockwise_fusion(expr):
                         for operand in _expr.dependencies()
                         if operand._name not in local_names
                     ]
-                to_replace = {group[0]: Fused(group, *group_deps)}
+                to_replace = {group[0]._name: Fused(group, *group_deps)}
                 return expr.substitute(to_replace), not roots
 
         # Return original expr if no fusable sub-groups were found
