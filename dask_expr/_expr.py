@@ -52,7 +52,7 @@ class Expr:
                 operands.append(kwargs.pop(parameter))
             except KeyError:
                 operands.append(type(self)._defaults[parameter])
-        assert not kwargs
+        assert not kwargs, kwargs
         self.operands = operands
         if self._required_attribute:
             dep = next(iter(self.dependencies()))._meta
@@ -473,7 +473,7 @@ class Expr:
                 frame = op_type(frame, *operands)
             return frame, ops_to_push_up
         else:
-            return frame_base, ops_to_push_up
+            return frame_base, frame_base.columns
 
     def optimize(self, **kwargs):
         return optimize(self, **kwargs)
