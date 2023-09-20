@@ -292,3 +292,13 @@ def test_set_index_head_nlargest(df, pdf):
     # These still work, even if we haven't optimized them yet
     df.set_index(df.x).head(3)
     # df.set_index([df.x, df.y]).head(3)
+
+    
+def test_filter_sort(df):
+    a = df.sort_values("x")
+    a = a[a.y > 40]
+
+    b = df[df.y > 40]
+    b = b.sort_values("x")
+
+    assert a.optimize()._name == b.optimize()._name
