@@ -389,9 +389,9 @@ def test_repr(df):
     assert "+ 1" in repr(df + 1)
 
     s = (df["x"] + 1).sum(skipna=False).expr
-    assert '["x"]' in s or "['x']" in s
-    assert "+ 1" in s
-    assert "sum(skipna=False)" in s
+    assert '["x"]' in str(s) or "['x']" in str(s)
+    assert "+ 1" in str(s)
+    assert "sum(skipna=False)" in str(s)
 
 
 @xfail_gpu("combine_first not supported by cudf")
