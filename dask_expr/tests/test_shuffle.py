@@ -293,7 +293,7 @@ def test_set_index_head_nlargest(df, pdf):
     df.set_index(df.x).head(3)
     # df.set_index([df.x, df.y]).head(3)
 
-    
+
 def test_filter_sort(df):
     a = df.sort_values("x")
     a = a[a.y > 40]
