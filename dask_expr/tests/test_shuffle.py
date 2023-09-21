@@ -302,3 +302,19 @@ def test_filter_sort(df):
     b = b.sort_values("x")
 
     assert a.optimize()._name == b.optimize()._name
+
+
+def test_set_index_predicate_pushdown(df, pdf):
+    pdf = pdf.set_index("x")
+    query = df.set_index("x")
+    result = query[query.y > 5]
+    expected = pdf[pdf.y > 5]
+    assert_eq(result, expected)
+    expected_query = df[df.y > 5].set_index("x").optimize()
+    assert expected_query._name == result.optimize()._name
+
+    result = query[query.index > 5]
+    assert_eq(result, pdf[pdf.index > 5])
+
+    result = query[(query.index > 5) & (query.y > -1)]
+    assert_eq(result, pdf[(pdf.index > 5) & (pdf.y > -1)])
