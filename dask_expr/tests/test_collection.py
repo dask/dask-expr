@@ -10,7 +10,7 @@ from dask.dataframe._compat import PANDAS_GE_210
 from dask.dataframe.utils import UNKNOWN_CATEGORIES, assert_eq
 from dask.utils import M
 
-from dask_expr import expr, from_pandas, optimize
+from dask_expr import expr, from_pandas, is_scalar, optimize
 from dask_expr._expr import are_co_aligned
 from dask_expr._reductions import Len
 from dask_expr.datasets import timeseries
@@ -1225,3 +1225,9 @@ def test_drop_duplicates_groupby(pdf):
 def test_expression_bool_raises(df):
     with pytest.raises(ValueError, match="The truth value"):
         bool(df.expr)
+
+
+def test_expr_is_scalar(df):
+    assert not is_scalar(df.expr)
+    with pytest.raises(ValueError, match="The truth value"):
+        df.expr.x in df.expr.columns  # noqa: B015
