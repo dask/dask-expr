@@ -2236,6 +2236,7 @@ def optimize_blockwise_fusion(expr):
                             dependencies[next._name].add(operand._name)
                         dependents[operand._name].add(next._name)
                         expr_mapping[operand._name] = operand
+                        expr_mapping[next._name] = next
 
         # Traverse each "root" until we find a fusable sub-group.
         # Here we use root to refer to a Blockwise Expr node that
@@ -2243,7 +2244,8 @@ def optimize_blockwise_fusion(expr):
         roots = [
             expr_mapping[k]
             for k, v in dependents.items()
-            if v == set() or all(not isinstance(_expr, Blockwise) for _expr in v)
+            if v == set()
+            or all(not isinstance(expr_mapping[_expr], Blockwise) for _expr in v)
         ]
         while roots:
             root = roots.pop()
@@ -2292,7 +2294,8 @@ def optimize_blockwise_fusion(expr):
                         if operand._name not in local_names
                     ]
                 to_replace = {group[0]._name: Fused(group, *group_deps)}
-                return expr.substitute(to_replace), not roots
+                _ret = expr.substitute(to_replace)
+                return _ret, not roots
 
         # Return original expr if no fusable sub-groups were found
         return expr, True

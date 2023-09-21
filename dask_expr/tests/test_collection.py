@@ -1220,3 +1220,8 @@ def test_drop_duplicates_groupby(pdf):
     query = df.groupby("y").z.count()
     expected = pdf.drop_duplicates(subset="x").groupby("y").z.count()
     assert_eq(query, expected)
+
+
+def test_expression_bool_raises(df):
+    with pytest.raises(ValueError, match="The truth value"):
+        bool(df.expr)

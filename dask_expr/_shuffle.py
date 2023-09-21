@@ -857,7 +857,9 @@ class SortValues(BaseSetIndexSortValues):
                 return NSmallest(self.frame, n=parent.n, _columns=self.by)
         if isinstance(parent, Filter):
             return SortValues(
-                Filter(self.frame, parent.predicate.substitute({self: self.frame})),
+                Filter(
+                    self.frame, parent.predicate.substitute({self._name: self.frame})
+                ),
                 *self.operands[1:],
             )
         if isinstance(parent, Projection):
