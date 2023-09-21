@@ -587,23 +587,23 @@ def test_substitute():
     df = from_pandas(pdf, npartitions=3)
     df = df.expr
 
-    result = (df + 1).substitute([(1, 2)])
+    result = (df + 1).substitute(1, 2)
     expected = df + 2
     assert result._name == expected._name
 
-    result = df["a"].substitute([(df["a"], df["b"])])
+    result = df["a"].substitute(df["a"], df["b"])
     expected = df["b"]
     assert result._name == expected._name
 
-    result = (df["a"] - df["b"]).substitute([(df["b"], df["c"])])
+    result = (df["a"] - df["b"]).substitute(df["b"], df["c"])
     expected = df["a"] - df["c"]
     assert result._name == expected._name
 
-    result = df["a"].substitute([(3, 4)])
+    result = df["a"].substitute(3, 4)
     expected = from_pandas(pdf, npartitions=4).a
     assert result._name == expected._name
 
-    result = (df["a"].sum() + 5).substitute([(df["a"], df["b"]), (5, 6)])
+    result = (df["a"].sum() + 5).substitute(df["a"], df["b"]).substitute(5, 6)
     expected = df["b"].sum() + 6
     assert result._name == expected._name
 

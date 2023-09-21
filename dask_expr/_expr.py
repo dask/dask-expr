@@ -760,7 +760,7 @@ class Expr:
     def __dask_keys__(self):
         return [(self._name, i) for i in range(self.npartitions)]
 
-    def substitute(self, substitutions: list[tuple]) -> Expr:
+    def substitute(self, old, new) -> Expr:
         """Substitute specific `Expr` instances within `self`
 
         Parameters
@@ -775,37 +775,33 @@ class Expr:
         >>> (df + 10).substitute({10: 20})
         df + 20
         """
-        if not substitutions:
-            return self
 
-        substitutions = {
-            k._name if isinstance(k, Expr) else k: v for k, v in substitutions
-        }
+        old = old._name if isinstance(old, Expr) else old
 
-        if self._name in substitutions:
-            return substitutions[self._name]
+        if self._name == old:
+            return new
 
-        new = []
+        new_exprs = []
         update = False
         for operand in self.operands:
             if (
                 not isinstance(operand, bool)
                 and ishashable(operand)
                 and not isinstance(operand, Expr)
-                and operand in substitutions
+                and operand == old
             ):
-                new.append(substitutions[operand])
+                new_exprs.append(new)
                 update = True
             elif isinstance(operand, Expr):
-                val = operand.substitute([(k, v) for k, v in substitutions.items()])
+                val = operand.substitute(old, new)
                 if operand._name != val._name:
                     update = True
-                new.append(val)
+                new_exprs.append(val)
             else:
-                new.append(operand)
+                new_exprs.append(operand)
 
         if update:  # Only recreate if something changed
-            return type(self)(*new)
+            return type(self)(*new_exprs)
         return self
 
     def substitute_parameters(self, substitutions: dict) -> Expr:
@@ -2297,8 +2293,7 @@ def optimize_blockwise_fusion(expr):
                         for operand in _expr.dependencies()
                         if operand._name not in local_names
                     ]
-                to_replace = [(group[0], Fused(group, *group_deps))]
-                _ret = expr.substitute(to_replace)
+                _ret = expr.substitute(group[0], Fused(group, *group_deps))
                 return _ret, not roots
 
         # Return original expr if no fusable sub-groups were found
