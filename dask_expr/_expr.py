@@ -760,7 +760,7 @@ class Expr:
     def __dask_keys__(self):
         return [(self._name, i) for i in range(self.npartitions)]
 
-    def substitute(self, substitutions: dict) -> Expr:
+    def substitute(self, substitutions: list[tuple]) -> Expr:
         """Substitute specific `Expr` instances within `self`
 
         Parameters
@@ -778,6 +778,10 @@ class Expr:
         if not substitutions:
             return self
 
+        substitutions = {
+            k._name if isinstance(k, Expr) else k: v for k, v in substitutions
+        }
+
         if self._name in substitutions:
             return substitutions[self._name]
 
@@ -793,7 +797,7 @@ class Expr:
                 new.append(substitutions[operand])
                 update = True
             elif isinstance(operand, Expr):
-                val = operand.substitute(substitutions)
+                val = operand.substitute([(k, v) for k, v in substitutions.items()])
                 if operand._name != val._name:
                     update = True
                 new.append(val)
@@ -2293,7 +2297,7 @@ def optimize_blockwise_fusion(expr):
                         for operand in _expr.dependencies()
                         if operand._name not in local_names
                     ]
-                to_replace = {group[0]._name: Fused(group, *group_deps)}
+                to_replace = [(group[0], Fused(group, *group_deps))]
                 _ret = expr.substitute(to_replace)
                 return _ret, not roots
 
