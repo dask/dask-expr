@@ -740,7 +740,7 @@ class SetIndex(BaseSetIndexSortValues):
         return SetPartition(self.frame, self._other, self.drop, divisions)
 
     def _simplify_up(self, parent):
-        from dask_expr._expr import Head, Tail
+        from dask_expr._expr import Filter, Head, Index, Tail
 
         # TODO, handle setting index with other frame
         if (
@@ -774,6 +774,14 @@ class SetIndex(BaseSetIndexSortValues):
                 parent.operand("columns"),
             )
 
+        if isinstance(parent, Filter):
+            p = parent.predicate
+            if any(isinstance(x, Index) for x in p.walk()):
+                # Punt on cases where the new index is part of the filter
+                return
+            predicate = parent.substitute({self: self.frame}).predicate
+            return type(self)(self.frame[predicate], *self.operands[1:])
+
 
 class SortValues(BaseSetIndexSortValues):
     _parameters = [
@@ -796,6 +804,18 @@ class SortValues(BaseSetIndexSortValues):
         "sort_function_kwargs": None,
         "upsample": 1.0,
     }
+
+    def _divisions(self):
+        divisions, mins, maxes, presorted = _get_divisions(
+            self.frame,
+            self.frame[self.by[0]],
+            self.npartitions,
+            self.ascending,
+            upsample=self.upsample,
+        )
+        if presorted:
+            return mins.copy() + [maxes[-1]]
+        return (None,) * len(divisions)
 
     @property
     def sort_function(self):
