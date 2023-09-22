@@ -772,7 +772,7 @@ class Expr:
 
         Examples
         --------
-        >>> (df + 10).substitute({10: 20})
+        >>> (df + 10).substitute(10, 20)
         df + 20
         """
 
