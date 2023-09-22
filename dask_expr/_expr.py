@@ -2248,9 +2248,11 @@ def optimize_blockwise_fusion(expr):
 
                 group.append(next)
                 for dep in dependencies[next]:
-                    if (dep.npartitions == root.npartitions) and not (
-                        dependents[dep] - set(stack) - set(group)
-                    ):
+                    if (
+                        dep.npartitions == root.npartitions
+                        or dep.npartitions == 1
+                        or root.npartitions == 1
+                    ) and not (dependents[dep] - set(stack) - set(group)):
                         # All of deps dependents are contained
                         # in the local group (or the local stack
                         # of expr nodes that we know we will be
@@ -2381,7 +2383,8 @@ class Fused(Blockwise):
                 graph.update(subgraph)
                 graph[(name, index)] = name
             else:
-                graph[(_expr._name, index)] = _expr._task(index)
+                i = 0 if self._broadcast_dep(_expr) else index
+                graph[(_expr._name, i)] = _expr._task(i)
 
         for i, dep in enumerate(self.dependencies()):
             graph[self._blockwise_arg(dep, index)] = "_" + str(i)
