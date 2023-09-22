@@ -2382,9 +2382,12 @@ class Fused(Blockwise):
                 subgraph, name = _expr._task(index)[1:3]
                 graph.update(subgraph)
                 graph[(name, index)] = name
+            elif self._broadcast_dep(_expr):
+                # When _expr is being broadcasted, we only
+                # want to define a fused task for index 0
+                graph[(_expr._name, 0)] = _expr._task(0)
             else:
-                i = 0 if self._broadcast_dep(_expr) else index
-                graph[(_expr._name, i)] = _expr._task(i)
+                graph[(_expr._name, index)] = _expr._task(index)
 
         for i, dep in enumerate(self.dependencies()):
             graph[self._blockwise_arg(dep, index)] = "_" + str(i)
