@@ -779,7 +779,7 @@ class SetIndex(BaseSetIndexSortValues):
             if any(isinstance(x, Index) for x in p.walk()):
                 # Punt on cases where the new index is part of the filter
                 return
-            predicate = parent.substitute({self: self.frame}).predicate
+            predicate = parent.substitute(self, self.frame).predicate
             return type(self)(self.frame[predicate], *self.operands[1:])
 
 
