@@ -2250,8 +2250,7 @@ def optimize_blockwise_fusion(expr):
                 for dep in dependencies[next]:
                     if (
                         dep.npartitions == root.npartitions
-                        or dep.npartitions == 1
-                        or root.npartitions == 1
+                        or next._broadcast_dep(dep)
                     ) and not (dependents[dep] - set(stack) - set(group)):
                         # All of deps dependents are contained
                         # in the local group (or the local stack
