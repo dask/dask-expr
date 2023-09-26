@@ -28,7 +28,8 @@ def dser(ser):
         ("count", {"pat": "a"}),
         ("endswith", {"pat": "a"}),
         pytest.param(
-            "extract", {"pat": r"[ab](\d)"},
+            "extract",
+            {"pat": r"[ab](\d)"},
             marks=pytest.mark.skipif(
                 not PANDAS_GE_200,
                 reason="Index metadata wrong for pandas<2.0",
