@@ -789,14 +789,18 @@ class Expr:
         return [(self._name, i) for i in range(self.npartitions)]
 
     def substitute(self, old, new) -> Expr:
-        """Substitute specific `Expr` instances within `self`
+        """Substitute a specific term within the expression
+
+        Note that replacing non-`Expr` terms may produce
+        unexpected results, and is not recommended.
+        Substituting boolean values is not allowed.
 
         Parameters
         ----------
-        substitutions:
-            mapping old terms to new terms. Note that using
-            non-`Expr` keys may produce unexpected results,
-            and substituting boolean values is not allowed.
+        old:
+            Old term to find and replace.
+        new:
+            New term to replace instances of `old` with.
 
         Examples
         --------
