@@ -827,6 +827,21 @@ class Expr:
                     update = True
                 new_exprs.append(val)
             elif (
+                isinstance(self, Fused)
+                and isinstance(operand, list)
+                and all(isinstance(op, Expr) for op in operand)
+            ):
+                # Special handling for `Fused`.
+                # We make no promise to dive through a
+                # list operand in general, but NEED to
+                # do so for the `Fused.exprs` operand.
+                val = []
+                for op in operand:
+                    val.append(op.substitute(old, new))
+                    if val[-1]._name != op._name:
+                        update = True
+                new_exprs.append(val)
+            elif (
                 substitute_literal
                 and not isinstance(operand, bool)
                 and isinstance(operand, type(old))
