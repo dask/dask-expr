@@ -1113,9 +1113,15 @@ def optimize(collection, fuse=True):
 
 
 def from_pandas(data, npartitions=1, sort=True):
-    from dask_expr.io.io import FromPandas
+    from dask_expr.io.io import FromPandas, _BackendData
 
-    return new_collection(FromPandas(data.copy(), npartitions=npartitions, sort=sort))
+    return new_collection(
+        FromPandas(
+            _BackendData(data.copy()),
+            npartitions=npartitions,
+            sort=sort,
+        )
+    )
 
 
 def from_graph(*args, **kwargs):
