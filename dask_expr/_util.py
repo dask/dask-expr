@@ -89,7 +89,7 @@ class _BackendData:
 
     def __init__(self, data):
         self._data = data
-        self._division_info = {}
+        self._division_info = LRU(10)
 
     @functools.cached_property
     def _token(self):
