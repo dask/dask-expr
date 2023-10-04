@@ -147,12 +147,16 @@ class FrameBase(DaskMethodsMixin):
             return new_collection(self.expr.__getitem__(other.expr))
         return new_collection(self.expr.__getitem__(other))
 
-    def persist(self, fuse=True, combine_similar=True, **kwargs):
-        out = self.optimize(combine_similar=combine_similar, fuse=fuse)
+    def persist(self, simplify=True, fuse=True, combine_similar=True, **kwargs):
+        out = self.optimize(
+            simplify=simplify, combine_similar=combine_similar, fuse=fuse
+        )
         return DaskMethodsMixin.persist(out, **kwargs)
 
-    def compute(self, fuse=True, combine_similar=True, **kwargs):
-        out = self.optimize(combine_similar=combine_similar, fuse=fuse)
+    def compute(self, simplify=True, fuse=True, combine_similar=True, **kwargs):
+        out = self.optimize(
+            simplify=simplify, combine_similar=combine_similar, fuse=fuse
+        )
         return DaskMethodsMixin.compute(out, **kwargs)
 
     def __dask_graph__(self):
@@ -171,9 +175,20 @@ class FrameBase(DaskMethodsMixin):
     def lower_once(self):
         return new_collection(self.expr.lower_once())
 
-    def optimize(self, combine_similar: bool = True, fuse: bool = True):
+    def optimize(
+        self,
+        lower: bool = True,
+        simplify: bool = True,
+        combine_similar: bool = True,
+        fuse: bool = True,
+    ):
         return new_collection(
-            self.expr.optimize(combine_similar=combine_similar, fuse=fuse)
+            self.expr.optimize(
+                lower=lower,
+                simplify=simplify,
+                combine_similar=combine_similar,
+                fuse=fuse,
+            )
         )
 
     @property

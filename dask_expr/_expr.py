@@ -2151,19 +2151,30 @@ def normalize_expression(expr):
     return expr._name
 
 
-def optimize(expr: Expr, combine_similar: bool = True, fuse: bool = True) -> Expr:
+def optimize(
+    expr: Expr,
+    lower: bool = True,
+    simplify: bool = True,
+    combine_similar: bool = True,
+    fuse: bool = True,
+) -> Expr:
     """High level query optimization
 
     This leverages three optimization passes:
 
-    1.  Class based simplification using the ``_simplify`` function and methods
-    2.  Combine similar operations
-    3.  Blockwise fusion
+    1.  Lowering of abstract expressions
+    2.  Class based simplification using the ``_simplify`` function and methods
+    3.  Combine similar operations
+    4.  Blockwise fusion
 
     Parameters
     ----------
     expr:
         Input expression to optimize
+    lower:
+        whether or not to lower abstract expressions
+    simplify:
+        whether or not to use class-based simplification
     combine_similar:
         whether or not to combine similar operations
         (like `ReadParquet`) to aggregate redundant work.
@@ -2173,16 +2184,23 @@ def optimize(expr: Expr, combine_similar: bool = True, fuse: bool = True) -> Exp
     See Also
     --------
     simplify
+    lower_once
     combine_similar
     optimize_blockwise_fusion
     """
 
     result = expr
-    while True:
-        out = result.simplify().lower_once()
-        if out._name == result._name:
-            break
-        result = out
+    if simplify or lower:
+        while True:
+            if simplify and lower:
+                out = result.simplify().lower_once()
+            elif simplify:
+                out = result.simplify()
+            else:
+                out = result.lower_once()
+            if out._name == result._name:
+                break
+            result = out
 
     if combine_similar:
         result = result.combine_similar()
