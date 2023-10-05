@@ -104,9 +104,18 @@ class FrameBase(DaskMethodsMixin):
         named_schedulers.get("threads", named_schedulers["sync"])
     )
     __dask_optimize__ = staticmethod(lambda dsk, keys, **kwargs: dsk)
+    __method_dispatch__ = {}
 
     def __init__(self, expr):
         self._expr = expr
+
+    @classmethod
+    def register_method(cls, meta_type, name, func):
+        if name not in cls.__method_dispatch__:
+            from dask.utils import Dispatch
+
+            cls.__method_dispatch__[name] = Dispatch(f"{cls.__qualname__}.{name}")
+        cls.__method_dispatch__[name].register(meta_type, func)
 
     @property
     def expr(self) -> expr.Expr:
@@ -189,6 +198,14 @@ class FrameBase(DaskMethodsMixin):
     def __dask_postpersist__(self):
         state = new_collection(self.expr.lower_completely())
         return from_graph, (state._meta, state.divisions, state._name)
+
+    def __getattribute__(self, key):
+        try:
+            func = type(self).__method_dispatch__[key].dispatch(type(self._meta))
+            return functools.partial(func, self)
+        except (TypeError, KeyError):
+            pass
+        return super().__getattribute__(key)
 
     def __getattr__(self, key):
         try:
