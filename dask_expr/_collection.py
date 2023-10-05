@@ -92,7 +92,7 @@ def _wrap_unary_expr_op(self, op=None):
     return new_collection(getattr(self.expr, op)())
 
 
-__class_dispatch__ = {}
+__ext_collections__ = {}  # Track "external" collection classes
 
 
 #
@@ -114,7 +114,7 @@ class FrameBase(DaskMethodsMixin):
     def __new__(cls, *args, **kwargs):
         try:
             typ = type(args[0]._meta)
-            use_cls = __class_dispatch__[cls].dispatch(typ)
+            use_cls = __ext_collections__[cls].dispatch(typ)
             return use_cls(*args, **kwargs)
         except (TypeError, KeyError):
             pass
@@ -125,13 +125,13 @@ class FrameBase(DaskMethodsMixin):
         """Register a custom collection dispatch"""
 
         def wrapper(custom_cls):
-            if cls not in __class_dispatch__:
-                __class_dispatch__[cls] = Dispatch(f"{cls.__qualname__}_dispatch")
+            if cls not in __ext_collections__:
+                __ext_collections__[cls] = Dispatch(f"{cls.__qualname__}_dispatch")
             if isinstance(meta_type, tuple):
                 for t in meta_type:
-                    __class_dispatch__[cls].register(t, custom_cls)
+                    __ext_collections__[cls].register(t, custom_cls)
             else:
-                __class_dispatch__[cls].register(meta_type, custom_cls)
+                __ext_collections__[cls].register(meta_type, custom_cls)
             return custom_cls
 
         return wrapper(custom_cls) if custom_cls is not None else wrapper
