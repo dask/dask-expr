@@ -22,7 +22,7 @@ from dask.dataframe.core import (
 )
 from dask.dataframe.dispatch import meta_nonempty
 from dask.dataframe.utils import has_known_categories
-from dask.utils import IndexCallable, random_state_data, typename
+from dask.utils import Dispatch, IndexCallable, random_state_data, typename
 from fsspec.utils import stringify_path
 from tlz import first
 
@@ -92,6 +92,9 @@ def _wrap_unary_expr_op(self, op=None):
     return new_collection(getattr(self.expr, op)())
 
 
+__class_dispatch__ = {}
+
+
 #
 # Collection classes
 #
@@ -104,28 +107,34 @@ class FrameBase(DaskMethodsMixin):
         named_schedulers.get("threads", named_schedulers["sync"])
     )
     __dask_optimize__ = staticmethod(lambda dsk, keys, **kwargs: dsk)
-    __method_dispatch__ = {}
 
     def __init__(self, expr):
         self._expr = expr
 
+    def __new__(cls, *args, **kwargs):
+        try:
+            typ = type(args[0]._meta)
+            use_cls = __class_dispatch__[cls].dispatch(typ)
+            return use_cls(*args, **kwargs)
+        except (TypeError, KeyError):
+            pass
+        return object.__new__(cls)
+
     @classmethod
-    def register_method(cls, name, meta_type, func=None):
-        """Register a custom method dispatch"""
+    def register_dispatch(cls, meta_type, custom_cls=None):
+        """Register a custom collection dispatch"""
 
-        def wrapper(func):
-            if name not in cls.__method_dispatch__:
-                from dask.utils import Dispatch
-
-                cls.__method_dispatch__[name] = Dispatch(f"{cls.__qualname__}.{name}")
+        def wrapper(custom_cls):
+            if cls not in __class_dispatch__:
+                __class_dispatch__[cls] = Dispatch(f"{cls.__qualname__}_dispatch")
             if isinstance(meta_type, tuple):
                 for t in meta_type:
-                    cls.__method_dispatch__[name].register(t, func)
+                    __class_dispatch__[cls].register(t, custom_cls)
             else:
-                cls.__method_dispatch__[name].register(meta_type, func)
-            return func
+                __class_dispatch__[cls].register(meta_type, custom_cls)
+            return custom_cls
 
-        return wrapper(func) if func is not None else wrapper
+        return wrapper(custom_cls) if custom_cls is not None else wrapper
 
     @property
     def expr(self) -> expr.Expr:
@@ -208,14 +217,6 @@ class FrameBase(DaskMethodsMixin):
     def __dask_postpersist__(self):
         state = new_collection(self.expr.lower_completely())
         return from_graph, (state._meta, state.divisions, state._name)
-
-    def __getattribute__(self, key):
-        try:
-            func = type(self).__method_dispatch__[key].dispatch(type(self._meta))
-            return functools.partial(func, self)
-        except (TypeError, KeyError):
-            pass
-        return super().__getattribute__(key)
 
     def __getattr__(self, key):
         try:
