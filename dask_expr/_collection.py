@@ -110,12 +110,22 @@ class FrameBase(DaskMethodsMixin):
         self._expr = expr
 
     @classmethod
-    def register_method(cls, meta_type, name, func):
-        if name not in cls.__method_dispatch__:
-            from dask.utils import Dispatch
+    def register_method(cls, name, meta_type, func=None):
+        """Register a custom method dispatch"""
 
-            cls.__method_dispatch__[name] = Dispatch(f"{cls.__qualname__}.{name}")
-        cls.__method_dispatch__[name].register(meta_type, func)
+        def wrapper(func):
+            if name not in cls.__method_dispatch__:
+                from dask.utils import Dispatch
+
+                cls.__method_dispatch__[name] = Dispatch(f"{cls.__qualname__}.{name}")
+            if isinstance(meta_type, tuple):
+                for t in meta_type:
+                    cls.__method_dispatch__[name].register(t, func)
+            else:
+                cls.__method_dispatch__[name].register(meta_type, func)
+            return func
+
+        return wrapper(func) if func is not None else wrapper
 
     @property
     def expr(self) -> expr.Expr:
