@@ -22,7 +22,7 @@ from dask.dataframe.core import (
 )
 from dask.dataframe.dispatch import meta_nonempty
 from dask.dataframe.utils import has_known_categories
-from dask.utils import Dispatch, IndexCallable, random_state_data, typename
+from dask.utils import IndexCallable, random_state_data, typename
 from fsspec.utils import stringify_path
 from tlz import first
 
@@ -48,7 +48,13 @@ from dask_expr._reductions import (
 from dask_expr._repartition import Repartition
 from dask_expr._shuffle import SetIndex, SetIndexBlockwise, SortValues
 from dask_expr._str_accessor import StringAccessor
-from dask_expr._util import _BackendData, _convert_to_list, is_scalar
+from dask_expr._util import (
+    _BackendData,
+    _convert_to_list,
+    _get_ext_dispatch,
+    _register_ext_dispatch,
+    is_scalar,
+)
 
 #
 # Utilities to wrap Expr API
@@ -92,9 +98,6 @@ def _wrap_unary_expr_op(self, op=None):
     return new_collection(getattr(self.expr, op)())
 
 
-__ext_collections__ = {}  # Track "external" collection classes
-
-
 #
 # Collection classes
 #
@@ -112,29 +115,15 @@ class FrameBase(DaskMethodsMixin):
         self._expr = expr
 
     def __new__(cls, expr):
-        try:
-            typ = type(expr._meta)
-            use_cls = __ext_collections__[cls].dispatch(typ)
+        use_cls = _get_ext_dispatch(cls, expr._meta)
+        if use_cls:
             return use_cls(expr)
-        except (TypeError, KeyError):
-            pass
         return object.__new__(cls)
 
     @classmethod
     def register_dispatch(cls, meta_type, custom_cls=None):
         """Register a custom collection dispatch"""
-
-        def wrapper(custom_cls):
-            if cls not in __ext_collections__:
-                __ext_collections__[cls] = Dispatch(f"{cls.__qualname__}_dispatch")
-            if isinstance(meta_type, tuple):
-                for t in meta_type:
-                    __ext_collections__[cls].register(t, custom_cls)
-            else:
-                __ext_collections__[cls].register(meta_type, custom_cls)
-            return custom_cls
-
-        return wrapper(custom_cls) if custom_cls is not None else wrapper
+        return _register_ext_dispatch(cls, meta_type, custom_cls)
 
     @property
     def expr(self) -> expr.Expr:
