@@ -26,12 +26,14 @@ from dask.dataframe.core import (
 from dask.dataframe.dispatch import meta_nonempty
 from dask.dataframe.utils import clear_known_categories, drop_by_shallow_copy
 from dask.typing import no_default
-from dask.utils import M, apply, funcname, import_required, is_arraylike
+from dask.utils import Dispatch, M, apply, funcname, import_required, is_arraylike
 from tlz import merge_sorted, unique
 
 from dask_expr._util import _BackendData, _tokenize_deterministic, _tokenize_partial
 
 replacement_rules = []
+
+__ext_exprs__ = {}  # Track "external" expression classes
 
 
 class Expr:
@@ -60,6 +62,31 @@ class Expr:
                 # Raise a ValueError instead of AttributeError to
                 # avoid infinite recursion
                 raise ValueError(f"{dep} has no attribute {self._required_attribute}")
+
+    def __new__(cls, *args, **kwargs):
+        try:
+            typ = type(args[0]._meta)
+            use_cls = __ext_exprs__[cls].dispatch(typ)
+            return use_cls(*args, **kwargs)
+        except (TypeError, KeyError, AttributeError):
+            pass
+        return object.__new__(cls)
+
+    @classmethod
+    def register_dispatch(cls, meta_type, custom_cls=None):
+        """Register a custom collection dispatch"""
+
+        def wrapper(custom_cls):
+            if cls not in __ext_exprs__:
+                __ext_exprs__[cls] = Dispatch(f"{cls.__qualname__}_dispatch")
+            if isinstance(meta_type, tuple):
+                for t in meta_type:
+                    __ext_exprs__[cls].register(t, custom_cls)
+            else:
+                __ext_exprs__[cls].register(meta_type, custom_cls)
+            return custom_cls
+
+        return wrapper(custom_cls) if custom_cls is not None else wrapper
 
     @property
     def _required_attribute(self) -> str:

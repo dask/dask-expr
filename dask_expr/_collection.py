@@ -111,11 +111,11 @@ class FrameBase(DaskMethodsMixin):
     def __init__(self, expr):
         self._expr = expr
 
-    def __new__(cls, *args, **kwargs):
+    def __new__(cls, expr):
         try:
-            typ = type(args[0]._meta)
+            typ = type(expr._meta)
             use_cls = __ext_collections__[cls].dispatch(typ)
-            return use_cls(*args, **kwargs)
+            return use_cls(expr)
         except (TypeError, KeyError):
             pass
         return object.__new__(cls)
