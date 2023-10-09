@@ -220,7 +220,6 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
             frame = Repartition(frame, n=npartitions_out)
 
         if partitioning_index != ["_partitions"]:
-
             if cls.lazy_hash_support:
                 # Don't need to assign "_partitions" column
                 # if we are shuffling on a list of columns
