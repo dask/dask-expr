@@ -240,6 +240,17 @@ def test_sort_values(df, pdf, shuffle):
         df.sort_values(by="x", shuffle=shuffle, na_position="bla")
 
 
+@pytest.mark.parametrize("shuffle", [None, "tasks"])
+def test_sort_values_temporary_column_dropped(shuffle):
+    pdf = lib.DataFrame(
+        {"x": range(10), "y": [1, 2, 3, 4, 5] * 2, "z": ["cat", "dog"] * 5}
+    )
+    df = from_pandas(pdf, npartitions=2)
+    _sorted = df.sort_values(["z"], shuffle=shuffle)
+    result = _sorted.compute()
+    assert "_partitions" not in result.columns
+
+
 def test_sort_values_optimize(df, pdf):
     q = df.sort_values("x")["y"].optimize(fuse=False)
     expected = df[["x", "y"]].sort_values("x")["y"].optimize(fuse=False)
