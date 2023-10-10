@@ -2188,7 +2188,8 @@ def optimize(
         whether or not to combine similar operations
         (like `ReadParquet`) to aggregate redundant work.
     fuse:
-        whether or not to turn on blockwise fusion
+        whether or not to turn on blockwise fusion.
+        Fusion also requires ``lower == True``.
 
     See Also
     --------
@@ -2214,7 +2215,7 @@ def optimize(
     if combine_similar:
         result = result.combine_similar()
 
-    if fuse:
+    if fuse and lower:
         result = optimize_blockwise_fusion(result)
 
     return result

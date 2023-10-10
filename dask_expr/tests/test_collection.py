@@ -1256,3 +1256,43 @@ def test_replace_filtered_combine_similar():
     # Filter expressions (and not the other way around)
     similar = list(df.find_operations(Replace))
     assert all(isinstance(op.frame, Filter) for op in similar)
+
+
+@pytest.mark.parametrize("fuse", [True, False])
+@pytest.mark.parametrize("combine_similar", [True, False])
+@pytest.mark.parametrize("simplify", [True, False])
+def test_optimize_lower_false(fuse, combine_similar, simplify):
+    from dask_expr._shuffle import SortValues
+
+    pdf = lib.DataFrame({"a": [1, 6, 2, 4, 5, 3], "b": 1, "c": 2})
+
+    df = from_pandas(pdf, npartitions=2)
+    df = df.sort_values("a")
+    df = df[df.a > 3]
+    df = df.replace(5, 4)
+
+    expect = pdf.sort_values("a")
+    expect = expect[expect.a > 3]
+    expect = expect.replace(5, 4)
+
+    result = df.optimize(
+        lower=False,
+        fuse=fuse,
+        simplify=simplify,
+        combine_similar=combine_similar,
+    )
+
+    # Check that SortValues was not lowered
+    assert result.find_operations(SortValues)
+
+    # Check that we get correct results
+    # (with and without the same compute args)
+    assert_eq(result, expect)
+    assert_eq(
+        result.compute(
+            fuse=fuse,
+            simplify=simplify,
+            combine_similar=combine_similar,
+        ),
+        expect,
+    )

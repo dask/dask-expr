@@ -155,7 +155,7 @@ class FrameBase(DaskMethodsMixin):
 
     def compute(self, simplify=True, fuse=True, combine_similar=True, **kwargs):
         out = self.optimize(
-            simplify=simplify, combine_similar=combine_similar, fuse=fuse
+            lower=True, simplify=simplify, combine_similar=combine_similar, fuse=fuse
         )
         return DaskMethodsMixin.compute(out, **kwargs)
 
