@@ -2163,7 +2163,6 @@ def normalize_expression(expr):
 def optimize(
     expr: Expr,
     lower: bool = True,
-    simplify: bool = True,
     combine_similar: bool = True,
     fuse: bool = True,
 ) -> Expr:
@@ -2182,8 +2181,6 @@ def optimize(
         Input expression to optimize
     lower:
         whether or not to lower abstract expressions
-    simplify:
-        whether or not to use class-based simplification
     combine_similar:
         whether or not to combine similar operations
         (like `ReadParquet`) to aggregate redundant work.
@@ -2200,17 +2197,14 @@ def optimize(
     """
 
     result = expr
-    if simplify or lower:
-        while True:
-            if simplify and lower:
-                out = result.simplify().lower_once()
-            elif simplify:
-                out = result.simplify()
-            else:
-                out = result.lower_once()
-            if out._name == result._name:
-                break
-            result = out
+    while True:
+        if lower:
+            out = result.simplify().lower_once()
+        else:
+            out = result.simplify()
+        if out._name == result._name:
+            break
+        result = out
 
     if combine_similar:
         result = result.combine_similar()

@@ -1260,8 +1260,7 @@ def test_replace_filtered_combine_similar():
 
 @pytest.mark.parametrize("fuse", [True, False])
 @pytest.mark.parametrize("combine_similar", [True, False])
-@pytest.mark.parametrize("simplify", [True, False])
-def test_optimize_lower_false(fuse, combine_similar, simplify):
+def test_optimize_lower_false(fuse, combine_similar):
     from dask_expr._shuffle import SortValues
 
     pdf = lib.DataFrame({"a": [1, 6, 2, 4, 5, 3], "b": 1, "c": 2})
@@ -1278,7 +1277,6 @@ def test_optimize_lower_false(fuse, combine_similar, simplify):
     result = df.optimize(
         lower=False,
         fuse=fuse,
-        simplify=simplify,
         combine_similar=combine_similar,
     )
 
@@ -1291,7 +1289,6 @@ def test_optimize_lower_false(fuse, combine_similar, simplify):
     assert_eq(
         result.compute(
             fuse=fuse,
-            simplify=simplify,
             combine_similar=combine_similar,
         ),
         expect,
