@@ -219,20 +219,20 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
         if npartitions_out < frame.npartitions:
             frame = Repartition(frame, n=npartitions_out)
 
-        if cls.lazy_hash_support:
-            # Don't need to assign "_partitions" column
-            # if we are shuffling on a list of columns
-            nset = set(partitioning_index)
-            if nset & set(frame.columns) == nset:
-                return cls(
-                    frame,
-                    partitioning_index,
-                    npartitions_out,
-                    ignore_index,
-                    options,
-                )
-
         if partitioning_index != ["_partitions"]:
+            if cls.lazy_hash_support:
+                # Don't need to assign "_partitions" column
+                # if we are shuffling on a list of columns
+                nset = set(partitioning_index)
+                if nset & set(frame.columns) == nset:
+                    return cls(
+                        frame,
+                        partitioning_index,
+                        npartitions_out,
+                        ignore_index,
+                        options,
+                    )
+
             # Assign new "_partitions" column
             index_added = AssignPartitioningIndex(
                 frame,
@@ -607,8 +607,8 @@ class AssignPartitioningIndex(Blockwise):
 
     _parameters = ["frame", "partitioning_index", "index_name", "npartitions_out"]
 
-    @classmethod
-    def operation(cls, df, index, name: str, npartitions: int):
+    @staticmethod
+    def operation(df, index, name: str, npartitions: int):
         """Construct a hash-based partitioning index"""
         index = _select_columns_or_index(df, index)
         if isinstance(index, (str, list, tuple)):
@@ -794,6 +794,8 @@ class SortValues(BaseSetIndexSortValues):
         "sort_function",
         "sort_function_kwargs",
         "upsample",
+        "ignore_index",
+        "shuffle",  # Shuffle backend
     ]
     _defaults = {
         "partition_size": 128e6,
@@ -803,6 +805,8 @@ class SortValues(BaseSetIndexSortValues):
         "sort_function": None,
         "sort_function_kwargs": None,
         "upsample": 1.0,
+        "ignore_index": False,
+        "shuffle": None,
     }
 
     def _divisions(self):
@@ -829,6 +833,7 @@ class SortValues(BaseSetIndexSortValues):
             "by": self.by,
             "ascending": self.ascending,
             "na_position": self.na_position,
+            "ignore_index": self.ignore_index,
         }
         if self.operand("sort_function_kwargs") is not None:
             sort_kwargs.update(self.operand("sort_function_kwargs"))
@@ -856,7 +861,8 @@ class SortValues(BaseSetIndexSortValues):
             assigned,
             "_partitions",
             npartitions_out=len(divisions) - 1,
-            ignore_index=True,
+            ignore_index=self.ignore_index,
+            backend=self.shuffle,
         )
         return SortValuesBlockwise(
             shuffled, self.sort_function, self.sort_function_kwargs
@@ -958,7 +964,8 @@ class _SetIndexPost(Blockwise):
     _parameters = ["frame", "index_name", "drop", "set_name"]
     _is_length_preserving = True
 
-    def operation(self, df, index_name, drop, set_name):
+    @staticmethod
+    def operation(df, index_name, drop, set_name):
         return df.set_index(set_name, drop=drop).rename_axis(index=index_name)
 
 
@@ -975,7 +982,8 @@ class SortValuesBlockwise(Blockwise):
     _keyword_only = ["sort_function", "sort_kwargs"]
     _is_length_preserving = True
 
-    def operation(self, *args, **kwargs):
+    @staticmethod
+    def operation(*args, **kwargs):
         sort_func = kwargs.pop("sort_function")
         sort_kwargs = kwargs.pop("sort_kwargs")
         return sort_func(*args, **kwargs, **sort_kwargs)
@@ -990,7 +998,8 @@ class SetIndexBlockwise(Blockwise):
     _keyword_only = ["drop", "new_divisions"]
     _is_length_preserving = True
 
-    def operation(self, df, *args, new_divisions, **kwargs):
+    @staticmethod
+    def operation(df, *args, new_divisions, **kwargs):
         return df.set_index(*args, **kwargs)
 
     def _divisions(self):
