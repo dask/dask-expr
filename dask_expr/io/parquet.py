@@ -44,6 +44,7 @@ from dask_expr._expr import (
     Projection,
 )
 from dask_expr._reductions import Len
+from dask_expr._repartition import RepartitionToFewer
 from dask_expr._util import _convert_to_list
 from dask_expr.io import BlockwiseIO, PartitionsFiltered
 
@@ -559,6 +560,17 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             column = _convert_to_list(self.operand("columns"))[0]
             return meta[column]
         return meta
+
+    def _inject_operations(self, parent):
+        if isinstance(parent, RepartitionToFewer):
+            return
+        nr_original_columns = len(self._dataset_info["schema"].names) - 1
+        factor = len(_convert_to_list(self.operand("columns"))) / nr_original_columns
+        if factor > 0.7:
+            # Don't bother if the difference is too small
+            return
+        new_partitions = max(int(factor * self.npartitions), 1)
+        return RepartitionToFewer(self, new_partitions)
 
     @cached_property
     def _plan(self):
