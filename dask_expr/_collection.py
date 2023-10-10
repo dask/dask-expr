@@ -149,7 +149,7 @@ class FrameBase(DaskMethodsMixin):
 
     def persist(self, simplify=True, fuse=True, combine_similar=True, **kwargs):
         out = self.optimize(
-            simplify=simplify, combine_similar=combine_similar, fuse=fuse
+            lower=True, simplify=simplify, combine_similar=combine_similar, fuse=fuse
         )
         return DaskMethodsMixin.persist(out, **kwargs)
 
