@@ -570,7 +570,11 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             # Don't bother if the difference is too small
             return
         new_partitions = max(int(factor * self.npartitions), 1)
-        return RepartitionToFewer(self, new_partitions)
+        if new_partitions == self.npartitions:
+            return
+        return type(parent)(
+            RepartitionToFewer(self, new_partitions), *parent.operands[1:]
+        )
 
     @cached_property
     def _plan(self):
