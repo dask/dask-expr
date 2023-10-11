@@ -135,7 +135,7 @@ class FusedIO(PartitionsFiltered, BlockwiseIO):
 
     @functools.cached_property
     def npartitions(self):
-        return len(self._fusion_boundaries) - 1
+        return len(self._fusion_buckets)
 
     @functools.cached_property
     def divisions(self):
@@ -147,27 +147,22 @@ class FusedIO(PartitionsFiltered, BlockwiseIO):
 
     def _divisions(self):
         divisions = self.operand("expr")._divisions()
-        return tuple(divisions[i] for i in self._fusion_boundaries)
+        new_divisions = [divisions[b[0]] for b in self._fusion_buckets]
+        new_divisions.append(self._fusion_buckets[-1][-1])
+        return tuple(new_divisions)
 
     def _filtered_task(self, index: int):
         expr = self.operand("expr")
-        boundaries = self._fusion_boundaries
-        return (
-            methods.concat,
-            [
-                expr._filtered_task(i)
-                for i in range(boundaries[index], boundaries[index + 1])
-            ],
-        )
+        bucket = self._fusion_buckets[index]
+        return (methods.concat, [expr._filtered_task(i) for i in bucket])
 
     @functools.cached_property
-    def _fusion_boundaries(self):
-        npartitions = self.operand("expr").npartitions
-        boundaries = list(
-            range(0, npartitions, math.ceil(1 / self.operand("expr")._factor))
-        )
-        boundaries.append(npartitions)
-        return boundaries
+    def _fusion_buckets(self):
+        step = math.ceil(1 / self.operand("expr")._factor)
+        partitions = self.operand("expr")._partitions
+        npartitions = len(partitions)
+        buckets = [partitions[i : i + step] for i in range(0, npartitions, step)]
+        return buckets
 
 
 class FromPandas(PartitionsFiltered, BlockwiseIO):
