@@ -1,3 +1,5 @@
+from collections import OrderedDict
+
 import pytest
 from dask.dataframe.utils import assert_eq
 
@@ -344,6 +346,7 @@ def test_set_index_predicate_pushdown(df, pdf):
 
 
 def test_set_index_sort_values_one_partition(pdf):
+    divisions_lru.data = OrderedDict()
     df = from_pandas(pdf, sort=False)
     query = df.sort_values("x").optimize(fuse=False)
     assert query.divisions == (None, None)
