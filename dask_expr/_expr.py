@@ -2249,9 +2249,8 @@ def optimize_io_fusion(expr):
         changed = False
         for operand in expr.operands:
             if isinstance(operand, Expr):
-                if isinstance(operand, BlockwiseIO) and operand._factor < 0.7:
+                if isinstance(operand, BlockwiseIO) and operand._factor < 1:
                     new = FusedIO(operand)
-                    new.npartitions
                 elif isinstance(operand, BlockwiseIO):
                     new = operand
                 else:

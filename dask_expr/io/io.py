@@ -126,7 +126,7 @@ class BlockwiseIO(Blockwise, IO):
         return
 
 
-class FusedIO(PartitionsFiltered, BlockwiseIO):
+class FusedIO(BlockwiseIO):
     _parameters = ["expr"]
 
     @functools.cached_property
@@ -137,21 +137,13 @@ class FusedIO(PartitionsFiltered, BlockwiseIO):
     def npartitions(self):
         return len(self._fusion_buckets)
 
-    @functools.cached_property
-    def divisions(self):
-        return self._divisions()
-
-    @functools.cached_property
-    def _partitions(self) -> list | tuple | range:
-        return list(range(self.npartitions))
-
     def _divisions(self):
         divisions = self.operand("expr")._divisions()
         new_divisions = [divisions[b[0]] for b in self._fusion_buckets]
         new_divisions.append(self._fusion_buckets[-1][-1])
         return tuple(new_divisions)
 
-    def _filtered_task(self, index: int):
+    def _task(self, index: int):
         expr = self.operand("expr")
         bucket = self._fusion_buckets[index]
         return (methods.concat, [expr._filtered_task(i) for i in bucket])
