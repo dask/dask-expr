@@ -5,6 +5,7 @@ from dask.dataframe.utils import assert_eq
 
 from dask_expr import SetIndexBlockwise, from_pandas
 from dask_expr._expr import Blockwise
+from dask_expr._repartition import RepartitionToFewer
 from dask_expr._shuffle import divisions_lru
 from dask_expr.io import FromPandas
 from dask_expr.tests._util import _backend_library
@@ -358,3 +359,10 @@ def test_set_index_sort_values_one_partition(pdf):
     assert query.divisions == (None, None)
     assert_eq(pdf.set_index("x"), query)
     assert len(divisions_lru) == 0
+
+    df = from_pandas(pdf, sort=False, npartitions=2)
+    query = df.set_index("x", npartitions=1).optimize(fuse=False)
+    assert query.divisions == (None, None)
+    assert_eq(pdf.set_index("x"), query)
+    assert len(divisions_lru) == 0
+    assert len(list(query.expr.find_operations(RepartitionToFewer))) > 0
