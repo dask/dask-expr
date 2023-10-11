@@ -52,7 +52,7 @@ class BlockwiseIO(Blockwise, IO):
     _absorb_projections = False
 
     @functools.cached_property
-    def _factor(self):
+    def _fusion_compression_factor(self):
         return 1
 
     def _simplify_up(self, parent):
@@ -150,7 +150,7 @@ class FusedIO(BlockwiseIO):
 
     @functools.cached_property
     def _fusion_buckets(self):
-        step = math.ceil(1 / self.operand("expr")._factor)
+        step = math.ceil(1 / self.operand("expr")._fusion_compression_factor)
         partitions = self.operand("expr")._partitions
         npartitions = len(partitions)
         buckets = [partitions[i : i + step] for i in range(0, npartitions, step)]

@@ -644,7 +644,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
                 )
 
     @functools.cached_property
-    def _factor(self):
+    def _fusion_compression_factor(self):
         if self.operand("columns") is None:
             return 1
         nr_original_columns = len(self._dataset_info["schema"].names) - 1

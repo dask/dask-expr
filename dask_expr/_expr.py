@@ -2249,7 +2249,10 @@ def optimize_io_fusion(expr):
         changed = False
         for operand in expr.operands:
             if isinstance(operand, Expr):
-                if isinstance(operand, BlockwiseIO) and operand._factor < 1:
+                if (
+                    isinstance(operand, BlockwiseIO)
+                    and operand._fusion_compression_factor < 1
+                ):
                     new = FusedIO(operand)
                 elif isinstance(operand, BlockwiseIO):
                     new = operand
