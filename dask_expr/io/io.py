@@ -3,6 +3,7 @@ from __future__ import annotations
 import functools
 import math
 
+from dask.dataframe import methods
 from dask.dataframe.core import is_dataframe_like
 from dask.dataframe.io.io import sorted_division_locations
 
@@ -49,6 +50,10 @@ class FromGraph(IO):
 
 class BlockwiseIO(Blockwise, IO):
     _absorb_projections = False
+
+    @functools.cached_property
+    def _factor(self):
+        return 1
 
     def _simplify_up(self, parent):
         if (
@@ -119,6 +124,50 @@ class BlockwiseIO(Blockwise, IO):
                 return new[columns_operand[0]] if self._series else new[columns_operand]
 
         return
+
+
+class FusedIO(PartitionsFiltered, BlockwiseIO):
+    _parameters = ["expr"]
+
+    @functools.cached_property
+    def _meta(self):
+        return self.operand("expr")._meta
+
+    @functools.cached_property
+    def npartitions(self):
+        return len(self._fusion_boundaries) - 1
+
+    @functools.cached_property
+    def divisions(self):
+        return self._divisions()
+
+    @functools.cached_property
+    def _partitions(self) -> list | tuple | range:
+        return list(range(self.npartitions))
+
+    def _divisions(self):
+        divisions = self.operand("expr")._divisions()
+        return tuple(divisions[i] for i in self._fusion_boundaries)
+
+    def _filtered_task(self, index: int):
+        expr = self.operand("expr")
+        boundaries = self._fusion_boundaries
+        return (
+            methods.concat,
+            [
+                expr._filtered_task(i)
+                for i in range(boundaries[index], boundaries[index + 1])
+            ],
+        )
+
+    @functools.cached_property
+    def _fusion_boundaries(self):
+        npartitions = self.operand("expr").npartitions
+        boundaries = list(
+            range(0, npartitions, math.ceil(1 / self.operand("expr")._factor))
+        )
+        boundaries.append(npartitions)
+        return boundaries
 
 
 class FromPandas(PartitionsFiltered, BlockwiseIO):

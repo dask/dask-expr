@@ -481,61 +481,6 @@ class Expr:
                     common = common._simplify_down() or common
             return common
 
-    def inject_operations(self):
-        """Inject operations to create a smarter expression
-
-        This leverages the ``._inject_operations`` method defined on each class
-
-        Returns
-        -------
-        expr:
-            output expression
-        changed:
-            whether or not any change occured
-        """
-        expr = self
-
-        while True:
-            _continue = False
-
-            # Allow children to simplify their parents
-            for child in expr.dependencies():
-                out = child._inject_operations(expr)
-                if out is None:
-                    out = expr
-                if not isinstance(out, Expr):
-                    return out
-                if out is not expr and out._name != expr._name:
-                    expr = out
-                    _continue = True
-                    break
-
-            if _continue:
-                continue
-
-            # Simplify all of the children
-            new_operands = []
-            changed = False
-            for operand in expr.operands:
-                if isinstance(operand, Expr):
-                    new = operand.inject_operations()
-                    if new._name != operand._name:
-                        changed = True
-                else:
-                    new = operand
-                new_operands.append(new)
-
-            if changed:
-                expr = type(expr)(*new_operands)
-                continue
-            else:
-                break
-
-        return expr
-
-    def _inject_operations(self, parent):
-        return
-
     def _remove_operations(self, frame, remove_ops, skip_ops=None):
         """Searches for operations that we have to push up again to avoid
         the duplication of branches that are doing the same.
@@ -2251,9 +2196,8 @@ def optimize(expr: Expr, combine_similar: bool = True, fuse: bool = True) -> Exp
     if combine_similar:
         result = result.combine_similar()
 
-    result = result.inject_operations()
-
     if fuse:
+        result = optimize_io_fusion(result)
         result = optimize_blockwise_fusion(result)
 
     return result
@@ -2294,6 +2238,38 @@ def are_co_aligned(*exprs):
 
 
 ## Utilites for Expr fusion
+
+
+def optimize_io_fusion(expr):
+    """Traverse the expression graph and apply fusion to the I/O layer that squashes
+    partitions together if possible."""
+
+    def _fusion_pass(expr):
+        new_operands = []
+        changed = False
+        for operand in expr.operands:
+            if isinstance(operand, Expr):
+                if isinstance(operand, BlockwiseIO) and operand._factor < 0.7:
+                    new = FusedIO(operand)
+                    new.npartitions
+                elif isinstance(operand, BlockwiseIO):
+                    new = operand
+                else:
+                    new = _fusion_pass(operand)
+
+                if new._name != operand._name:
+                    changed = True
+            else:
+                new = operand
+            new_operands.append(new)
+
+        if changed:
+            expr = type(expr)(*new_operands)
+
+        return expr
+
+    expr = _fusion_pass(expr)
+    return expr
 
 
 def optimize_blockwise_fusion(expr):
@@ -2529,4 +2505,4 @@ from dask_expr._reductions import (
     Sum,
     Var,
 )
-from dask_expr.io import IO, BlockwiseIO
+from dask_expr.io import IO, BlockwiseIO, FusedIO
