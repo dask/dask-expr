@@ -136,6 +136,8 @@ class Expr:
         return hash(self._name)
 
     def __reduce__(self):
+        if dask.config.get("dask-expr-no-serialize", False):
+            raise RuntimeError(f"Serializing a {type(self)} object")
         return type(self), tuple(self.operands)
 
     def _depth(self):
