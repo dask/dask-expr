@@ -423,6 +423,7 @@ def create_assign_index_merge_transfer():
         else:
             index = partitioning_index(index, npartitions)
         df[name] = index
+        meta[name] = 0
         return merge_transfer(df, id, input_partition, npartitions, meta, parts_out)
 
     return assign_index_merge_transfer
