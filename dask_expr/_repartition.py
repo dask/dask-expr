@@ -1,6 +1,7 @@
 import functools
 from operator import getitem
 from pprint import pformat
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -44,7 +45,12 @@ class Repartition(Expr):
             # This lower logic should not be inherited
             return None
         if self.n is not None:
-            if self.n < self.frame.npartitions:
+            n = (
+                self.n(self.frame.npartitions)
+                if isinstance(self.n, Callable)
+                else self.n
+            )
+            if n < self.frame.npartitions:
                 return RepartitionToFewer(self.frame, self.n)
             else:
                 original_divisions = divisions = pd.Series(
@@ -54,7 +60,7 @@ class Repartition(Expr):
                     is_datetime64_any_dtype(divisions.dtype)
                     or is_numeric_dtype(divisions.dtype)
                 ):
-                    npartitions = self.n
+                    npartitions = n
                     df = self.frame
                     if is_datetime64_any_dtype(divisions.dtype):
                         divisions = divisions.values.astype("float64")
@@ -115,9 +121,11 @@ class RepartitionToFewer(Repartition):
 
     @functools.cached_property
     def _partitions_boundaries(self):
-        npartitions = self.n
+        npartitions = (
+            self.n(self.frame.npartitions) if isinstance(self.n, Callable) else self.n
+        )
         npartitions_input = self.frame.npartitions
-        assert npartitions_input > self.n
+        assert npartitions_input > npartitions
 
         npartitions_ratio = npartitions_input / npartitions
         new_partitions_boundaries = [
@@ -152,7 +160,8 @@ class RepartitionToMore(Repartition):
     @functools.cached_property
     def _nsplits(self):
         df = self.frame
-        div, mod = divmod(self.n, df.npartitions)
+        n = self.n(self.frame.npartitions) if isinstance(self.n, Callable) else self.n
+        div, mod = divmod(n, df.npartitions)
         nsplits = [div] * df.npartitions
         nsplits[-1] += mod
         if len(nsplits) != df.npartitions:
