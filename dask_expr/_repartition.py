@@ -45,12 +45,7 @@ class Repartition(Expr):
             # This lower logic should not be inherited
             return None
         if self.n is not None:
-            n = (
-                self.n(self.frame.npartitions)
-                if isinstance(self.n, Callable)
-                else self.n
-            )
-            if n < self.frame.npartitions:
+            if self._n < self.frame.npartitions:
                 return RepartitionToFewer(self.frame, self.n)
             else:
                 original_divisions = divisions = pd.Series(
@@ -60,7 +55,7 @@ class Repartition(Expr):
                     is_datetime64_any_dtype(divisions.dtype)
                     or is_numeric_dtype(divisions.dtype)
                 ):
-                    npartitions = n
+                    npartitions = self._n
                     df = self.frame
                     if is_datetime64_any_dtype(divisions.dtype):
                         divisions = divisions.values.astype("float64")
@@ -110,6 +105,12 @@ class Repartition(Expr):
         if isinstance(parent, Projection):
             return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
 
+    @functools.cached_property
+    def _n(self):
+        return (
+            self.n(self.frame.npartitions) if isinstance(self.n, Callable) else self.n
+        )
+
 
 class RepartitionToFewer(Repartition):
     """Reduce the partition count"""
@@ -121,9 +122,7 @@ class RepartitionToFewer(Repartition):
 
     @functools.cached_property
     def _partitions_boundaries(self):
-        npartitions = (
-            self.n(self.frame.npartitions) if isinstance(self.n, Callable) else self.n
-        )
+        npartitions = self._n
         npartitions_input = self.frame.npartitions
         assert npartitions_input > npartitions
 
@@ -160,8 +159,7 @@ class RepartitionToMore(Repartition):
     @functools.cached_property
     def _nsplits(self):
         df = self.frame
-        n = self.n(self.frame.npartitions) if isinstance(self.n, Callable) else self.n
-        div, mod = divmod(n, df.npartitions)
+        div, mod = divmod(self._n, df.npartitions)
         nsplits = [div] * df.npartitions
         nsplits[-1] += mod
         if len(nsplits) != df.npartitions:
