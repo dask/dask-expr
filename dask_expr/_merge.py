@@ -162,6 +162,9 @@ class Merge(Expr):
             right = AssignPartitioningIndex(
                 right, shuffle_right_on, _HASH_COLUMN_NAME, self.npartitions
             )
+            left = Repartition(left, lambda x: x // 2)
+            right = Repartition(right, lambda x: x // 2)
+
             return HashJoinP2P(
                 left,
                 right,
