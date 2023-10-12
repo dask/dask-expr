@@ -1,4 +1,5 @@
 import importlib
+import pickle
 
 import pytest
 from dask import config
@@ -30,7 +31,10 @@ def assert_eq(a, b, *args, serialize_graph=True, **kwargs):
             with config.set({"dask-expr-no-serialize": True}):
                 for obj in [a, b]:
                     if hasattr(obj, "dask"):
-                        serialize(ToPickle(obj.dask))
+                        try:
+                            pickle.dumps(obj.dask)
+                        except (AttributeError, pickle.PicklingError):
+                            serialize(ToPickle(obj.dask))
         except ImportError:
             pass
 
