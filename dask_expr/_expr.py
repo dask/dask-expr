@@ -2298,8 +2298,9 @@ def optimize_blockwise_fusion(expr):
                     dependents[next._name] = set()
                     expr_mapping[next._name] = next
 
+            next_deps = [dep._name for dep in next.dependencies()]
             for operand in next.operands:
-                if isinstance(operand, Expr):
+                if isinstance(operand, Expr) and operand._name in next_deps:
                     stack.append(operand)
                     if isinstance(operand, Blockwise):
                         if next._name in dependencies:

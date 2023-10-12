@@ -157,13 +157,11 @@ class Merge(Expr):
             and get_default_shuffle_method() == "p2p"
         ):
             left = AssignPartitioningIndex(
-                left, shuffle_left_on, _HASH_COLUMN_NAME, self.npartitions
+                left, shuffle_left_on, _HASH_COLUMN_NAME, lambda x: x, right
             )
             right = AssignPartitioningIndex(
-                right, shuffle_right_on, _HASH_COLUMN_NAME, self.npartitions
+                right, shuffle_right_on, _HASH_COLUMN_NAME, lambda x: x, left
             )
-            left = Repartition(left, lambda x: x // 2)
-            right = Repartition(right, lambda x: x // 2)
 
             return HashJoinP2P(
                 left,

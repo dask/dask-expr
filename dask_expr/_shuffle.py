@@ -2,6 +2,7 @@ import functools
 import math
 import operator
 import uuid
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -605,7 +606,26 @@ class AssignPartitioningIndex(Blockwise):
         Number of partitions after repartitioning is finished.
     """
 
-    _parameters = ["frame", "partitioning_index", "index_name", "npartitions_out"]
+    _parameters = [
+        "frame",
+        "partitioning_index",
+        "index_name",
+        "npartitions_out",
+        "other",
+    ]
+    _defaults = {"other": None}
+
+    def dependencies(self):
+        return [self.frame]
+
+    @functools.cached_property
+    def _args(self) -> list:
+        ops = self.operands.copy()
+        npart = ops[-2]
+        if isinstance(npart, Callable):
+            ops[-2] = npart(max(self.frame.npartitions, self.other.npartitions))
+        ops.pop(-1)
+        return ops
 
     @staticmethod
     def operation(df, index, name: str, npartitions: int):
