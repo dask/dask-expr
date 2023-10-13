@@ -361,7 +361,7 @@ class HashJoinP2P(Merge, PartitionsFiltered):
             dsk[(name_right, i)] = (
                 func,
                 (self.right._name, i),
-                self.shuffle_left_on,
+                self.shuffle_right_on,
                 _HASH_COLUMN_NAME,
                 self.npartitions,
                 self.right._name,
