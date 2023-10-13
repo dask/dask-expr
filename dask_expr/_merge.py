@@ -15,7 +15,12 @@ from dask_expr._expr import (
     Projection,
 )
 from dask_expr._repartition import Repartition
-from dask_expr._shuffle import Shuffle, _contains_index_name, _select_columns_or_index
+from dask_expr._shuffle import (
+    AssignPartitioningIndex,
+    Shuffle,
+    _contains_index_name,
+    _select_columns_or_index,
+)
 from dask_expr._util import _convert_to_list
 
 _HASH_COLUMN_NAME = "__hash_partition"
@@ -265,7 +270,7 @@ class Merge(Expr):
 
     def _combine_similar(self, root: Expr):
         # Push projections back up to avoid performing the same merge multiple times
-        skip_ops = (Filter, Shuffle)
+        skip_ops = (Filter, AssignPartitioningIndex, Shuffle)
         remove_ops = (Projection,)
 
         def _flatten_columns(columns, side):
