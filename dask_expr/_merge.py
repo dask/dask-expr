@@ -167,8 +167,8 @@ class Merge(Expr):
             or shuffle_backend is None
             and get_default_shuffle_method() == "p2p"
         ):
-            left = Repartition(left, lambda x: x // 3)
-            right = Repartition(right, lambda x: x // 3)
+            left = Repartition(left, lambda x: max(x // 3, 1))
+            right = Repartition(right, lambda x: max(x // 3, 1))
 
             return HashJoinP2P(
                 left,
