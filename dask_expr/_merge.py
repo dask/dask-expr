@@ -342,10 +342,6 @@ class Merge(Expr):
                 break
 
         if columns is not None:
-            if _HASH_COLUMN_NAME in columns:
-                # Don't filter for hash_column_name which is removed in p2p merge
-                columns.remove(_HASH_COLUMN_NAME)
-
             expr = self
 
             if left_sub is not None:
