@@ -33,7 +33,7 @@ def assert_eq(a, b, *args, serialize_graph=True, **kwargs):
                     if hasattr(obj, "dask"):
                         try:
                             pickle.dumps(obj.dask)
-                        except (AttributeError, pickle.PicklingError):
+                        except AttributeError:
                             serialize(ToPickle(obj.dask))
         except ImportError:
             pass
