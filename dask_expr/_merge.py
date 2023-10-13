@@ -170,8 +170,9 @@ class Merge(Expr):
             or shuffle_backend is None
             and get_default_shuffle_method() == "p2p"
         ):
-            left = Repartition(left, _partition_reducer)
-            right = Repartition(right, _partition_reducer)
+            if self.how == "inner":
+                left = Repartition(left, _partition_reducer)
+                right = Repartition(right, _partition_reducer)
 
             return HashJoinP2P(
                 left,
