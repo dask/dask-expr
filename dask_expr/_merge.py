@@ -166,9 +166,6 @@ class Merge(Expr):
             or shuffle_backend is None
             and get_default_shuffle_method() == "p2p"
         ):
-            # left = Repartition(left, lambda x: x // 2)
-            # right = Repartition(right, lambda x: x // 2)
-
             return HashJoinP2P(
                 left,
                 right,
@@ -285,23 +282,24 @@ class Merge(Expr):
             columns_right,
         )
 
+    @staticmethod
+    def _flatten_columns(expr, columns, side):
+        if len(columns) == 0:
+            return getattr(expr, side).columns
+        else:
+            return list(set(flatten(columns)))
+
     def _combine_similar(self, root: Expr):
         # Push projections back up to avoid performing the same merge multiple times
-
-        def _flatten_columns(columns, side=None):
-            if len(columns) == 0 and side is not None:
-                return getattr(self, side).columns
-            else:
-                return list(set(flatten(columns)))
 
         left, columns_left = self._remove_operations(
             self.left, self._remove_ops, self._skip_ops
         )
-        columns_left = _flatten_columns(columns_left, "left")
+        columns_left = self._flatten_columns(self, columns_left, "left")
         right, columns_right = self._remove_operations(
             self.right, self._remove_ops, self._skip_ops
         )
-        columns_right = _flatten_columns(columns_right, "right")
+        columns_right = self._flatten_columns(self, columns_right, "right")
 
         if left._name == self.left._name and right._name == self.right._name:
             # There aren't any ops we can remove, so bail
@@ -323,22 +321,22 @@ class Merge(Expr):
 
             validation = self._validate_same_operations(common_right, op, "left")
             if validation[0]:
-                left_sub = _flatten_columns(validation[1])
+                left_sub = self._flatten_columns(op, validation[1], side="left")
                 columns = self.right.columns.copy()
                 columns += [col for col in self.left.columns if col not in columns]
                 break
 
             validation = self._validate_same_operations(common_left, op, "right")
             if validation[0]:
-                right_sub = _flatten_columns(validation[2])
+                right_sub = self._flatten_columns(op, validation[2], side="right")
                 columns = self.left.columns.copy()
                 columns += [col for col in self.right.columns if col not in columns]
                 break
 
             validation = self._validate_same_operations(common_both, op)
             if validation[0]:
-                left_sub = _flatten_columns(validation[1])
-                right_sub = _flatten_columns(validation[2])
+                left_sub = self._flatten_columns(op, validation[1], side="left")
+                right_sub = self._flatten_columns(op, validation[2], side="right")
                 columns = columns_left.copy()
                 columns += [col for col in columns_right if col not in columns_left]
                 break
