@@ -1,6 +1,5 @@
 import functools
 
-import pandas as pd
 from dask.core import flatten
 from dask.dataframe.dispatch import make_meta, meta_nonempty
 from dask.dataframe.shuffle import partitioning_index
@@ -407,6 +406,7 @@ class HashJoinP2P(Merge, PartitionsFiltered):
 
 
 def create_assign_index_merge_transfer():
+    import pandas as pd
     from distributed.shuffle._core import ShuffleId
     from distributed.shuffle._merge import merge_transfer
 
