@@ -27,7 +27,7 @@ _HASH_COLUMN_NAME = "__hash_partition"
 
 
 def _partition_reducer(x):
-    return max(x // 3, 1)
+    return max(x // 2, 1)
 
 
 class Merge(Expr):
