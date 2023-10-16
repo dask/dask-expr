@@ -23,7 +23,7 @@ from dask_expr._shuffle import (
 from dask_expr._util import _convert_to_list
 
 _HASH_COLUMN_NAME = "__hash_partition"
-_PARTITION_COLUMNS = "_partitions"
+_PARTITION_COLUMN = "_partitions"
 
 
 class Merge(Expr):
@@ -344,8 +344,8 @@ class Merge(Expr):
 
         if columns is not None:
             expr = self
-            if _PARTITION_COLUMNS in columns:
-                columns.remove(_PARTITION_COLUMNS)
+            if _PARTITION_COLUMN in columns:
+                columns.remove(_PARTITION_COLUMN)
 
             if left_sub is not None:
                 left_sub.extend([col for col in columns_left if col not in left_sub])
@@ -375,7 +375,7 @@ class Merge(Expr):
                 if isinstance(frame.frame, AssignPartitioningIndex):
                     new_cols = new_columns
                 else:
-                    new_cols = [col for col in new_columns if col != _PARTITION_COLUMNS]
+                    new_cols = [col for col in new_columns if col != _PARTITION_COLUMN]
 
                 # Ignore Projection if new_columns = frame.frame.columns
                 if sorted(new_cols) != sorted(frame.frame.columns):
