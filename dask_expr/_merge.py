@@ -23,6 +23,7 @@ from dask_expr._shuffle import (
 from dask_expr._util import _convert_to_list
 
 _HASH_COLUMN_NAME = "__hash_partition"
+_PARTITION_COLUMNS = "_partitions"
 
 
 class Merge(Expr):
@@ -343,6 +344,8 @@ class Merge(Expr):
 
         if columns is not None:
             expr = self
+            if _PARTITION_COLUMNS in columns:
+                columns.remove(_PARTITION_COLUMNS)
 
             if left_sub is not None:
                 left_sub.extend([col for col in columns_left if col not in left_sub])
@@ -356,6 +359,8 @@ class Merge(Expr):
 
             if sorted(expr.columns) != sorted(columns):
                 expr = expr[columns]
+            if expr._name == self._name:
+                return None
             return expr
 
     def _replace_projections(self, frame, new_columns):
@@ -365,9 +370,16 @@ class Merge(Expr):
         operations = []
         while isinstance(frame, self._remove_ops + self._skip_ops):
             if isinstance(frame, self._remove_ops):
+                # TODO: Shuffle and AssignPartitioningIndex being 2 different ops
+                #  causes all kinds of pain
+                if isinstance(frame.frame, AssignPartitioningIndex):
+                    new_cols = new_columns
+                else:
+                    new_cols = [col for col in new_columns if col != _PARTITION_COLUMNS]
+
                 # Ignore Projection if new_columns = frame.frame.columns
-                if sorted(new_columns) != sorted(frame.frame.columns):
-                    operations.append((type(frame), [new_columns]))
+                if sorted(new_cols) != sorted(frame.frame.columns):
+                    operations.append((type(frame), [new_cols]))
             else:
                 operations.append((type(frame), frame.operands[1:]))
             frame = frame.frame
