@@ -498,7 +498,7 @@ def test_head(pdf, df):
 
 def test_head_down(df):
     result = (df.x + df.y + 1).head(compute=False)
-    optimized = result.simplify()
+    optimized = result.optimize()
 
     assert_eq(result, optimized)
 

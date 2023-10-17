@@ -1860,7 +1860,9 @@ class Head(Expr):
     def _lower(self):
         if not isinstance(self, BlockwiseHead):
             # Lower to Blockwise
-            return BlockwiseHead(Partitions(self.frame, [0]), self.n)
+            if self.frame.npartitions > 1:
+                return BlockwiseHead(Partitions(self.frame, [0]), self.n)
+            return BlockwiseHead(self.frame, self.n)
 
 
 class BlockwiseHead(Head, Blockwise):
@@ -1909,9 +1911,12 @@ class Tail(Expr):
     def _lower(self):
         if not isinstance(self, BlockwiseTail):
             # Lower to Blockwise
-            return BlockwiseTail(
-                Partitions(self.frame, [self.frame.npartitions - 1]), self.n
-            )
+            if self.frame.npartitions > 1:
+                # Enable lowering without simplifying
+                return BlockwiseTail(
+                    Partitions(self.frame, [self.frame.npartitions - 1]), self.n
+                )
+            return BlockwiseTail(self.frame, self.n)
 
 
 class BlockwiseTail(Tail, Blockwise):
@@ -2205,15 +2210,16 @@ def optimize(expr: Expr, combine_similar: bool = True, fuse: bool = True) -> Exp
     optimize_blockwise_fusion
     """
 
-    result = expr
-    while True:
-        out = result.simplify().lower_once()
-        if out._name == result._name:
-            break
-        result = out
+    result = expr.simplify()
 
     if combine_similar:
         result = result.combine_similar()
+
+    while True:
+        out = result.lower_once()
+        if out._name == result._name:
+            break
+        result = out
 
     if fuse:
         result = optimize_io_fusion(result)

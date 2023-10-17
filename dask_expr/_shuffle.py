@@ -46,7 +46,7 @@ from dask_expr._repartition import Repartition, RepartitionToFewer
 from dask_expr._util import LRU
 
 
-class Shuffle(Expr):
+class Shuffle(PartitionsFiltered, Expr):
     """Abstract shuffle class
 
     Parameters
@@ -73,11 +73,13 @@ class Shuffle(Expr):
         "ignore_index",
         "backend",
         "options",
+        "_partitions",
     ]
     _defaults = {
         "ignore_index": False,
         "backend": None,
         "options": None,
+        "_partitions": None,
     }
     _is_length_preserving = True
 
@@ -194,7 +196,7 @@ class ShuffleBackend(Shuffle):
         return None
 
 
-class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
+class SimpleShuffle(ShuffleBackend):
     """Simple task-based shuffle implementation"""
 
     lazy_hash_support = True
@@ -206,6 +208,9 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
         npartitions_out = expr.npartitions_out
         ignore_index = expr.ignore_index
         options = expr.options
+        _partitions = (
+            {"_partitions": expr._partitions} if expr._partitions is not None else {}
+        )
 
         # Normalize partitioning_index
         if isinstance(partitioning_index, str):
@@ -231,6 +236,7 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
                         npartitions_out,
                         ignore_index,
                         options,
+                        **_partitions,
                     )
 
             # Assign new "_partitions" column
@@ -250,6 +256,7 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
             npartitions_out,
             ignore_index,
             options,
+            **_partitions,
         )
 
         # Drop "_partitions" column and return
