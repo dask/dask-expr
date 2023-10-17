@@ -1854,7 +1854,10 @@ class Head(Expr):
         if isinstance(self.frame, Head):
             return Head(self.frame.frame, min(self.n, self.frame.n))
 
-        if self.frame.npartitions > 1:
+        if (
+            isinstance(self.frame, (Blockwise, PartitionsFiltered))
+            and self.frame.npartitions > 1
+        ):
             return Head(Partitions(self.frame, [0]), self.n)
 
     def _lower(self):
@@ -1905,7 +1908,10 @@ class Tail(Expr):
         if isinstance(self.frame, Tail):
             return Tail(self.frame.frame, min(self.n, self.frame.n))
 
-        if self.frame.npartitions > 1:
+        if (
+            isinstance(self.frame, (Blockwise, PartitionsFiltered))
+            and self.frame.npartitions > 1
+        ):
             return Tail(Partitions(self.frame, lambda x: [x - 1]), self.n)
 
     def _lower(self):
