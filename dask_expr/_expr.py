@@ -241,7 +241,7 @@ class Expr:
 
         return {(self._name, i): self._task(i) for i in range(self.npartitions)}
 
-    def simplify(self):
+    def simplify(self, restrict: None | type = None):
         """Simplify expression
 
         This leverages the ``._simplify_down`` method defined on each class
@@ -257,28 +257,28 @@ class Expr:
 
         while True:
             _continue = False
-
-            # Simplify this node
-            out = expr._simplify_down()
-            if out is None:
-                out = expr
-            if not isinstance(out, Expr):
-                return out
-            if out._name != expr._name:
-                expr = out
-                continue
-
-            # Allow children to simplify their parents
-            for child in expr.dependencies():
-                out = child._simplify_up(expr)
+            if restrict is None or isinstance(expr, restrict):
+                # Simplify this node
+                out = expr._simplify_down()
                 if out is None:
                     out = expr
                 if not isinstance(out, Expr):
                     return out
-                if out is not expr and out._name != expr._name:
+                if out._name != expr._name:
                     expr = out
-                    _continue = True
-                    break
+                    continue
+
+                # Allow children to simplify their parents
+                for child in expr.dependencies():
+                    out = child._simplify_up(expr)
+                    if out is None:
+                        out = expr
+                    if not isinstance(out, Expr):
+                        return out
+                    if out is not expr and out._name != expr._name:
+                        expr = out
+                        _continue = True
+                        break
 
             if _continue:
                 continue
@@ -288,7 +288,7 @@ class Expr:
             changed = False
             for operand in expr.operands:
                 if isinstance(operand, Expr):
-                    new = operand.simplify()
+                    new = operand.simplify(restrict=restrict)
                     if new._name != operand._name:
                         changed = True
                 else:
@@ -1056,6 +1056,10 @@ class Expr:
             or issubclass(operation, Expr)
         ), "`operation` must be`Expr` subclass)"
         return (expr for expr in self.walk() if isinstance(expr, operation))
+
+
+class LoweredExpr(Expr):
+    pass
 
 
 class Literal(Expr):
@@ -2062,7 +2066,7 @@ class Pos(Unaryop):
     _operator_repr = "+"
 
 
-class Partitions(Expr):
+class Partitions(LoweredExpr):
     """Select one or more partitions"""
 
     _parameters = ["frame", "partitions"]
@@ -2191,16 +2195,18 @@ def optimize(expr: Expr, combine_similar: bool = True, fuse: bool = True) -> Exp
     optimize_blockwise_fusion
     """
 
-    result = expr
-    while True:
-        out = result.simplify().lower_once()
-        if out._name == result._name:
-            break
-        result = out
-
+    # "Abstract" phase
+    result = expr.simplify()
     if combine_similar:
         result = result.combine_similar()
 
+    # Lower the graph
+    result = result.lower_completely()
+
+    # "Lowered" phase
+    result = result.simplify(restrict=LoweredExpr)
+
+    # Final graph-specific optimizations
     if fuse:
         result = optimize_io_fusion(result)
         result = optimize_blockwise_fusion(result)
