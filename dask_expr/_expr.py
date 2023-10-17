@@ -6,6 +6,7 @@ import operator
 import os
 from collections import defaultdict
 from collections.abc import Generator, Mapping
+from typing import Callable
 
 import dask
 import numpy as np
@@ -1853,6 +1854,9 @@ class Head(Expr):
         if isinstance(self.frame, Head):
             return Head(self.frame.frame, min(self.n, self.frame.n))
 
+        if self.frame.npartitions > 1:
+            return Head(Partitions(self.frame, [0]), self.n)
+
     def _lower(self):
         if not isinstance(self, BlockwiseHead):
             # Lower to Blockwise
@@ -1898,6 +1902,9 @@ class Tail(Expr):
             return type(self.frame)(*operands)
         if isinstance(self.frame, Tail):
             return Tail(self.frame.frame, min(self.n, self.frame.n))
+
+        if self.frame.npartitions > 1:
+            return Tail(Partitions(self.frame, lambda x: [x - 1]), self.n)
 
     def _lower(self):
         if not isinstance(self, BlockwiseTail):
@@ -2077,6 +2084,13 @@ class Partitions(Expr):
             divisions.append(self.frame.divisions[part])
         divisions.append(self.frame.divisions[part + 1])
         return tuple(divisions)
+
+    @functools.cached_property
+    def partitions(self):
+        part = self.operand("partitions")
+        if isinstance(part, Callable):
+            return part(self.frame.npartitions)
+        return part
 
     def _task(self, index: int):
         return (self.frame._name, self.partitions[index])
