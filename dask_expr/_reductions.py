@@ -19,7 +19,7 @@ from dask.dataframe.core import (
 from dask.utils import M, apply, funcname
 
 from dask_expr._concat import Concat
-from dask_expr._expr import Blockwise, Expr, Index, Projection
+from dask_expr._expr import Blockwise, Expr, Index, Projection, RenameFrame, ResetIndex
 from dask_expr._util import is_scalar
 
 
@@ -54,7 +54,7 @@ class Chunk(Blockwise):
             for dep in self.dependencies():
                 lines.extend(dep._tree_repr_lines(2))
 
-        for k, v in self.chunk_kwargs.items():
+        for k, v in self._kwargs.items():
             try:
                 if v != self.kind._defaults[k]:
                     header += f" {k}={v}"
@@ -64,6 +64,34 @@ class Chunk(Blockwise):
         lines = [header] + lines
         lines = [" " * indent + line for line in lines]
         return lines
+
+
+class Aggregate(Chunk):
+    """Partition-wise aggregation component of `ApplyConcatApply`
+
+    This class is used within `ApplyConcatApply._lower`.
+    See Also
+    --------
+    ApplyConcatApply
+    """
+
+    _parameters = ["frame", "kind", "aggregate", "aggregate_kwargs"]
+
+    @staticmethod
+    def _call_with_list_arg(func, *args, **kwargs):
+        return func(list(args), **kwargs)
+
+    @property
+    def operation(self):
+        return functools.partial(self._call_with_list_arg, self.aggregate)
+
+    @functools.cached_property
+    def _args(self) -> list:
+        return [self.frame]
+
+    @functools.cached_property
+    def _kwargs(self) -> dict:
+        return self.aggregate_kwargs or {}
 
 
 class ApplyConcatApply(Expr):
@@ -93,6 +121,17 @@ class ApplyConcatApply(Expr):
     aggregate_kwargs = {}
     _chunk_cls = Chunk
 
+    @property
+    def split_out(self):
+        if "split_out" in self._parameters:
+            return self.operand("split_out")
+        else:
+            return 1
+
+    @property
+    def split_by(self):
+        return None
+
     def _layer(self):
         # This is an abstract expression
         raise NotImplementedError()
@@ -118,7 +157,7 @@ class ApplyConcatApply(Expr):
         return make_meta(meta)
 
     def _divisions(self):
-        return (None, None)
+        return (None,) * (self.split_out + 1)
 
     @property
     def _chunk_cls_args(self):
@@ -142,20 +181,141 @@ class ApplyConcatApply(Expr):
             combine = aggregate
             combine_kwargs = aggregate_kwargs
 
-        # Decompose ApplyConcatApply into Chunk and TreeReduce
-        aca_type = type(self)
-        return TreeReduce(
-            self._chunk_cls(
-                self.frame, aca_type, chunk, chunk_kwargs, *self._chunk_cls_args
-            ),
-            aca_type,
+        sort = getattr(self, "sort", False)
+        split_every = getattr(self, "split_every", 0)
+        chunked = self._chunk_cls(
+            self.frame, type(self), chunk, chunk_kwargs, *self._chunk_cls_args
+        )
+        if self.split_out == 1 or sort:
+            # Lower into TreeReduce(Chunk)
+            return TreeReduce(
+                chunked,
+                type(self),
+                self._meta,
+                combine,
+                aggregate,
+                combine_kwargs,
+                aggregate_kwargs,
+                split_every=split_every,
+            )
+
+        assert self.split_by is not None, "ShuffleReduce requires split_by"
+
+        # Lower into ShuffleReduce
+        return ShuffleReduce(
+            chunked,
+            type(self),
             self._meta,
             combine,
             aggregate,
             combine_kwargs,
             aggregate_kwargs,
-            split_every=getattr(self, "split_every", 0),
+            split_by=self.split_by,
+            split_out=self.split_out,
+            split_every=split_every,
+            sort=sort,
         )
+
+
+class ShuffleReduce(Expr):
+    """Shuffle-reduction component of `ApplyConcatApply`
+    when `split_out > 1`
+
+    This class is used within `ApplyConcatApply._lower`.
+
+    See Also
+    --------
+    ApplyConcatApply
+    """
+
+    _parameters = [
+        "frame",
+        "kind",
+        "_meta",
+        "combine",
+        "aggregate",
+        "combine_kwargs",
+        "aggregate_kwargs",
+        "split_by",
+        "split_every",
+        "split_out",
+        "sort",
+    ]
+    _defaults = {
+        "split_every": 8,
+        "split_out": None,
+        "sort": None,
+    }
+
+    def _lower(self):
+        from dask_expr._repartition import Repartition
+        from dask_expr._shuffle import SetIndexBlockwise, Shuffle, SortValues
+
+        assert self.split_by is not None
+        split_every = getattr(self, "split_every", 0) or self.frame.npartitions
+
+        # Decompose ApplyConcatApply into Chunk + Shuffle + Aggregate
+        chunked = ResetIndex(self.frame, drop=False)
+
+        # TODO: Why do we need this band-aid?
+        map_columns = {col: str(col) for col in chunked.columns if col != str(col)}
+        unmap_columns = {v: k for k, v in map_columns.items()}
+        if map_columns:
+            chunked = RenameFrame(chunked, map_columns)
+
+        # Sort or shuffle
+        shuffle_npartitions = max(
+            chunked.npartitions // split_every,
+            self.split_out,
+        )
+        divisions = (None,) * (shuffle_npartitions + 1)
+        if self.sort:
+            # TODO: Use sorted divisions info
+            shuffled = SortValues(
+                chunked,
+                self.split_by,
+                npartitions=shuffle_npartitions,
+            )
+        else:
+            shuffled = Shuffle(
+                chunked,
+                self.split_by,
+                shuffle_npartitions,
+                ignore_index=True,
+            )
+
+        if unmap_columns:
+            shuffled = RenameFrame(shuffled, unmap_columns)
+
+        # Set sorted/shuffled index and aggregate
+        shuffled = SetIndexBlockwise(shuffled, self.split_by, True, divisions)
+        result = Aggregate(
+            shuffled,
+            self.kind,
+            self.aggregate,
+            self.aggregate_kwargs,
+        )
+
+        # Convert to Series if necessary
+        if is_series_like(self._meta):
+            result = result[result.columns[0]]
+
+        # Repartition and return
+        if self.split_out < result.npartitions:
+            return Repartition(result, npartitions=self.split_out)
+        return result
+
+    @property
+    def _meta(self):
+        return self.operand("_meta")
+
+    def _divisions(self):
+        return (None,) * (self.split_out + 1)
+
+    def __str__(self):
+        chunked = str(self.frame)
+        split_every = getattr(self, "split_every", 0)
+        return f"{type(self).__name__}({chunked}, kind={funcname(self.kind)}, split_every={split_every})"
 
 
 class TreeReduce(Expr):
@@ -178,7 +338,7 @@ class TreeReduce(Expr):
         "aggregate_kwargs",
         "split_every",
     ]
-    _defaults = {"split_every": 0}
+    _defaults = {"split_every": 8}
 
     def __dask_postcompute__(self):
         return toolz.first, ()
@@ -273,9 +433,6 @@ class Unique(ApplyConcatApply):
 
     def __dask_postcompute__(self):
         return _concat, ()
-
-    def _divisions(self):
-        return [None, None]
 
 
 class DropDuplicates(Unique):
