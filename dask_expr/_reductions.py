@@ -121,7 +121,7 @@ class ShuffleReduce(Expr):
     ]
     _defaults = {
         "split_every": 8,
-        "split_out": None,
+        "split_out": True,
         "sort": None,
     }
 
@@ -129,8 +129,7 @@ class ShuffleReduce(Expr):
     def split_out(self):
         if "split_out" in self._parameters:
             split_out = self.operand("split_out")
-            if split_out is None:
-                # TODO: It may make sense to make split_out callable
+            if split_out is True:
                 return self.frame.npartitions
             return split_out
         else:
@@ -156,6 +155,7 @@ class ShuffleReduce(Expr):
 
         # Sort or shuffle
         split_every = getattr(self, "split_every", 0) or chunked.npartitions
+        ignore_index = getattr(self, "ignore_index", True)
         shuffle_npartitions = max(
             chunked.npartitions // split_every,
             self.split_out,
@@ -167,16 +167,17 @@ class ShuffleReduce(Expr):
                 chunked,
                 split_by,
                 npartitions=shuffle_npartitions,
-                ignore_index=False,
+                ignore_index=ignore_index,
             )
         else:
             shuffled = Shuffle(
                 chunked,
                 split_by,
                 shuffle_npartitions,
-                ignore_index=False,
+                ignore_index=ignore_index,
             )
 
+        # Convert back to Series if necessary
         if unmap_columns:
             shuffled = RenameFrame(shuffled, unmap_columns)
 
@@ -191,11 +192,6 @@ class ShuffleReduce(Expr):
             self.aggregate_kwargs,
         )
 
-        # Convert back to Series if necessary
-        # import pdb; pdb.set_trace()
-        # if is_series_like(self._meta):
-        #    result = result[result.columns[0]]
-
         # Repartition and return
         if self.split_out < result.npartitions:
             return Repartition(result, npartitions=self.split_out)
@@ -206,8 +202,7 @@ class ShuffleReduce(Expr):
         return self.operand("_meta")
 
     def _divisions(self):
-        split_out = self.split_out or self.frame.npartitions
-        return (None,) * (split_out + 1)
+        return (None,) * (self.split_out + 1)
 
     def __str__(self):
         chunked = str(self.frame)
@@ -362,8 +357,9 @@ class ApplyConcatApply(Expr):
         return make_meta(meta)
 
     def _divisions(self):
-        split_out = self.split_out or self.frame.npartitions
-        return (None,) * (split_out + 1)
+        if self.split_out is True:
+            return (None,) * (self.frame.npartitions + 1)
+        return (None,) * (self.split_out + 1)
 
     @property
     def _chunk_cls_args(self):
@@ -458,7 +454,7 @@ class Unique(ApplyConcatApply):
 
 class DropDuplicates(Unique):
     _parameters = ["frame", "subset", "ignore_index", "split_out"]
-    _defaults = {"subset": None, "ignore_index": False, "split_out": None}
+    _defaults = {"subset": None, "ignore_index": False, "split_out": 1}
     chunk = M.drop_duplicates
     aggregate_func = M.drop_duplicates
 

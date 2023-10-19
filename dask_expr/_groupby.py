@@ -80,6 +80,7 @@ class GroupByShuffleReduce(ShuffleReduce):
                 chunked,
                 self.split_by,
                 npartitions=shuffle_npartitions,
+                ignore_index=True,
             )
         else:
             shuffled = Shuffle(
