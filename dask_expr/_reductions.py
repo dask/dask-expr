@@ -20,7 +20,15 @@ from dask.dataframe.core import (
 from dask.utils import M, apply, funcname
 
 from dask_expr._concat import Concat
-from dask_expr._expr import Blockwise, Expr, Index, Projection, RenameFrame, ToFrame
+from dask_expr._expr import (
+    Blockwise,
+    Expr,
+    Index,
+    Projection,
+    RenameFrame,
+    ResetIndex,
+    ToFrame,
+)
 from dask_expr._util import is_scalar
 
 
@@ -137,7 +145,7 @@ class ShuffleReduce(Expr):
 
     def _lower(self):
         from dask_expr._repartition import Repartition
-        from dask_expr._shuffle import Shuffle, SortValues
+        from dask_expr._shuffle import SetIndexBlockwise, Shuffle, SortValues
 
         # Make sure we have dataframe-like data to shuffle
         if is_index_like(self.frame._meta):
@@ -145,7 +153,11 @@ class ShuffleReduce(Expr):
         elif is_series_like(self.frame._meta):
             chunked = ToFrame(self.frame, name=self.frame._meta.name or "__series__")
         else:
-            chunked = self.frame
+            if self.split_by:
+                # Groupby specific
+                chunked = ResetIndex(self.frame, drop=False)
+            else:
+                chunked = self.frame
 
         # TODO: Why do we need this band-aid?
         map_columns = {col: str(col) for col in chunked.columns if col != str(col)}
@@ -154,15 +166,14 @@ class ShuffleReduce(Expr):
             chunked = RenameFrame(chunked, map_columns)
 
         # Sort or shuffle
+        split_by = self.split_by or chunked.columns
         split_every = getattr(self, "split_every", 0) or chunked.npartitions
         ignore_index = getattr(self, "ignore_index", True)
         shuffle_npartitions = max(
             chunked.npartitions // split_every,
             self.split_out,
         )
-        split_by = self.split_by or chunked.columns
         if self.sort:
-            # TODO: Use sorted divisions info
             shuffled = SortValues(
                 chunked,
                 split_by,
@@ -177,11 +188,15 @@ class ShuffleReduce(Expr):
                 ignore_index=ignore_index,
             )
 
-        # Convert back to Series if necessary
         if unmap_columns:
             shuffled = RenameFrame(shuffled, unmap_columns)
 
-        if is_series_like(self._meta):
+        if self.split_by:
+            # Groupby specific
+            divisions = (None,) * (shuffle_npartitions + 1)
+            shuffled = SetIndexBlockwise(shuffled, split_by, True, divisions)
+        elif is_series_like(self._meta):
+            # Convert back to Series if necessary
             shuffled = shuffled[shuffled.columns[0]]
 
         # Blockwise aggregate
@@ -318,8 +333,6 @@ class ApplyConcatApply(Expr):
     combine_kwargs = {}
     aggregate_kwargs = {}
     _chunk_cls = Chunk
-    _tree_reduce_cls = TreeReduce
-    _shuffle_reduce_cls = ShuffleReduce
 
     @property
     def split_out(self):
@@ -390,7 +403,7 @@ class ApplyConcatApply(Expr):
         )
         if self.split_out == 1 or sort:
             # Lower into TreeReduce(Chunk)
-            return self._tree_reduce_cls(
+            return TreeReduce(
                 chunked,
                 type(self),
                 self._meta,
@@ -402,7 +415,7 @@ class ApplyConcatApply(Expr):
             )
 
         # Lower into ShuffleReduce
-        return self._shuffle_reduce_cls(
+        return ShuffleReduce(
             chunked,
             type(self),
             self._meta,
