@@ -4,7 +4,7 @@ channels:
 dependencies:
   - pytest
   - pytest-cov
-  - dask  # overridden by git tip below
+  - dask
   - pyarrow
   - pandas>=2
   - pre-commit
