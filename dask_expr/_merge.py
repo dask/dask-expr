@@ -515,7 +515,7 @@ def create_assign_index_merge_transfer():
             index = partitioning_index(index, npartitions)
         df[name] = index
         meta[name] = 0
-        disk = [] if not DASK_GT_20231000 else (True,)
+        disk = () if not DASK_GT_20231000 else (True,)
         return merge_transfer(
             df, id, input_partition, npartitions, meta, parts_out, *disk
         )
