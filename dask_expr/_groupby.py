@@ -21,8 +21,14 @@ from dask.dataframe.groupby import (
 from dask.utils import M, is_index_like
 
 from dask_expr._collection import DataFrame, Index, Series, new_collection
-from dask_expr._expr import Expr, MapPartitions, Projection
-from dask_expr._reductions import ApplyConcatApply, Chunk, Reduction
+from dask_expr._expr import Expr, MapPartitions, Projection, RenameFrame, ResetIndex
+from dask_expr._reductions import (
+    Aggregate,
+    ApplyConcatApply,
+    Chunk,
+    Reduction,
+    ShuffleReduce,
+)
 
 
 def _as_dict(key, value):
@@ -45,8 +51,69 @@ class GroupByChunk(Chunk):
         return [self.frame, self.by]
 
 
+class GroupByShuffleReduce(ShuffleReduce):
+    def _lower(self):
+        from dask_expr._repartition import Repartition
+        from dask_expr._shuffle import SetIndexBlockwise, Shuffle, SortValues
+
+        assert self.split_by
+        split_every = getattr(self, "split_every", 0) or self.frame.npartitions
+
+        # Decompose ApplyConcatApply into Chunk + Shuffle + Aggregate
+        chunked = ResetIndex(self.frame, drop=False)
+
+        # TODO: Why do we need this band-aid?
+        map_columns = {col: str(col) for col in chunked.columns if col != str(col)}
+        unmap_columns = {v: k for k, v in map_columns.items()}
+        if map_columns:
+            chunked = RenameFrame(chunked, map_columns)
+
+        # Sort or shuffle
+        shuffle_npartitions = max(
+            chunked.npartitions // split_every,
+            self.split_out,
+        )
+        divisions = (None,) * (shuffle_npartitions + 1)
+        if self.sort:
+            # TODO: Use sorted divisions info
+            shuffled = SortValues(
+                chunked,
+                self.split_by,
+                npartitions=shuffle_npartitions,
+            )
+        else:
+            shuffled = Shuffle(
+                chunked,
+                self.split_by,
+                shuffle_npartitions,
+                ignore_index=True,
+            )
+
+        if unmap_columns:
+            shuffled = RenameFrame(shuffled, unmap_columns)
+
+        # Set sorted/shuffled index and aggregate
+        shuffled = SetIndexBlockwise(shuffled, self.split_by, True, divisions)
+        result = Aggregate(
+            shuffled,
+            self.kind,
+            self.aggregate,
+            self.aggregate_kwargs,
+        )
+
+        # Convert to Series if necessary
+        if is_series_like(self._meta):
+            result = result[result.columns[0]]
+
+        # Repartition and return
+        if self.split_out < result.npartitions:
+            return Repartition(result, npartitions=self.split_out)
+        return result
+
+
 class GroupByApplyConcatApply(ApplyConcatApply):
     _chunk_cls = GroupByChunk
+    _shuffle_reduce_cls = GroupByShuffleReduce
 
     @functools.cached_property
     def _meta_chunk(self):
@@ -329,6 +396,7 @@ class ValueCounts(SingleAggregation):
 
 class GroupByReduction(Reduction):
     _chunk_cls = GroupByChunk
+    _shuffle_reduce_cls = GroupByShuffleReduce
 
     @property
     def _chunk_cls_args(self):

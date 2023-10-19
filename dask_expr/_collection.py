@@ -803,12 +803,14 @@ class DataFrame(FrameBase):
     def memory_usage(self, deep=False, index=True):
         return new_collection(MemoryUsageFrame(self.expr, deep=deep, _index=index))
 
-    def drop_duplicates(self, subset=None, ignore_index=False):
+    def drop_duplicates(self, subset=None, ignore_index=False, split_out=None):
         # Fail early if subset is not valid, e.g. missing columns
         subset = _convert_to_list(subset)
         meta_nonempty(self._meta).drop_duplicates(subset=subset)
         return new_collection(
-            DropDuplicates(self.expr, subset=subset, ignore_index=ignore_index)
+            DropDuplicates(
+                self.expr, subset=subset, ignore_index=ignore_index, split_out=split_out
+            )
         )
 
     def dropna(self, how=no_default, subset=None, thresh=no_default):

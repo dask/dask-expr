@@ -11,6 +11,7 @@ from dask.dataframe.core import (
     idxmaxmin_chunk,
     idxmaxmin_combine,
     is_dataframe_like,
+    is_index_like,
     is_series_like,
     make_meta,
     meta_nonempty,
@@ -19,7 +20,7 @@ from dask.dataframe.core import (
 from dask.utils import M, apply, funcname
 
 from dask_expr._concat import Concat
-from dask_expr._expr import Blockwise, Expr, Index, Projection, RenameFrame, ResetIndex
+from dask_expr._expr import Blockwise, Expr, Index, Projection, RenameFrame, ToFrame
 from dask_expr._util import is_scalar
 
 
@@ -94,129 +95,6 @@ class Aggregate(Chunk):
         return self.aggregate_kwargs or {}
 
 
-class ApplyConcatApply(Expr):
-    """Perform reduction-like operation on dataframes
-
-    This pattern is commonly used for reductions, groupby-aggregations, and
-    more.  It requires three methods to be implemented:
-
-    -   `chunk`: applied to each input partition
-    -   `combine`: applied to lists of intermediate partitions as they are
-        combined in batches
-    -   `aggregate`: applied at the end to finalize the computation
-
-    These methods should be easy to serialize, and can take in keyword
-    arguments defined in `chunks/combine/aggregate_kwargs`.
-
-    In many cases people don't define all three functions.  In these cases
-    combine takes from aggregate and aggregate takes from chunk.
-    """
-
-    _parameters = ["frame"]
-    chunk = None
-    combine = None
-    aggregate = None
-    chunk_kwargs = {}
-    combine_kwargs = {}
-    aggregate_kwargs = {}
-    _chunk_cls = Chunk
-
-    @property
-    def split_out(self):
-        if "split_out" in self._parameters:
-            return self.operand("split_out")
-        else:
-            return 1
-
-    @property
-    def split_by(self):
-        return None
-
-    def _layer(self):
-        # This is an abstract expression
-        raise NotImplementedError()
-
-    @functools.cached_property
-    def _meta_chunk(self):
-        meta = meta_nonempty(self.frame._meta)
-        return self.chunk(meta, **self.chunk_kwargs)
-
-    @functools.cached_property
-    def _meta(self):
-        meta = self._meta_chunk
-        aggregate = self.aggregate or (lambda x: x)
-        if self.combine:
-            combine = self.combine
-            combine_kwargs = self.combine_kwargs
-        else:
-            combine = aggregate
-            combine_kwargs = self.aggregate_kwargs
-
-        meta = combine([meta], **combine_kwargs)
-        meta = aggregate([meta], **self.aggregate_kwargs)
-        return make_meta(meta)
-
-    def _divisions(self):
-        return (None,) * (self.split_out + 1)
-
-    @property
-    def _chunk_cls_args(self):
-        return []
-
-    def _lower(self):
-        # Normalize functions in case not all are defined
-        chunk = self.chunk
-        chunk_kwargs = self.chunk_kwargs
-        if self.aggregate:
-            aggregate = self.aggregate
-            aggregate_kwargs = self.aggregate_kwargs
-        else:
-            aggregate = chunk
-            aggregate_kwargs = chunk_kwargs
-
-        if self.combine:
-            combine = self.combine
-            combine_kwargs = self.combine_kwargs
-        else:
-            combine = aggregate
-            combine_kwargs = aggregate_kwargs
-
-        sort = getattr(self, "sort", False)
-        split_every = getattr(self, "split_every", 0)
-        chunked = self._chunk_cls(
-            self.frame, type(self), chunk, chunk_kwargs, *self._chunk_cls_args
-        )
-        if self.split_out == 1 or sort:
-            # Lower into TreeReduce(Chunk)
-            return TreeReduce(
-                chunked,
-                type(self),
-                self._meta,
-                combine,
-                aggregate,
-                combine_kwargs,
-                aggregate_kwargs,
-                split_every=split_every,
-            )
-
-        assert self.split_by is not None, "ShuffleReduce requires split_by"
-
-        # Lower into ShuffleReduce
-        return ShuffleReduce(
-            chunked,
-            type(self),
-            self._meta,
-            combine,
-            aggregate,
-            combine_kwargs,
-            aggregate_kwargs,
-            split_by=self.split_by,
-            split_out=self.split_out,
-            split_every=split_every,
-            sort=sort,
-        )
-
-
 class ShuffleReduce(Expr):
     """Shuffle-reduction component of `ApplyConcatApply`
     when `split_out > 1`
@@ -247,15 +125,28 @@ class ShuffleReduce(Expr):
         "sort": None,
     }
 
+    @property
+    def split_out(self):
+        if "split_out" in self._parameters:
+            split_out = self.operand("split_out")
+            if split_out is None:
+                # TODO: It may make sense to make split_out callable
+                return self.frame.npartitions
+            return split_out
+        else:
+            return 1
+
     def _lower(self):
         from dask_expr._repartition import Repartition
-        from dask_expr._shuffle import SetIndexBlockwise, Shuffle, SortValues
+        from dask_expr._shuffle import Shuffle, SortValues
 
-        assert self.split_by is not None
-        split_every = getattr(self, "split_every", 0) or self.frame.npartitions
-
-        # Decompose ApplyConcatApply into Chunk + Shuffle + Aggregate
-        chunked = ResetIndex(self.frame, drop=False)
+        # Make sure we have dataframe-like data to shuffle
+        if is_index_like(self.frame._meta):
+            chunked = ToFrame(self.frame, name=self.frame._meta.name or "__index__")
+        elif is_series_like(self.frame._meta):
+            chunked = ToFrame(self.frame, name=self.frame._meta.name or "__series__")
+        else:
+            chunked = self.frame
 
         # TODO: Why do we need this band-aid?
         map_columns = {col: str(col) for col in chunked.columns if col != str(col)}
@@ -264,31 +155,35 @@ class ShuffleReduce(Expr):
             chunked = RenameFrame(chunked, map_columns)
 
         # Sort or shuffle
+        split_every = getattr(self, "split_every", 0) or chunked.npartitions
         shuffle_npartitions = max(
             chunked.npartitions // split_every,
             self.split_out,
         )
-        divisions = (None,) * (shuffle_npartitions + 1)
+        split_by = self.split_by or chunked.columns
         if self.sort:
             # TODO: Use sorted divisions info
             shuffled = SortValues(
                 chunked,
-                self.split_by,
+                split_by,
                 npartitions=shuffle_npartitions,
+                ignore_index=False,
             )
         else:
             shuffled = Shuffle(
                 chunked,
-                self.split_by,
+                split_by,
                 shuffle_npartitions,
-                ignore_index=True,
+                ignore_index=False,
             )
 
         if unmap_columns:
             shuffled = RenameFrame(shuffled, unmap_columns)
 
-        # Set sorted/shuffled index and aggregate
-        shuffled = SetIndexBlockwise(shuffled, self.split_by, True, divisions)
+        if is_series_like(self._meta):
+            shuffled = shuffled[shuffled.columns[0]]
+
+        # Blockwise aggregate
         result = Aggregate(
             shuffled,
             self.kind,
@@ -296,9 +191,10 @@ class ShuffleReduce(Expr):
             self.aggregate_kwargs,
         )
 
-        # Convert to Series if necessary
-        if is_series_like(self._meta):
-            result = result[result.columns[0]]
+        # Convert back to Series if necessary
+        # import pdb; pdb.set_trace()
+        # if is_series_like(self._meta):
+        #    result = result[result.columns[0]]
 
         # Repartition and return
         if self.split_out < result.npartitions:
@@ -310,7 +206,8 @@ class ShuffleReduce(Expr):
         return self.operand("_meta")
 
     def _divisions(self):
-        return (None,) * (self.split_out + 1)
+        split_out = self.split_out or self.frame.npartitions
+        return (None,) * (split_out + 1)
 
     def __str__(self):
         chunked = str(self.frame)
@@ -400,6 +297,130 @@ class TreeReduce(Expr):
         return lines
 
 
+class ApplyConcatApply(Expr):
+    """Perform reduction-like operation on dataframes
+
+    This pattern is commonly used for reductions, groupby-aggregations, and
+    more.  It requires three methods to be implemented:
+
+    -   `chunk`: applied to each input partition
+    -   `combine`: applied to lists of intermediate partitions as they are
+        combined in batches
+    -   `aggregate`: applied at the end to finalize the computation
+
+    These methods should be easy to serialize, and can take in keyword
+    arguments defined in `chunks/combine/aggregate_kwargs`.
+
+    In many cases people don't define all three functions.  In these cases
+    combine takes from aggregate and aggregate takes from chunk.
+    """
+
+    _parameters = ["frame"]
+    chunk = None
+    combine = None
+    aggregate = None
+    chunk_kwargs = {}
+    combine_kwargs = {}
+    aggregate_kwargs = {}
+    _chunk_cls = Chunk
+    _tree_reduce_cls = TreeReduce
+    _shuffle_reduce_cls = ShuffleReduce
+
+    @property
+    def split_out(self):
+        if "split_out" in self._parameters:
+            return self.operand("split_out")
+        else:
+            return 1
+
+    @property
+    def split_by(self):
+        return None
+
+    def _layer(self):
+        # This is an abstract expression
+        raise NotImplementedError()
+
+    @functools.cached_property
+    def _meta_chunk(self):
+        meta = meta_nonempty(self.frame._meta)
+        return self.chunk(meta, **self.chunk_kwargs)
+
+    @functools.cached_property
+    def _meta(self):
+        meta = self._meta_chunk
+        aggregate = self.aggregate or (lambda x: x)
+        if self.combine:
+            combine = self.combine
+            combine_kwargs = self.combine_kwargs
+        else:
+            combine = aggregate
+            combine_kwargs = self.aggregate_kwargs
+
+        meta = combine([meta], **combine_kwargs)
+        meta = aggregate([meta], **self.aggregate_kwargs)
+        return make_meta(meta)
+
+    def _divisions(self):
+        split_out = self.split_out or self.frame.npartitions
+        return (None,) * (split_out + 1)
+
+    @property
+    def _chunk_cls_args(self):
+        return []
+
+    def _lower(self):
+        # Normalize functions in case not all are defined
+        chunk = self.chunk
+        chunk_kwargs = self.chunk_kwargs
+        if self.aggregate:
+            aggregate = self.aggregate
+            aggregate_kwargs = self.aggregate_kwargs
+        else:
+            aggregate = chunk
+            aggregate_kwargs = chunk_kwargs
+
+        if self.combine:
+            combine = self.combine
+            combine_kwargs = self.combine_kwargs
+        else:
+            combine = aggregate
+            combine_kwargs = aggregate_kwargs
+
+        sort = getattr(self, "sort", False)
+        split_every = getattr(self, "split_every", 0)
+        chunked = self._chunk_cls(
+            self.frame, type(self), chunk, chunk_kwargs, *self._chunk_cls_args
+        )
+        if self.split_out == 1 or sort:
+            # Lower into TreeReduce(Chunk)
+            return self._tree_reduce_cls(
+                chunked,
+                type(self),
+                self._meta,
+                combine,
+                aggregate,
+                combine_kwargs,
+                aggregate_kwargs,
+                split_every=split_every,
+            )
+
+        # Lower into ShuffleReduce
+        return self._shuffle_reduce_cls(
+            chunked,
+            type(self),
+            self._meta,
+            combine,
+            aggregate,
+            combine_kwargs,
+            aggregate_kwargs,
+            split_by=self.split_by,
+            split_out=self.split_out,
+            split_every=split_every,
+            sort=sort,
+        )
+
+
 class Unique(ApplyConcatApply):
     _parameters = ["frame"]
     chunk = staticmethod(methods.unique)
@@ -436,8 +457,8 @@ class Unique(ApplyConcatApply):
 
 
 class DropDuplicates(Unique):
-    _parameters = ["frame", "subset", "ignore_index"]
-    _defaults = {"subset": None, "ignore_index": False}
+    _parameters = ["frame", "subset", "ignore_index", "split_out"]
+    _defaults = {"subset": None, "ignore_index": False, "split_out": None}
     chunk = M.drop_duplicates
     aggregate_func = M.drop_duplicates
 
