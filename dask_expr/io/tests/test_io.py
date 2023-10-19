@@ -170,6 +170,10 @@ def test_io_fusion_blockwise(tmpdir):
     df = read_parquet(tmpdir)["a"].fillna(10).optimize()
     assert df.npartitions == 1
     assert len(df.__dask_graph__()) == 1
+    graph = (
+        read_parquet(tmpdir)["a"].repartition(npartitions=4).optimize().__dask_graph__()
+    )
+    assert any("readparquet-fused" in key[0] for key in graph.keys())
 
 
 def test_repartition_io_fusion_blockwise(tmpdir):
