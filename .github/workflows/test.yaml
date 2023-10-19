@@ -34,7 +34,7 @@ jobs:
       - name: Install Environment
         uses: mamba-org/provision-with-micromamba@main
         with:
-          environment-file: matrix.environment-file
+          environment-file: ${{ matrix.environment-file }}
           environment-name: dask-match
           extra-specs: |
             python=${{ matrix.python-version }}
