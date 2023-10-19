@@ -134,9 +134,7 @@ class FusedIO(BlockwiseIO):
     def _name(self):
         return (
             funcname(type(self.operand("expr"))).lower()
-            + "-"
-            + funcname(type(self)).lower()
-            + "-"
+            + "-fused-"
             + _tokenize_deterministic(*self.operands)
         )
 

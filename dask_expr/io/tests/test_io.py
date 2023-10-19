@@ -172,7 +172,7 @@ def test_io_fusion_blockwise(tmpdir):
     graph = (
         read_parquet(tmpdir)["a"].repartition(npartitions=4).optimize().__dask_graph__()
     )
-    assert any("readparquet-fusedio" in key[0] for key in graph.keys())
+    assert any("readparquet-fused" in key[0] for key in graph.keys())
 
 
 def test_repartition_io_fusion_blockwise(tmpdir):
