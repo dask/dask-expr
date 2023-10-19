@@ -147,26 +147,27 @@ class ShuffleReduce(Expr):
         from dask_expr._repartition import Repartition
         from dask_expr._shuffle import SetIndexBlockwise, Shuffle, SortValues
 
+        # Find what columns we are shuffling by
+        split_by = self.split_by or self.frame.columns
+        split_by_index = bool(set(split_by) - set(self.frame.columns))
+
         # Make sure we have dataframe-like data to shuffle
         if is_index_like(self.frame._meta):
             chunked = ToFrame(self.frame, name=self.frame._meta.name or "__index__")
         elif is_series_like(self.frame._meta):
             chunked = ToFrame(self.frame, name=self.frame._meta.name or "__series__")
+        elif split_by_index:
+            chunked = ResetIndex(self.frame, drop=False)
         else:
-            if self.split_by:
-                # Groupby specific
-                chunked = ResetIndex(self.frame, drop=False)
-            else:
-                chunked = self.frame
+            chunked = self.frame
 
-        # TODO: Why do we need this band-aid?
+        # Map Tuple[str] column names to str before the shuffle
         map_columns = {col: str(col) for col in chunked.columns if col != str(col)}
         unmap_columns = {v: k for k, v in map_columns.items()}
         if map_columns:
             chunked = RenameFrame(chunked, map_columns)
 
         # Sort or shuffle
-        split_by = self.split_by or chunked.columns
         split_every = getattr(self, "split_every", 0) or chunked.npartitions
         ignore_index = getattr(self, "ignore_index", True)
         shuffle_npartitions = max(
@@ -188,15 +189,17 @@ class ShuffleReduce(Expr):
                 ignore_index=ignore_index,
             )
 
+        # Unmap column names if necessary
         if unmap_columns:
             shuffled = RenameFrame(shuffled, unmap_columns)
 
-        if self.split_by:
-            # Groupby specific
+        # Reset the index if we we used it for shuffling
+        if split_by_index:
             divisions = (None,) * (shuffle_npartitions + 1)
             shuffled = SetIndexBlockwise(shuffled, split_by, True, divisions)
-        elif is_series_like(self._meta):
-            # Convert back to Series if necessary
+
+        # Convert back to Series if necessary
+        if is_series_like(self._meta):
             shuffled = shuffled[shuffled.columns[0]]
 
         # Blockwise aggregate
