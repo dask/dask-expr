@@ -27,7 +27,7 @@ requires-python = ">=3.9"
 dependencies = [
     "dask >= 2023.09.2",
     "pyarrow",
-    "pandas >= 2",
+    "pandas >= 1.5.3",
 ]
 
 dynamic = ["version"]
