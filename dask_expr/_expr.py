@@ -275,7 +275,7 @@ class Expr:
 
             # Allow children to rewrite their parents
             for child in expr.dependencies():
-                if down_name in child.__dir__():
+                if up_name in child.__dir__():
                     out = getattr(child, up_name)(expr)
                     if out is None:
                         out = expr
@@ -2222,6 +2222,9 @@ def optimize(expr: Expr, combine_similar: bool = True, fuse: bool = True) -> Exp
     if combine_similar:
         result = result.combine_similar()
 
+    # Manipulate Expression to make it more efficient
+    result = result.rewrite(kind="tune")
+
     # Lower
     result = result.lower_completely()
 
@@ -2230,7 +2233,6 @@ def optimize(expr: Expr, combine_similar: bool = True, fuse: bool = True) -> Exp
 
     # Final graph-specific optimizations
     if fuse:
-        result = optimize_io_fusion(result)
         result = optimize_blockwise_fusion(result)
 
     return result
@@ -2271,40 +2273,6 @@ def are_co_aligned(*exprs):
 
 
 ## Utilites for Expr fusion
-
-
-def optimize_io_fusion(expr):
-    """Traverse the expression graph and apply fusion to the I/O layer that squashes
-    partitions together if possible."""
-
-    def _fusion_pass(expr):
-        new_operands = []
-        changed = False
-        for operand in expr.operands:
-            if isinstance(operand, Expr):
-                if (
-                    isinstance(operand, BlockwiseIO)
-                    and operand._fusion_compression_factor < 1
-                ):
-                    new = FusedIO(operand)
-                elif isinstance(operand, BlockwiseIO):
-                    new = operand
-                else:
-                    new = _fusion_pass(operand)
-
-                if new._name != operand._name:
-                    changed = True
-            else:
-                new = operand
-            new_operands.append(new)
-
-        if changed:
-            expr = type(expr)(*new_operands)
-
-        return expr
-
-    expr = _fusion_pass(expr)
-    return expr
 
 
 def optimize_blockwise_fusion(expr):
@@ -2541,4 +2509,4 @@ from dask_expr._reductions import (
     Sum,
     Var,
 )
-from dask_expr.io import IO, BlockwiseIO, FusedIO
+from dask_expr.io import IO, BlockwiseIO
