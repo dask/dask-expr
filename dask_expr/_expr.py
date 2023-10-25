@@ -275,7 +275,7 @@ class Expr:
 
             # Allow children to rewrite their parents
             for child in expr.dependencies():
-                if down_name in child.__dir__():
+                if up_name in child.__dir__():
                     out = getattr(child, up_name)(expr)
                     if out is None:
                         out = expr
@@ -2121,9 +2121,6 @@ class Partitions(Expr):
 
     def _cull_down(self):
         return self._simplify_down()
-
-    def _cull_up(self, parent):
-        return None
 
     def _node_label_args(self):
         return [self.frame, self.partitions]
