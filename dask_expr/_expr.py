@@ -136,6 +136,8 @@ class Expr:
         return hash(self._name)
 
     def __reduce__(self):
+        if dask.config.get("dask-expr-no-serialize", False):
+            raise RuntimeError(f"Serializing a {type(self)} object")
         return type(self), tuple(self.operands)
 
     def _depth(self):
@@ -419,9 +421,8 @@ class Expr:
         elif (self._name, root._name) in _cache:
             return _cache[(self._name, root._name)]
 
-        while True:
-            changed = False
-
+        seen = set()
+        while expr._name not in seen:
             # Call combine_similar on each dependency
             new_operands = []
             changed_dependency = False
@@ -453,14 +454,10 @@ class Expr:
             if not isinstance(out, Expr):
                 _cache[(self._name, root._name)] = out
                 return out
-            if out._name != expr._name:
-                changed = True
-                expr = out
-                if update_root:
-                    root = expr
-
-            if not changed:
-                break
+            seen.add(expr._name)
+            if expr._name != out._name and update_root:
+                root = expr
+            expr = out
 
         _cache[(self._name, root._name)] = expr
         return expr
@@ -480,23 +477,23 @@ class Expr:
             return None
 
         others = self._find_similar_operations(root, ignore=self._parameters)
-        if isinstance(self.frame, Filter) and all(
-            isinstance(op.frame, Filter) for op in others
-        ):
-            # Avoid pushing filters up if all similar ops
-            # are acting on a Filter-based expression anyway
-            return None
 
-        push_up_op = False
+        others_compatible = []
         for op in others:
             if (
                 isinstance(op.frame, remove_ops)
                 and (common._name == type(op)(op.frame.frame, *op.operands[1:])._name)
             ) or common._name == op._name:
-                push_up_op = True
-                break
+                others_compatible.append(op)
 
-        if push_up_op:
+        if isinstance(self.frame, Filter) and all(
+            isinstance(op.frame, Filter) for op in others_compatible
+        ):
+            # Avoid pushing filters up if all similar ops
+            # are acting on a Filter-based expression anyway
+            return None
+
+        if len(others_compatible) > 0:
             # Add operations back in the same order
             for i, op in enumerate(reversed(operations)):
                 common = common[op]
@@ -527,9 +524,11 @@ class Expr:
             # Have to respect ops that were injected while lowering or filters
             if isinstance(frame, remove_ops):
                 ops_to_push_up.append(frame.operands[1])
+                frame = frame.frame
+                break
             else:
                 operations.append((type(frame), frame.operands[1:]))
-            frame = frame.frame
+                frame = frame.frame
 
         if len(ops_to_push_up) > 0:
             # Remove the projections but build the remaining things back up
@@ -815,9 +814,8 @@ class Expr:
             seen.add(expr._name)
 
             layers.append(expr._layer())
-            for operand in expr.operands:
-                if isinstance(operand, Expr):
-                    stack.append(operand)
+            for operand in expr.dependencies():
+                stack.append(operand)
 
         return toolz.merge(layers)
 
@@ -1366,7 +1364,7 @@ class Sample(Blockwise):
         args = [self._blockwise_arg(self.frame, index)] + [
             self.state_data[index],
             self.frac,
-            self.replace,
+            self.operand("replace"),
         ]
         return (self.operation,) + tuple(args)
 
@@ -1681,6 +1679,7 @@ class Eval(Elemwise):
 
 
 class Filter(Blockwise):
+    _projection_passthrough = True
     _parameters = ["frame", "predicate"]
     operation = operator.getitem
 
@@ -2474,11 +2473,12 @@ class Fused(Blockwise):
         return lines
 
     def __str__(self):
-        names = [expr._name.split("-")[0] for expr in self.exprs]
-        if len(names) > 3:
-            names = [names[0], f"{len(names) - 2}", names[-1]]
-        descr = "-".join(names)
-        return f"Fused-{descr}"
+        exprs = sorted(self.exprs, key=M._depth)
+        names = [expr._name.split("-")[0] for expr in exprs]
+        if len(names) > 4:
+            return names[0] + "-fused-" + names[-1]
+        else:
+            return "-".join(names)
 
     @functools.cached_property
     def _name(self):

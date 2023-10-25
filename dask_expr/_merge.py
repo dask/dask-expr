@@ -20,7 +20,7 @@ from dask_expr._shuffle import (
     _contains_index_name,
     _select_columns_or_index,
 )
-from dask_expr._util import _convert_to_list
+from dask_expr._util import DASK_GT_20231000, _convert_to_list
 
 _HASH_COLUMN_NAME = "__hash_partition"
 _PARTITION_COLUMN = "_partitions"
@@ -318,7 +318,9 @@ class Merge(Expr):
 
         for op in self._find_similar_operations(root, ignore=["left", "right"]):
             if op._name in (common_right._name, common_left._name, common_both._name):
-                continue
+                if sorted(self.columns) != sorted(op.columns):
+                    return op[self.columns]
+                return op
 
             validation = self._validate_same_operations(common_right, op, "left")
             if validation[0]:
@@ -349,12 +351,12 @@ class Merge(Expr):
 
             if left_sub is not None:
                 left_sub.extend([col for col in columns_left if col not in left_sub])
-                left = self._replace_projections(self.left, left_sub)
+                left = self._replace_projections(self.left, sorted(left_sub))
                 expr = expr.substitute(self.left, left)
 
             if right_sub is not None:
                 right_sub.extend([col for col in columns_right if col not in right_sub])
-                right = self._replace_projections(self.right, right_sub)
+                right = self._replace_projections(self.right, sorted(right_sub))
                 expr = expr.substitute(self.right, right)
 
             if sorted(expr.columns) != sorted(columns):
@@ -511,9 +513,12 @@ def create_assign_index_merge_transfer():
             index = partitioning_index(df[index], npartitions)
         else:
             index = partitioning_index(index, npartitions)
-        df[name] = index
-        meta[name] = 0
-        return merge_transfer(df, id, input_partition, npartitions, meta, parts_out)
+        df = df.assign(**{name: index})
+        meta = meta.assign(**{name: 0})
+        disk = () if not DASK_GT_20231000 else (True,)
+        return merge_transfer(
+            df, id, input_partition, npartitions, meta, parts_out, *disk
+        )
 
     return assign_index_merge_transfer
 

@@ -21,7 +21,14 @@ from dask.dataframe.shuffle import (
 )
 from dask.utils import M, digit, get_default_shuffle_method, insert
 
-from dask_expr._expr import Assign, Blockwise, Expr, PartitionsFiltered, Projection
+from dask_expr._expr import (
+    Assign,
+    Blockwise,
+    Expr,
+    Filter,
+    PartitionsFiltered,
+    Projection,
+)
 from dask_expr._reductions import (
     All,
     Any,
@@ -43,7 +50,7 @@ from dask_expr._reductions import (
     ValueCounts,
 )
 from dask_expr._repartition import Repartition, RepartitionToFewer
-from dask_expr._util import LRU
+from dask_expr._util import DASK_GT_20231000, LRU
 
 
 class Shuffle(Expr):
@@ -488,6 +495,7 @@ class P2PShuffle(SimpleShuffle):
         parts_out = (
             self._partitions if self._filtered else list(range(self.npartitions_out))
         )
+        disk = [] if not DASK_GT_20231000 else (True,)
         for i in range(self.frame.npartitions):
             transfer_keys.append((name, i))
             dsk[(name, i)] = (
@@ -499,6 +507,7 @@ class P2PShuffle(SimpleShuffle):
                 self.partitioning_index,
                 self.frame._meta,
                 set(parts_out),
+                *disk,
             )
 
         dsk[_barrier_key] = (shuffle_barrier, token, transfer_keys)
@@ -618,6 +627,18 @@ class AssignPartitioningIndex(Blockwise):
         else:
             index = partitioning_index(index, npartitions)
         return df.assign(**{name: index})
+
+    def _combine_similar(self, root: Expr):
+        return self._combine_similar_branches(root, (Filter, Projection))
+
+    def _remove_operations(self, frame, remove_ops, skip_ops=None):
+        expr, ops = super()._remove_operations(frame, remove_ops, skip_ops)
+        if len(ops) > 0 and isinstance(ops[0], list):
+            if sorted(ops[0]) == sorted(self.frame.columns):
+                expr, ops = super()._remove_operations(frame, remove_ops, skip_ops)
+                return expr, []
+            ops[0] = ops[0] + [self.index_name]
+        return expr, ops
 
 
 class BaseSetIndexSortValues(Expr):
