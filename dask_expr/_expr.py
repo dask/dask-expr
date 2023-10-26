@@ -1639,7 +1639,6 @@ class Assign(Elemwise):
     """Column Assignment"""
 
     _parameters = ["frame"]
-    _projection_passthrough = True
     operation = staticmethod(methods.assign)
 
     @functools.cached_property
