@@ -8,6 +8,7 @@ from dask_expr.tests._util import _backend_library
 distributed = pytest.importorskip("distributed")
 
 from distributed import Client, LocalCluster
+from distributed.shuffle._core import id_from_key
 from distributed.utils_test import client as c  # noqa F401
 from distributed.utils_test import gen_cluster
 
@@ -53,6 +54,22 @@ async def test_merge_p2p_shuffle(c, s, a, b, npartitions_left):
     x = c.compute(out)
     x = await x
     lib.testing.assert_frame_equal(x.reset_index(drop=True), df_left.merge(df_right))
+
+
+@gen_cluster(client=True)
+async def test_self_merge_p2p_shuffle(c, s, a, b):
+    pdf = lib.DataFrame({"a": range(100), "b": range(0, 200, 2)})
+    ddf = from_pandas(pdf, npartitions=5)
+
+    out = ddf.merge(ddf, left_on="a", right_on="b", shuffle_backend="p2p")
+    # Generate unique shuffle IDs if the input frame is the same but parameters differ
+    assert sum(id_from_key(k) is not None for k in out.dask) == 2
+    x = await c.compute(out)
+    expected = pdf.merge(pdf, left_on="a", right_on="b")
+    lib.testing.assert_frame_equal(
+        x.sort_values("a_x", ignore_index=True),
+        expected.sort_values("a_x", ignore_index=True),
+    )
 
 
 @pytest.mark.parametrize("npartitions_left", [5, 6])
