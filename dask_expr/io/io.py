@@ -128,6 +128,13 @@ class BlockwiseIO(Blockwise, IO):
 
         return
 
+    def _tune_up(self, parent):
+        if self._fusion_compression_factor >= 1:
+            return
+        if isinstance(parent, FusedIO):
+            return
+        return type(parent)(FusedIO(self), *parent.operands[1:])
+
 
 class FusedIO(BlockwiseIO):
     _parameters = ["expr"]
@@ -169,6 +176,9 @@ class FusedIO(BlockwiseIO):
         npartitions = len(partitions)
         buckets = [partitions[i : i + step] for i in range(0, npartitions, step)]
         return buckets
+
+    def _tune_up(self, parent):
+        return
 
 
 class FromPandas(PartitionsFiltered, BlockwiseIO):
