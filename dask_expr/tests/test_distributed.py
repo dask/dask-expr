@@ -103,8 +103,16 @@ async def test_merge_p2p_shuffle_reused_dataframe_with_same_parameters(c, s, a, 
     ddf1 = from_pandas(pdf1, npartitions=5)
     ddf2 = from_pandas(pdf2, npartitions=10)
 
+    # This performs two shuffles:
+    #   * ddf1 is shuffled on `a`
+    #   * ddf2 is shuffled on `x`
+    ddf3 = (ddf1.merge(ddf2, left_on="a", right_on="x", shuffle_backend="p2p"),)
+
+    # This performs one shuffle:
+    #   * ddf3 is shuffled on `b`
+    # We can reuse the shuffle of dd2 on `x` from the previous merge.
     out = ddf2.merge(
-        ddf1.merge(ddf2, left_on="a", right_on="x", shuffle_backend="p2p"),
+        ddf3,
         left_on="x",
         right_on="b",
         shuffle_backend="p2p",
