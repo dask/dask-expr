@@ -2122,9 +2122,6 @@ class Partitions(Expr):
     def _cull_down(self):
         return self._simplify_down()
 
-    def _cull_up(self, parent):
-        return None
-
     def _node_label_args(self):
         return [self.frame, self.partitions]
 
