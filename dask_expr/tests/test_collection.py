@@ -11,7 +11,7 @@ from dask.dataframe.utils import UNKNOWN_CATEGORIES
 from dask.utils import M
 
 from dask_expr import expr, from_pandas, is_scalar, optimize
-from dask_expr._expr import are_co_aligned
+from dask_expr._expr import Assign, are_co_aligned
 from dask_expr._reductions import Len
 from dask_expr.datasets import timeseries
 from dask_expr.tests._util import _backend_library, assert_eq, xfail_gpu
@@ -1261,3 +1261,48 @@ def test_replace_filtered_combine_similar():
     # Filter expressions (and not the other way around)
     similar = list(df.find_operations(Replace))
     assert all(isinstance(op.frame, Filter) for op in similar)
+
+
+def test_squash_assigns_togeher():
+    # pdf = lib.DataFrame(
+    #     {
+    #         "a": [1, 2, 3, 4],
+    #         "b": 2,
+    #         "c": 3,
+    #         "d": 4,
+    #         "e": 5
+    #     }
+    # )
+    # df = from_pandas(pdf, npartitions=2)
+    #
+    # df["x"] = df.a
+    # df["y"] = df.b
+    # df["z"] = df.c
+    #
+    # df = df[["x", "y", "z", "d"]]
+    # q = df.optimize(fuse=False)
+    # assert len(list(q.find_operations(Assign))) == 1
+    #
+    # pdf["x"] = pdf.a
+    # pdf["y"] = pdf.b
+    # pdf["z"] = pdf.c
+    #
+    # pdf = pdf[["x", "y", "z", "d"]]
+    # assert_eq(pdf, df)
+
+    pdf = lib.DataFrame({"a": [1, 2, 3, 4], "d": 4})
+    df = from_pandas(pdf, npartitions=2)
+
+    # This does not introduce an intermediate projection
+    df["x"] = df.a
+    df["y"] = df.a
+
+    df = df[["a", "x", "y", "d"]]
+    q = df.optimize(fuse=False)
+    assert len(list(q.find_operations(Assign))) == 1
+
+    pdf["x"] = pdf.a
+    pdf["y"] = pdf.a
+
+    pdf = pdf[["a", "x", "y", "d"]]
+    assert_eq(pdf, df)

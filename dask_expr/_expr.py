@@ -1638,7 +1638,7 @@ class Drop(Elemwise):
 class Assign(Elemwise):
     """Column Assignment"""
 
-    _parameters = ["frame", "key", "value"]
+    _parameters = ["frame"]
     operation = staticmethod(methods.assign)
 
     @functools.cached_property
@@ -1648,23 +1648,52 @@ class Assign(Elemwise):
         ]
         return make_meta(self.operation(*args, **self._kwargs))
 
+    @functools.cached_property
+    def keys(self):
+        return self.operands[1::2]
+
+    @functools.cached_property
+    def vals(self):
+        return self.operands[2::2]
+
     def _node_label_args(self):
-        return [self.frame, self.key, self.value]
+        return self.operands
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
-            if self.key not in parent.columns:
+            parent_columns = parent.columns
+            diff = set(self.keys) - set(parent_columns)
+            if len(diff) == len(self.keys):
                 return type(parent)(self.frame, *parent.operands[1:])
+            elif len(diff) > 0:
+                new_args = []
+                for k, v in zip(self.keys, self.vals):
+                    if k in parent_columns:
+                        new_args.extend([k, v])
+            else:
+                new_args = self.operands[1:]
 
-            columns = set(parent.columns) - {self.key}
+            columns = set(parent_columns) - set(self.keys)
             if columns == set(self.frame.columns):
                 # Protect against pushing the same projection twice
                 return
 
             return type(parent)(
-                type(self)(self.frame[sorted(columns)], *self.operands[1:]),
+                type(self)(self.frame[sorted(columns)], *new_args),
                 *parent.operands[1:],
             )
+
+    def _simplify_down(self):
+        if isinstance(self.frame, Projection) and isinstance(self.frame.frame, Assign):
+            # Squash multiple assigns together
+            new_columns = self.frame.columns
+            new_columns.extend([c for c in self.columns if c not in new_columns])
+            return Projection(
+                Assign(*self.frame.frame.operands, *self.operands[1:]), new_columns
+            )
+
+        if isinstance(self.frame, Assign):
+            return Assign(*self.frame.operands, *self.operands[1:])
 
 
 class Eval(Elemwise):

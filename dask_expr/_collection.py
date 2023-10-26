@@ -604,23 +604,20 @@ class DataFrame(FrameBase):
         return self.size / len(self.columns), len(self.columns)
 
     def assign(self, **pairs):
-        result = self
         data = self.copy()
+        args = []
         for k, v in pairs.items():
-            if not isinstance(k, str):
-                raise TypeError(f"Column name cannot be type {type(k)}")
-
             if callable(v):
                 v = v(data)
 
             if isinstance(v, (Scalar, Series)):
-                result = new_collection(expr.Assign(result.expr, k, v.expr))
+                v = v.expr
             elif not isinstance(v, FrameBase) and isinstance(v, Hashable):
-                result = new_collection(expr.Assign(result.expr, k, v))
+                pass
             else:
                 raise TypeError(f"Column assignment doesn't support type {type(v)}")
-
-        return result
+            args.extend([k, v])
+        return new_collection(expr.Assign(self.expr, *args))
 
     def merge(
         self,
