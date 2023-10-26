@@ -1275,7 +1275,7 @@ def test_squash_assigns_togeher():
     # )
     # df = from_pandas(pdf, npartitions=2)
     #
-    # df["x"] = df.a
+    # df["x"] = df.a + 1
     # df["y"] = df.b
     # df["z"] = df.c
     #
@@ -1283,7 +1283,7 @@ def test_squash_assigns_togeher():
     # q = df.optimize(fuse=False)
     # assert len(list(q.find_operations(Assign))) == 1
     #
-    # pdf["x"] = pdf.a
+    # pdf["x"] = pdf.a + 1
     # pdf["y"] = pdf.b
     # pdf["z"] = pdf.c
     #
@@ -1296,13 +1296,16 @@ def test_squash_assigns_togeher():
     # This does not introduce an intermediate projection
     df["x"] = df.a
     df["y"] = df.a
+    df["z"] = df["y"]
 
-    df = df[["a", "x", "y", "d"]]
+    df = df[["a", "x", "y", "z", "d"]]
     q = df.optimize(fuse=False)
-    assert len(list(q.find_operations(Assign))) == 1
+    q.pprint()
+    assert len(list(q.find_operations(Assign))) == 2
 
     pdf["x"] = pdf.a
     pdf["y"] = pdf.a
+    pdf["z"] = pdf.y
 
-    pdf = pdf[["a", "x", "y", "d"]]
+    pdf = pdf[["a", "x", "y", "z", "d"]]
     assert_eq(pdf, df)

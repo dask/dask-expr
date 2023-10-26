@@ -1639,6 +1639,7 @@ class Assign(Elemwise):
     """Column Assignment"""
 
     _parameters = ["frame"]
+    _projection_passthrough = True
     operation = staticmethod(methods.assign)
 
     @functools.cached_property
@@ -1683,9 +1684,12 @@ class Assign(Elemwise):
                 *parent.operands[1:],
             )
 
-    def _simplify_down(self):
+    def _tune_down(self):
         if isinstance(self.frame, Projection) and isinstance(self.frame.frame, Assign):
             # Squash multiple assigns together
+            if self._check_for_previously_created_column(self.frame.frame):
+                # don't squash if we are using a column that was previously created
+                return
             new_columns = self.frame.columns
             new_columns.extend([c for c in self.columns if c not in new_columns])
             return Projection(
@@ -1693,7 +1697,17 @@ class Assign(Elemwise):
             )
 
         if isinstance(self.frame, Assign):
+            if self._check_for_previously_created_column(self.frame):
+                # don't squash if we are using a column that was previously created
+                return
             return Assign(*self.frame.operands, *self.operands[1:])
+
+    def _check_for_previously_created_column(self, child):
+        input_columns = []
+        for v in self.vals:
+            if isinstance(v, Expr):
+                input_columns.extend(v.columns)
+        return bool(set(input_columns) & set(child.keys))
 
 
 class Eval(Elemwise):
