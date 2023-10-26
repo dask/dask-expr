@@ -116,9 +116,10 @@ class BlockwiseIO(Blockwise, IO):
                             else op[columns_operand]
                         )
 
-                # Create the "combined" ReadParquet operation
                 if set(self.columns) == set(columns):
-                   return  # Skip unnecessary projection change
+                    return  # Skip unnecessary projection change
+
+                # Create the "combined" ReadParquet operation
                 subs = {"columns": columns}
                 if self._series:
                     subs["_series"] = False
