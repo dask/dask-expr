@@ -2262,6 +2262,9 @@ def optimize(expr: Expr, combine_similar: bool = True, fuse: bool = True) -> Exp
     if combine_similar:
         result = result.combine_similar()
 
+    # Manipulate Expression to make it more efficient
+    result = result.rewrite(kind="tune")
+
     # Lower
     result = result.lower_completely()
 
@@ -2270,7 +2273,6 @@ def optimize(expr: Expr, combine_similar: bool = True, fuse: bool = True) -> Exp
 
     # Final graph-specific optimizations
     if fuse:
-        result = optimize_io_fusion(result)
         result = optimize_blockwise_fusion(result)
 
     return result
@@ -2300,51 +2302,23 @@ def non_blockwise_ancestors(expr):
 
 def are_co_aligned(*exprs):
     """Do inputs come from different parents, modulo blockwise?"""
-    exprs = [expr for expr in exprs if not is_broadcastable(expr)]
     ancestors = [set(non_blockwise_ancestors(e)) for e in exprs]
     unique_ancestors = {
         # Account for column projection within IO expressions
         _tokenize_partial(item, ["columns", "_series"])
         for item in flatten(ancestors, container=set)
     }
-    return len(unique_ancestors) <= 1
+    if len(unique_ancestors) <= 1:
+        return True
+    # We tried avoiding an `npartitions` check above, but
+    # now we need to consider "broadcastable" expressions.
+    exprs_except_broadcast = [expr for expr in exprs if not is_broadcastable(expr)]
+    if len(exprs_except_broadcast) < len(exprs):
+        return are_co_aligned(*exprs_except_broadcast)
+    return False
 
 
 ## Utilites for Expr fusion
-
-
-def optimize_io_fusion(expr):
-    """Traverse the expression graph and apply fusion to the I/O layer that squashes
-    partitions together if possible."""
-
-    def _fusion_pass(expr):
-        new_operands = []
-        changed = False
-        for operand in expr.operands:
-            if isinstance(operand, Expr):
-                if (
-                    isinstance(operand, BlockwiseIO)
-                    and operand._fusion_compression_factor < 1
-                ):
-                    new = FusedIO(operand)
-                elif isinstance(operand, BlockwiseIO):
-                    new = operand
-                else:
-                    new = _fusion_pass(operand)
-
-                if new._name != operand._name:
-                    changed = True
-            else:
-                new = operand
-            new_operands.append(new)
-
-        if changed:
-            expr = type(expr)(*new_operands)
-
-        return expr
-
-    expr = _fusion_pass(expr)
-    return expr
 
 
 def optimize_blockwise_fusion(expr):
@@ -2581,4 +2555,4 @@ from dask_expr._reductions import (
     Sum,
     Var,
 )
-from dask_expr.io import IO, BlockwiseIO, FusedIO
+from dask_expr.io import IO, BlockwiseIO
