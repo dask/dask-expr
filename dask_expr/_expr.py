@@ -2265,6 +2265,8 @@ def are_co_aligned(*exprs):
     }
     if len(unique_ancestors) <= 1:
         return True
+    # We tried avoiding an `npartitions` check above, but
+    # now we need to consider "broadcastable" expressions.
     exprs_except_broadcast = [expr for expr in exprs if not is_broadcastable(expr)]
     if len(exprs_except_broadcast) < len(exprs):
         return are_co_aligned(*exprs_except_broadcast)
