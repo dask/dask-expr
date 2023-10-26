@@ -1709,6 +1709,9 @@ class Assign(Elemwise):
                 input_columns.extend(v.columns)
         return bool(set(input_columns) & set(child.keys))
 
+    def _combine_similar(self, root: Expr):
+        return super()._combine_similar(root)
+
 
 class Eval(Elemwise):
     _parameters = ["frame", "_expr", "expr_kwargs"]

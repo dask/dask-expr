@@ -1300,7 +1300,7 @@ def test_squash_assigns_togeher():
 
     df = df[["a", "x", "y", "z", "d"]]
     q = df.optimize(fuse=False)
-    q.pprint()
+    # q.pprint()
     assert len(list(q.find_operations(Assign))) == 2
 
     pdf["x"] = pdf.a
