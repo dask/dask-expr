@@ -1264,31 +1264,23 @@ def test_replace_filtered_combine_similar():
 
 
 def test_squash_assigns_togeher():
-    # pdf = lib.DataFrame(
-    #     {
-    #         "a": [1, 2, 3, 4],
-    #         "b": 2,
-    #         "c": 3,
-    #         "d": 4,
-    #         "e": 5
-    #     }
-    # )
-    # df = from_pandas(pdf, npartitions=2)
-    #
-    # df["x"] = df.a + 1
-    # df["y"] = df.b
-    # df["z"] = df.c
-    #
-    # df = df[["x", "y", "z", "d"]]
-    # q = df.optimize(fuse=False)
-    # assert len(list(q.find_operations(Assign))) == 1
-    #
-    # pdf["x"] = pdf.a + 1
-    # pdf["y"] = pdf.b
-    # pdf["z"] = pdf.c
-    #
-    # pdf = pdf[["x", "y", "z", "d"]]
-    # assert_eq(pdf, df)
+    pdf = lib.DataFrame({"a": [1, 2, 3, 4], "b": 2, "c": 3, "d": 4, "e": 5})
+    df = from_pandas(pdf, npartitions=2)
+
+    df["x"] = df.a + 1
+    df["y"] = df.b
+    df["z"] = df.c
+
+    df = df[["x", "y", "z", "d"]]
+    q = df.optimize(fuse=False)
+    assert len(list(q.find_operations(Assign))) == 1
+
+    pdf["x"] = pdf.a + 1
+    pdf["y"] = pdf.b
+    pdf["z"] = pdf.c
+
+    pdf = pdf[["x", "y", "z", "d"]]
+    assert_eq(pdf, df)
 
     pdf = lib.DataFrame({"a": [1, 2, 3, 4], "d": 4})
     df = from_pandas(pdf, npartitions=2)

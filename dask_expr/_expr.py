@@ -486,6 +486,10 @@ class Expr:
             ) or common._name == op._name:
                 others_compatible.append(op)
 
+            added_ops = self._combine_similar_add_removed_ops_back_in(common, op)
+            if added_ops is not None:
+                return added_ops
+
         if isinstance(self.frame, Filter) and all(
             isinstance(op.frame, Filter) for op in others_compatible
         ):
@@ -501,6 +505,9 @@ class Expr:
                     # Combine stacked projections
                     common = common._simplify_down() or common
             return common
+
+    def _combine_similar_add_removed_ops_back_in(self, common, op):
+        return None
 
     def _remove_operations(self, frame, remove_ops, skip_ops=None):
         """Searches for operations that we have to push up again to avoid
@@ -1709,8 +1716,18 @@ class Assign(Elemwise):
                 input_columns.extend(v.columns)
         return bool(set(input_columns) & set(child.keys))
 
-    def _combine_similar(self, root: Expr):
-        return super()._combine_similar(root)
+    def _combine_similar_add_removed_ops_back_in(self, common, op):
+        # This is not a great solution. simplify might have removed complete
+        # assign operations if the added column isn't needed further down in the
+        # expression. We have to check if this happened in some branches but
+        # not in others. If the answer is yes, then we have to add these ops back
+        # in
+        if (
+            op.keys == common.keys
+            and all(v._name == c_v._name for v, c_v in zip(op.vals, common.vals))
+            and op._depth() > common._depth()
+        ):
+            return op
 
 
 class Eval(Elemwise):
