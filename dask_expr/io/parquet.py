@@ -558,7 +558,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         meta = self._dataset_info["base_meta"]
         columns = _convert_to_list(self.operand("columns"))
         if self._series:
-            assert columns
+            assert len(columns) > 0
             return meta[columns[0]]
         elif columns is not None:
             return meta[columns]
