@@ -106,7 +106,7 @@ async def test_merge_p2p_shuffle_reused_dataframe_with_same_parameters(c, s, a, 
     # This performs two shuffles:
     #   * ddf1 is shuffled on `a`
     #   * ddf2 is shuffled on `x`
-    ddf3 = (ddf1.merge(ddf2, left_on="a", right_on="x", shuffle_backend="p2p"),)
+    ddf3 = ddf1.merge(ddf2, left_on="a", right_on="x", shuffle_backend="p2p")
 
     # This performs one shuffle:
     #   * ddf3 is shuffled on `b`
