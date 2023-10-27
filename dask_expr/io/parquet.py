@@ -1,52 +1,30 @@
 from __future__ import annotations
 
+import concurrent.futures
 import contextlib
 import functools
 import itertools
-import operator
+import math
 import warnings
 from collections import defaultdict
 from functools import cached_property
 
 import dask
+import pandas as pd
 import pyarrow as pa
 import pyarrow.dataset as pa_ds
 import pyarrow.parquet as pq
 import tlz as toolz
-from dask.base import normalize_token, tokenize
-from dask.dataframe.io.parquet.core import (
-    ParquetFunctionWrapper,
-    ToParquetFunctionWrapper,
-    aggregate_row_groups,
-    get_engine,
-    set_index_columns,
-    sorted_columns,
-)
-from dask.dataframe.io.parquet.utils import _split_user_options
+from dask.base import normalize_token
+from dask.dataframe.io.parquet.core import ToParquetFunctionWrapper, get_engine
 from dask.dataframe.io.utils import _is_local_fs
 from dask.delayed import delayed
-from dask.utils import apply, natural_sort_key, typename
+from dask.utils import apply, typename
 from fsspec.utils import stringify_path
 
-from dask_expr._expr import (
-    EQ,
-    GE,
-    GT,
-    LE,
-    LT,
-    NE,
-    And,
-    Blockwise,
-    Expr,
-    Index,
-    Lengths,
-    Literal,
-    Or,
-    Projection,
-)
-from dask_expr._reductions import Len
-from dask_expr._util import _convert_to_list
-from dask_expr.io import BlockwiseIO, PartitionsFiltered
+from dask_expr._expr import Blockwise, Expr, Index, PartitionsFiltered, Projection
+from dask_expr._util import _convert_to_list, _tokenize_deterministic
+from dask_expr.io import BlockwiseIO
 
 NONE_LABEL = "__null_dask_index__"
 
@@ -392,54 +370,42 @@ def to_parquet(
 class ReadParquet(PartitionsFiltered, BlockwiseIO):
     """Read a parquet dataset"""
 
+    _absorb_projections = True
+
     _parameters = [
         "path",
         "columns",
-        "filters",
-        "categories",
-        "index",
-        "storage_options",
-        "calculate_divisions",
-        "ignore_metadata_file",
-        "metadata_task_size",
-        "split_row_groups",
-        "blocksize",
-        "aggregate_files",
-        "parquet_file_extension",
-        "filesystem",
-        "engine",
-        "kwargs",
         "_partitions",
         "_series",
     ]
     _defaults = {
         "columns": None,
-        "filters": None,
-        "categories": None,
-        "index": None,
-        "storage_options": None,
-        "calculate_divisions": False,
-        "ignore_metadata_file": False,
-        "metadata_task_size": None,
-        "split_row_groups": "infer",
-        "blocksize": "default",
-        "aggregate_files": None,
-        "parquet_file_extension": (".parq", ".parquet", ".pq"),
-        "filesystem": "fsspec",
-        "engine": "pyarrow",
-        "kwargs": None,
+        # "parquet_file_extension": (".parq", ".parquet", ".pq"),
         "_partitions": None,
         "_series": False,
     }
-    _pq_length_stats = None
-    _absorb_projections = True
 
-    @property
-    def engine(self):
-        _engine = self.operand("engine")
-        if isinstance(_engine, str):
-            return get_engine(_engine)
-        return _engine
+    @functools.cached_property
+    def _name(self):
+        return "readparquet-" + _tokenize_deterministic(*self.operands)
+
+    @functools.cached_property
+    def filesystem(self):
+        if str(self.path).startswith("s3://"):
+            import boto3
+            from pyarrow.fs import S3FileSystem
+
+            session = boto3.session.Session()
+            credentials = session.get_credentials()
+
+            return S3FileSystem(
+                secret_key=credentials.secret_key,
+                access_key=credentials.access_key,
+                region="us-east-2",  # TODO
+                session_token=credentials.token,
+            )
+        else:
+            return None
 
     @property
     def columns(self):
@@ -449,214 +415,122 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         else:
             return _convert_to_list(columns_operand)
 
+    @property
+    def _meta(self):
+        meta, _ = meta_and_filenames(self.path)
+        if self.operand("columns") is not None:
+            meta = meta[self.operand("columns")]
+        if self._series:
+            meta = meta[meta.columns[0]]
+        return meta
+
+    @functools.cached_property
+    def _filename_batches(self):
+        meta, filenames = meta_and_filenames(self.path)
+        if not self.columns:
+            files_per_partition = 1
+        else:
+            files_per_partition = int(round(len(meta.columns) / len(self.columns)))
+
+        return list(toolz.partition_all(files_per_partition, filenames))
+
+    def _filtered_task(self, i):
+        batch = self._filename_batches[i]
+        return (
+            ReadParquet.to_pandas,
+            (
+                ReadParquet.read_partition,
+                batch,
+                self.columns,
+                self.filesystem,
+            ),
+        )
+
+    @staticmethod
+    def to_pandas(t: pa.Table) -> pd.DataFrame:
+        df = t.to_pandas(
+            use_threads=False,
+            ignore_metadata=False,
+            types_mapper=types_mapper,
+        )
+        return df
+
+    @staticmethod
+    def read_partition(batch, columns, filesystem):
+        def read_arrow_table(fn):
+            t = pq.ParquetFile(fn, pre_buffer=True, filesystem=filesystem).read(
+                columns=columns,
+                use_threads=False,
+                use_pandas_metadata=True,
+            )
+            return t
+
+        if len(batch) == 1:
+            return read_arrow_table(batch[0])
+        if filesystem is None:  # local
+            return pa.concat_tables(list(map(read_arrow_table, batch)))
+        else:
+            with concurrent.futures.ThreadPoolExecutor(len(batch)) as e:
+                parts = list(e.map(read_arrow_table, batch))
+            return pa.concat_tables(parts)
+
+    def _divisions(self):
+        meta, filenames = meta_and_filenames(self.path)
+        files_per_partition = int(round(len(meta.columns) / len(self.columns)))
+        return [None] * (int(math.ceil(len(filenames) / files_per_partition)) + 1)
+
     def _simplify_up(self, parent):
         if isinstance(parent, Index):
             # Column projection
             return self.substitute_parameters({"columns": [], "_series": False})
 
         if isinstance(parent, Projection):
-            return super()._simplify_up(parent)
+            return BlockwiseIO._simplify_up(self, parent)
 
-        if isinstance(parent, Lengths):
-            _lengths = self._get_lengths()
-            if _lengths:
-                return Literal(_lengths)
+        # if isinstance(parent, Lengths):
+        #     _lengths = self._get_lengths()
+        #     if _lengths:
+        #         return Literal(_lengths)
 
-        if isinstance(parent, Len):
-            _lengths = self._get_lengths()
-            if _lengths:
-                return Literal(sum(_lengths))
+        # if isinstance(parent, Len):
+        #     _lengths = self._get_lengths()
+        #     if _lengths:
+        #         return Literal(sum(_lengths))
 
-    @cached_property
-    def _dataset_info(self):
-        # Process and split user options
-        (
-            dataset_options,
-            read_options,
-            open_file_options,
-            other_options,
-        ) = _split_user_options(**(self.kwargs or {}))
 
-        # Extract global filesystem and paths
-        fs, paths, dataset_options, open_file_options = self.engine.extract_filesystem(
-            self.path,
-            self.filesystem,
-            dataset_options,
-            open_file_options,
-            self.storage_options,
-        )
-        read_options["open_file_options"] = open_file_options
-        paths = sorted(paths, key=natural_sort_key)  # numeric rather than glob ordering
+def types_mapper(pyarrow_dtype):
+    if pyarrow_dtype == pa.string():
+        return pd.StringDtype("pyarrow")
+    if "decimal" in str(pyarrow_dtype) or "date32" in str(pyarrow_dtype):
+        return pd.ArrowDtype(pyarrow_dtype)
 
-        auto_index_allowed = False
-        index_operand = self.operand("index")
-        if index_operand is None:
-            # User is allowing auto-detected index
-            auto_index_allowed = True
-        if index_operand and isinstance(index_operand, str):
-            index = [index_operand]
+
+@functools.lru_cache
+def meta_and_filenames(path):
+    if str(path).startswith("s3://"):
+        import s3fs
+
+        s3 = s3fs.S3FileSystem()
+        filenames = s3.ls(path)
+    else:
+        import glob
+        import os
+
+        if os.path.isdir(path):
+            filenames = sorted(glob.glob(os.path.join(path, "*")))
         else:
-            index = index_operand
+            filenames = [path]  # TODO: split by row group
 
-        blocksize = self.blocksize
-        if self.split_row_groups in ("infer", "adaptive"):
-            # Using blocksize to plan partitioning
-            if self.blocksize == "default":
-                if hasattr(self.engine, "default_blocksize"):
-                    blocksize = self.engine.default_blocksize()
-                else:
-                    blocksize = "128MiB"
-        else:
-            # Not using blocksize - Set to `None`
-            blocksize = None
+<<<<<<< HEAD
+    import dask.dataframe as dd
+    meta = dd.read_parquet(path)._meta
+=======
+    ds = pq.ParquetDataset(path)
+    t = pa.Table.from_pylist([], schema=ds.schema)
+    meta = t.to_pandas(types_mapper=types_mapper)
+>>>>>>> d037c82 (Grab meta from arrow rather than dask.dataframe)
 
-        # Collect general dataset info
-        args = (
-            paths,
-            fs,
-            self.categories,
-            index,
-            self.calculate_divisions,
-            self.filters,
-            self.split_row_groups,
-            blocksize,
-            self.aggregate_files,
-            self.ignore_metadata_file,
-            self.metadata_task_size,
-            self.parquet_file_extension,
-            {
-                "read": read_options,
-                "dataset": dataset_options,
-                **other_options,
-            },
-        )
-        dataset_token = tokenize(*args)
-        if dataset_token not in _cached_dataset_info:
-            _control_cached_dataset_info(dataset_token)
-            _cached_dataset_info[dataset_token] = self.engine._collect_dataset_info(
-                *args
-            )
-        dataset_info = _cached_dataset_info[dataset_token].copy()
-
-        # Infer meta, accounting for index and columns arguments.
-        meta = self.engine._create_dd_meta(dataset_info)
-        index = dataset_info["index"]
-        index = [index] if isinstance(index, str) else index
-        meta, index, all_columns = set_index_columns(
-            meta, index, None, auto_index_allowed
-        )
-        if meta.index.name == NONE_LABEL:
-            meta.index.name = None
-        dataset_info["base_meta"] = meta
-        dataset_info["index"] = index
-        dataset_info["all_columns"] = all_columns
-
-        return dataset_info
-
-    @property
-    def _meta(self):
-        meta = self._dataset_info["base_meta"]
-        columns = _convert_to_list(self.operand("columns"))
-        if self._series:
-            assert len(columns) > 0
-            return meta[columns[0]]
-        elif columns is not None:
-            return meta[columns]
-        return meta
-
-    @cached_property
-    def _io_func(self):
-        if self._plan["empty"]:
-            return lambda x: x
-        dataset_info = self._dataset_info
-        return ParquetFunctionWrapper(
-            self.engine,
-            dataset_info["fs"],
-            dataset_info["base_meta"],
-            self.columns,
-            dataset_info["index"],
-            dataset_info["kwargs"]["dtype_backend"],
-            {},  # All kwargs should now be in `common_kwargs`
-            self._plan["common_kwargs"],
-        )
-
-    @cached_property
-    def _plan(self):
-        dataset_info = self._dataset_info
-        dataset_token = tokenize(dataset_info)
-        if dataset_token not in _cached_plan:
-            parts, stats, common_kwargs = self.engine._construct_collection_plan(
-                dataset_info
-            )
-
-            # Make sure parts and stats are aligned
-            parts, stats = _align_statistics(parts, stats)
-
-            # Use statistics to aggregate partitions
-            parts, stats = _aggregate_row_groups(parts, stats, dataset_info)
-
-            # Use statistics to calculate divisions
-            divisions = _calculate_divisions(stats, dataset_info, len(parts))
-
-            empty = False
-            if len(divisions) < 2:
-                # empty dataframe - just use meta
-                divisions = (None, None)
-                parts = [self._meta]
-                empty = True
-
-            _control_cached_plan(dataset_token)
-            _cached_plan[dataset_token] = {
-                "empty": empty,
-                "parts": parts,
-                "statistics": stats,
-                "divisions": divisions,
-                "common_kwargs": common_kwargs,
-            }
-        return _cached_plan[dataset_token]
-
-    def _divisions(self):
-        return self._plan["divisions"]
-
-    def _filtered_task(self, index: int):
-        tsk = (self._io_func, self._plan["parts"][index])
-        if self._series:
-            return (operator.getitem, tsk, self.columns[0])
-        return tsk
-
-    def _get_lengths(self) -> tuple | None:
-        """Return known partition lengths using parquet statistics"""
-        if not self.filters:
-            self._update_length_statistics()
-            return tuple(
-                length
-                for i, length in enumerate(self._pq_length_stats)
-                if not self._filtered or i in self._partitions
-            )
-
-    def _update_length_statistics(self):
-        """Ensure that partition-length statistics are up to date"""
-
-        if not self._pq_length_stats:
-            if self._plan["statistics"]:
-                # Already have statistics from original API call
-                self._pq_length_stats = tuple(
-                    stat["num-rows"]
-                    for i, stat in enumerate(self._plan["statistics"])
-                    if not self._filtered or i in self._partitions
-                )
-            else:
-                # Need to go back and collect statistics
-                self._pq_length_stats = tuple(
-                    stat["num-rows"] for stat in _collect_pq_statistics(self)
-                )
-
-    @functools.cached_property
-    def _fusion_compression_factor(self):
-        if self.operand("columns") is None:
-            return 1
-        nr_original_columns = len(self._dataset_info["schema"].names) - 1
-        return len(_convert_to_list(self.operand("columns"))) / nr_original_columns
+    return meta, filenames
 
 
 #
@@ -676,180 +550,6 @@ def _set_parquet_engine(engine=None, meta=None):
         else:
             engine = "pyarrow"
     return engine
-
-
-def _align_statistics(parts, statistics):
-    # Make sure parts and statistics are aligned
-    # (if statistics is not empty)
-    if statistics and len(parts) != len(statistics):
-        statistics = []
-    if statistics:
-        result = list(
-            zip(
-                *[
-                    (part, stats)
-                    for part, stats in zip(parts, statistics)
-                    if stats["num-rows"] > 0
-                ]
-            )
-        )
-        parts, statistics = result or [[], []]
-    return parts, statistics
-
-
-def _aggregate_row_groups(parts, statistics, dataset_info):
-    # Aggregate parts/statistics if we are splitting by row-group
-    blocksize = (
-        dataset_info["blocksize"] if dataset_info["split_row_groups"] is True else None
-    )
-    split_row_groups = dataset_info["split_row_groups"]
-    fs = dataset_info["fs"]
-    aggregation_depth = dataset_info["aggregation_depth"]
-
-    if statistics:
-        if blocksize or (split_row_groups and int(split_row_groups) > 1):
-            parts, statistics = aggregate_row_groups(
-                parts, statistics, blocksize, split_row_groups, fs, aggregation_depth
-            )
-    return parts, statistics
-
-
-def _calculate_divisions(statistics, dataset_info, npartitions):
-    # Use statistics to define divisions
-    divisions = None
-    if statistics:
-        calculate_divisions = dataset_info["kwargs"].get("calculate_divisions", None)
-        index = dataset_info["index"]
-        process_columns = index if index and len(index) == 1 else None
-        if (calculate_divisions is not False) and process_columns:
-            for sorted_column_info in sorted_columns(
-                statistics, columns=process_columns
-            ):
-                if sorted_column_info["name"] in index:
-                    divisions = sorted_column_info["divisions"]
-                    break
-
-    return divisions or (None,) * (npartitions + 1)
-
-
-#
-# Filtering logic
-#
-
-
-class _DNF:
-    """Manage filters in Disjunctive Normal Form (DNF)"""
-
-    class _Or(frozenset):
-        """Fozen set of disjunctions"""
-
-        def to_list_tuple(self) -> list:
-            # DNF "or" is List[List[Tuple]]
-            def _maybe_list(val):
-                if isinstance(val, tuple) and val and isinstance(val[0], (tuple, list)):
-                    return list(val)
-                return [val]
-
-            return [
-                _maybe_list(val.to_list_tuple())
-                if hasattr(val, "to_list_tuple")
-                else _maybe_list(val)
-                for val in self
-            ]
-
-    class _And(frozenset):
-        """Frozen set of conjunctions"""
-
-        def to_list_tuple(self) -> list:
-            # DNF "and" is List[Tuple]
-            return tuple(
-                val.to_list_tuple() if hasattr(val, "to_list_tuple") else val
-                for val in self
-            )
-
-    _filters: _And | _Or | None  # Underlying filter expression
-
-    def __init__(self, filters: _And | _Or | list | tuple | None) -> _DNF:
-        self._filters = self.normalize(filters)
-
-    def to_list_tuple(self) -> list:
-        return self._filters.to_list_tuple()
-
-    def __bool__(self) -> bool:
-        return bool(self._filters)
-
-    @classmethod
-    def normalize(cls, filters: _And | _Or | list | tuple | None):
-        """Convert raw filters to the `_Or(_And)` DNF representation"""
-        if not filters:
-            result = None
-        elif isinstance(filters, list):
-            conjunctions = filters if isinstance(filters[0], list) else [filters]
-            result = cls._Or([cls._And(conjunction) for conjunction in conjunctions])
-        elif isinstance(filters, tuple):
-            if isinstance(filters[0], tuple):
-                raise TypeError("filters must be List[Tuple] or List[List[Tuple]]")
-            result = cls._Or((cls._And((filters,)),))
-        elif isinstance(filters, cls._Or):
-            result = cls._Or(se for e in filters for se in cls.normalize(e))
-        elif isinstance(filters, cls._And):
-            total = []
-            for c in itertools.product(*[cls.normalize(e) for e in filters]):
-                total.append(cls._And(se for e in c for se in e))
-            result = cls._Or(total)
-        else:
-            raise TypeError(f"{type(filters)} not a supported type for _DNF")
-        return result
-
-    def combine(self, other: _DNF | _And | _Or | list | tuple | None) -> _DNF:
-        """Combine with another _DNF object"""
-        if not isinstance(other, _DNF):
-            other = _DNF(other)
-        assert isinstance(other, _DNF)
-        if self._filters is None:
-            result = other._filters
-        elif other._filters is None:
-            result = self._filters
-        else:
-            result = self._And([self._filters, other._filters])
-        return _DNF(result)
-
-    @classmethod
-    def extract_pq_filters(cls, pq_expr: ReadParquet, predicate_expr: Expr) -> _DNF:
-        _filters = None
-        if isinstance(predicate_expr, (LE, GE, LT, GT, EQ, NE)):
-            if (
-                isinstance(predicate_expr.left, ReadParquet)
-                and predicate_expr.left.path == pq_expr.path
-                and not isinstance(predicate_expr.right, Expr)
-            ):
-                op = predicate_expr._operator_repr
-                column = predicate_expr.left.columns[0]
-                value = predicate_expr.right
-                _filters = (column, op, value)
-            elif (
-                isinstance(predicate_expr.right, ReadParquet)
-                and predicate_expr.right.path == pq_expr.path
-                and not isinstance(predicate_expr.left, Expr)
-            ):
-                # Simple dict to make sure field comes first in filter
-                flip = {LE: GE, LT: GT, GE: LE, GT: LT}
-                op = predicate_expr
-                op = flip.get(op, op)._operator_repr
-                column = predicate_expr.right.columns[0]
-                value = predicate_expr.left
-                _filters = (column, op, value)
-
-        elif isinstance(predicate_expr, (And, Or)):
-            left = cls.extract_pq_filters(pq_expr, predicate_expr.left)._filters
-            right = cls.extract_pq_filters(pq_expr, predicate_expr.right)._filters
-            if left and right:
-                if isinstance(predicate_expr, And):
-                    _filters = cls._And([left, right])
-                else:
-                    _filters = cls._Or([left, right])
-
-        return _DNF(_filters)
 
 
 #
