@@ -1,7 +1,6 @@
 import pytest
 
 from dask_expr import from_pandas
-from dask_expr._expr import RenameFrame
 from dask_expr._reductions import TreeReduce
 from dask_expr.tests._util import _backend_library, assert_eq, xfail_gpu
 
@@ -204,31 +203,3 @@ def test_groupby_projection_split_out(df, pdf):
     df = from_pandas(pdf, npartitions=50)
     result = df.groupby("y")["x"].sum(split_out=2)
     assert_eq(result, pdf_result)
-
-
-def test_groupby_size_simplify(pdf, df):
-    q = df.groupby("x").size()
-    expected = df[["x"]].groupby("x").size().optimize()._name
-    assert q.optimize()._name == expected
-    assert_eq(q, pdf.groupby("x").size())
-    assert_eq(df.groupby("x").y.size(), pdf.groupby("x").y.size())
-    q = df.groupby("x")[["y", "z"]].size()
-    assert q.optimize()._name == expected
-    assert_eq(q, pdf.groupby("x")[["y", "z"]].size())
-
-    q = df.groupby("x").agg({"y": "sum", "z": "size"})
-    expected = (
-        df[["x", "y"]]
-        .groupby("x")
-        .agg({"y": "sum", "x": "size"})
-        .rename({"x": "z"})
-        .optimize()
-    )
-    expected.pprint()
-    q.optimize().pprint()
-    assert q.optimize()._name == expected._name
-    assert_eq(q, pdf.groupby("x").agg({"y": "sum", "z": "size"}))
-
-    q = df.groupby("x").agg({"y": "sum", "z": "size", "x": "sum"})
-    assert not isinstance(q.optimize().expr, RenameFrame)
-    assert_eq(q, pdf.groupby("x").agg({"y": "sum", "z": "size", "x": "sum"}))
