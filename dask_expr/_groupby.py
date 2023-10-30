@@ -69,7 +69,11 @@ class GroupByApplyConcatApply(ApplyConcatApply):
         return super().split_out
 
     def _tune_down(self):
-        if len(self.by) > 1 and self.operand("split_out") is None:
+        if (
+            isinstance(self.by, list)
+            and len(self.by) > 1
+            and self.operand("split_out") is None
+        ):
             return self.substitute_parameters(
                 {"split_out": _adjust_split_out_for_group_keys}
             )
