@@ -185,3 +185,10 @@ def test_groupby_agg_split_out(pdf, df, spec, sort, split_out):
 
     expect = pdf.groupby("x", sort=sort).agg(spec)
     assert_eq(agg, expect, sort_results=not sort)
+
+
+def test_groupby_reduction_shuffle(df, pdf):
+    q = df.groupby("x").sum(split_out=True)
+    assert q.optimize().npartitions == df.npartitions
+    expected = pdf.groupby("x").sum()
+    assert_eq(q, expected)
