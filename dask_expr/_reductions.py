@@ -147,15 +147,19 @@ class ShuffleReduce(Expr):
         from dask_expr._repartition import Repartition
         from dask_expr._shuffle import SetIndexBlockwise, Shuffle, SortValues
 
-        # Find what columns we are shuffling by
-        split_by = self.split_by or self.frame.columns
-        split_by_index = bool(set(split_by) - set(self.frame.columns))
+        if is_index_like(self.frame._meta):
+            columns = [self.frame._meta.name or "__index__"]
+        elif is_series_like(self.frame._meta):
+            columns = [self.frame._meta.name or "__series__"]
+        else:
+            columns = self.frame.columns
+
+        split_by = self.split_by or columns
+        split_by_index = bool(set(split_by) - set(columns))
 
         # Make sure we have dataframe-like data to shuffle
-        if is_index_like(self.frame._meta):
-            chunked = ToFrame(self.frame, name=self.frame._meta.name or "__index__")
-        elif is_series_like(self.frame._meta):
-            chunked = ToFrame(self.frame, name=self.frame._meta.name or "__series__")
+        if is_index_like(self.frame._meta) or is_series_like(self.frame._meta):
+            chunked = ToFrame(self.frame, name=columns[0])
         elif split_by_index:
             chunked = ResetIndex(self.frame, drop=False)
         else:
