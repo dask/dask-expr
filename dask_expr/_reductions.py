@@ -154,14 +154,15 @@ class ShuffleReduce(Expr):
         else:
             columns = self.frame.columns
 
+        # Find what columns we are shuffling by
         split_by = self.split_by or columns
         split_by_index = bool(set(split_by) - set(columns))
 
         # Make sure we have dataframe-like data to shuffle
-        if is_index_like(self.frame._meta) or is_series_like(self.frame._meta):
-            chunked = ToFrame(self.frame, name=columns[0])
-        elif split_by_index:
+        if split_by_index:
             chunked = ResetIndex(self.frame, drop=False)
+        elif is_index_like(self.frame._meta) or is_series_like(self.frame._meta):
+            chunked = ToFrame(self.frame, name=columns[0])
         else:
             chunked = self.frame
 
