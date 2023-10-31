@@ -40,6 +40,14 @@ class Repartition(Expr):
     def _meta(self):
         return self.frame._meta
 
+    @property
+    def npartitions(self):
+        if "new_partitions" in self._parameters:
+            npartitions = self.operand("new_partitions")
+            if npartitions is not None:
+                return npartitions
+        return super().npartitions
+
     def _divisions(self):
         if (
             self.operand("new_partitions") is not None
@@ -130,6 +138,13 @@ class RepartitionToFewer(Repartition):
 
     def _divisions(self):
         return tuple(self.frame.divisions[i] for i in self._partitions_boundaries)
+
+    def _lower(self):
+        # Multiple lowering steps might have changed the npartitions
+        npartitions = self.new_partitions
+        npartitions_input = self.frame.npartitions
+        if npartitions_input <= npartitions:
+            return self.frame
 
     @functools.cached_property
     def _partitions_boundaries(self):

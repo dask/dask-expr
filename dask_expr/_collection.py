@@ -151,8 +151,14 @@ class FrameBase(DaskMethodsMixin):
         out = self.optimize(combine_similar=combine_similar, fuse=fuse)
         return DaskMethodsMixin.persist(out, **kwargs)
 
-    def compute(self, fuse=True, combine_similar=True, **kwargs):
-        out = self.optimize(combine_similar=combine_similar, fuse=fuse)
+    def compute(
+        self, fuse=True, combine_similar=True, inject_repartition=True, **kwargs
+    ):
+        if inject_repartition:
+            out = self.repartition(npartitions=1)
+        else:
+            out = self
+        out = out.optimize(combine_similar=combine_similar, fuse=fuse)
         return DaskMethodsMixin.compute(out, **kwargs)
 
     def __dask_graph__(self):
@@ -229,13 +235,13 @@ class FrameBase(DaskMethodsMixin):
     def head(self, n=5, compute=True):
         out = new_collection(expr.Head(self.expr, n=n))
         if compute:
-            out = out.compute()
+            out = out.compute(inject_repartition=False)
         return out
 
     def tail(self, n=5, compute=True):
         out = new_collection(expr.Tail(self.expr, n=n))
         if compute:
-            out = out.compute()
+            out = out.compute(inject_repartition=False)
         return out
 
     def copy(self):

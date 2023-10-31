@@ -1,7 +1,10 @@
+from collections import OrderedDict
+
 import pytest
 
 from dask_expr import from_pandas
 from dask_expr._reductions import TreeReduce
+from dask_expr._shuffle import divisions_lru
 from dask_expr.tests._util import _backend_library, assert_eq, xfail_gpu
 
 # Set DataFrame backend for this module
@@ -48,6 +51,21 @@ def test_groupby_numeric(pdf, df, api, numeric_only):
 
     expect = getattr(pdf.groupby("x"), api)(numeric_only=numeric_only)["y"]
     assert_eq(agg, expect)
+
+
+def test_split_out_sort_values_compute(pdf, df):
+    divisions_lru.data = OrderedDict()
+    result = df.groupby("x").sum(split_out=2).sort_values(by="y").compute()
+    assert len(divisions_lru.data) == 0
+    expected = pdf.groupby("x").sum().sort_values(by="y")
+    assert_eq(result, expected)
+
+
+def test_groupby_repartition_to_one(pdf, df):
+    df = from_pandas(pdf, npartitions=25)
+    result = df.groupby("x", sort=True).sum(split_out=2).repartition(1).compute()
+    expected = pdf.groupby("x").sum()
+    assert_eq(result, expected)
 
 
 @pytest.mark.parametrize(
