@@ -44,6 +44,8 @@ class Repartition(Expr):
     def npartitions(self):
         if "new_partitions" in self._parameters:
             npartitions = self.operand("new_partitions")
+            if isinstance(npartitions, Callable):
+                return npartitions(self.frame.npartitions)
             if npartitions is not None:
                 return npartitions
         return super().npartitions
@@ -64,6 +66,9 @@ class Repartition(Expr):
         if self.operand("new_partitions") is not None:
             if self.new_partitions < self.frame.npartitions:
                 return RepartitionToFewer(self.frame, self.operand("new_partitions"))
+            elif self.new_partitions == self.frame.npartitions:
+                # Remove if partitions are equal, so remove repartition
+                return self.frame
             else:
                 original_divisions = divisions = pd.Series(
                     self.frame.divisions
