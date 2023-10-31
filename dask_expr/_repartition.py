@@ -67,7 +67,7 @@ class Repartition(Expr):
             if self.new_partitions < self.frame.npartitions:
                 return RepartitionToFewer(self.frame, self.operand("new_partitions"))
             elif self.new_partitions == self.frame.npartitions:
-                # Remove if partitions are equal, so remove repartition
+                # Remove if partitions are equal
                 return self.frame
             else:
                 original_divisions = divisions = pd.Series(
