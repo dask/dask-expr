@@ -7,14 +7,14 @@ import dask
 import numpy as np
 import pytest
 from dask.dataframe._compat import PANDAS_GE_200, PANDAS_GE_210
-from dask.dataframe.utils import UNKNOWN_CATEGORIES, assert_eq
+from dask.dataframe.utils import UNKNOWN_CATEGORIES
 from dask.utils import M
 
 from dask_expr import expr, from_pandas, is_scalar, optimize
 from dask_expr._expr import are_co_aligned
 from dask_expr._reductions import Len
 from dask_expr.datasets import timeseries
-from dask_expr.tests._util import _backend_library, xfail_gpu
+from dask_expr.tests._util import _backend_library, assert_eq, xfail_gpu
 
 # Set DataFrame backend for this module
 lib = _backend_library()
@@ -876,19 +876,28 @@ def test_astype_simplify(df, pdf):
     assert result._name == expected._name
 
 
-def test_drop_duplicates(df, pdf):
-    assert_eq(df.drop_duplicates(), pdf.drop_duplicates())
+@pytest.mark.parametrize("split_out", [1, True])
+def test_drop_duplicates(df, pdf, split_out):
+    assert_eq(df.drop_duplicates(split_out=split_out), pdf.drop_duplicates())
     assert_eq(
-        df.drop_duplicates(ignore_index=True), pdf.drop_duplicates(ignore_index=True)
+        df.drop_duplicates(ignore_index=True, split_out=split_out),
+        pdf.drop_duplicates(ignore_index=True),
+        check_index=split_out is not True,
     )
-    assert_eq(df.drop_duplicates(subset=["x"]), pdf.drop_duplicates(subset=["x"]))
-    assert_eq(df.x.drop_duplicates(), pdf.x.drop_duplicates())
+    assert_eq(
+        df.drop_duplicates(subset=["x"], split_out=split_out),
+        pdf.drop_duplicates(subset=["x"]),
+    )
+    assert_eq(
+        df.x.drop_duplicates(split_out=split_out),
+        pdf.x.drop_duplicates(),
+    )
 
     with pytest.raises(KeyError, match="'a'"):
-        df.drop_duplicates(subset=["a"])
+        df.drop_duplicates(subset=["a"], split_out=split_out)
 
     with pytest.raises(TypeError, match="got an unexpected keyword argument"):
-        df.x.drop_duplicates(subset=["a"])
+        df.x.drop_duplicates(subset=["a"], split_out=split_out)
 
 
 def test_unique(df, pdf):

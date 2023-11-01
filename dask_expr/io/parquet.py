@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import itertools
 import operator
 import warnings
@@ -545,24 +546,43 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         meta = self.engine._create_dd_meta(dataset_info)
         index = dataset_info["index"]
         index = [index] if isinstance(index, str) else index
-        meta, index, columns = set_index_columns(
-            meta, index, self.operand("columns"), auto_index_allowed
+        meta, index, all_columns = set_index_columns(
+            meta, index, None, auto_index_allowed
         )
         if meta.index.name == NONE_LABEL:
             meta.index.name = None
-        dataset_info["meta"] = meta
+        dataset_info["base_meta"] = meta
         dataset_info["index"] = index
-        dataset_info["columns"] = columns
+        dataset_info["all_columns"] = all_columns
 
         return dataset_info
 
     @property
     def _meta(self):
-        meta = self._dataset_info["meta"]
+        meta = self._dataset_info["base_meta"]
+        columns = _convert_to_list(self.operand("columns"))
         if self._series:
-            column = _convert_to_list(self.operand("columns"))[0]
-            return meta[column]
+            assert len(columns) > 0
+            return meta[columns[0]]
+        elif columns is not None:
+            return meta[columns]
         return meta
+
+    @cached_property
+    def _io_func(self):
+        if self._plan["empty"]:
+            return lambda x: x
+        dataset_info = self._dataset_info
+        return ParquetFunctionWrapper(
+            self.engine,
+            dataset_info["fs"],
+            dataset_info["base_meta"],
+            self.columns,
+            dataset_info["index"],
+            dataset_info["kwargs"]["dtype_backend"],
+            {},  # All kwargs should now be in `common_kwargs`
+            self._plan["common_kwargs"],
+        )
 
     @cached_property
     def _plan(self):
@@ -582,31 +602,20 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             # Use statistics to calculate divisions
             divisions = _calculate_divisions(stats, dataset_info, len(parts))
 
-            meta = dataset_info["meta"]
+            empty = False
             if len(divisions) < 2:
                 # empty dataframe - just use meta
                 divisions = (None, None)
-                io_func = lambda x: x
-                parts = [meta]
-            else:
-                # Use IO function wrapper
-                io_func = ParquetFunctionWrapper(
-                    self.engine,
-                    dataset_info["fs"],
-                    meta,
-                    dataset_info["columns"],
-                    dataset_info["index"],
-                    dataset_info["kwargs"]["dtype_backend"],
-                    {},  # All kwargs should now be in `common_kwargs`
-                    common_kwargs,
-                )
+                parts = [self._meta]
+                empty = True
 
             _control_cached_plan(dataset_token)
             _cached_plan[dataset_token] = {
-                "func": io_func,
+                "empty": empty,
                 "parts": parts,
                 "statistics": stats,
                 "divisions": divisions,
+                "common_kwargs": common_kwargs,
             }
         return _cached_plan[dataset_token]
 
@@ -614,7 +623,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         return self._plan["divisions"]
 
     def _filtered_task(self, index: int):
-        tsk = (self._plan["func"], self._plan["parts"][index])
+        tsk = (self._io_func, self._plan["parts"][index])
         if self._series:
             return (operator.getitem, tsk, self.columns[0])
         return tsk
@@ -645,6 +654,13 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
                 self._pq_length_stats = tuple(
                     stat["num-rows"] for stat in _collect_pq_statistics(self)
                 )
+
+    @functools.cached_property
+    def _fusion_compression_factor(self):
+        if self.operand("columns") is None:
+            return 1
+        nr_original_columns = len(self._dataset_info["schema"].names) - 1
+        return len(_convert_to_list(self.operand("columns"))) / nr_original_columns
 
 
 #
@@ -859,7 +875,7 @@ def _collect_pq_statistics(
             raise ValueError(f"columns={columns} must be a subset of {allowed}")
 
     # Collect statistics using layer information
-    fs = expr._plan["func"].fs
+    fs = expr._io_func.fs
     parts = [
         part
         for i, part in enumerate(expr._plan["parts"])

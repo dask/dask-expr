@@ -1,10 +1,13 @@
+from collections import OrderedDict
+
 import pytest
-from dask.dataframe.utils import assert_eq
 
 from dask_expr import SetIndexBlockwise, from_pandas
 from dask_expr._expr import Blockwise
+from dask_expr._repartition import RepartitionToFewer
+from dask_expr._shuffle import divisions_lru
 from dask_expr.io import FromPandas
-from dask_expr.tests._util import _backend_library
+from dask_expr.tests._util import _backend_library, assert_eq
 
 # Set DataFrame backend for this module
 lib = _backend_library()
@@ -223,20 +226,32 @@ def test_set_index_without_sort(df, pdf):
         df.set_index("y", sorted=True, npartitions=20)
 
 
-def test_sort_values(df, pdf):
-    assert_eq(df.sort_values("x"), pdf.sort_values("x"))
-    assert_eq(df.sort_values("x", npartitions=2), pdf.sort_values("x"))
+@pytest.mark.parametrize("shuffle", [None, "tasks"])
+def test_sort_values(df, pdf, shuffle):
+    assert_eq(df.sort_values("x", shuffle=shuffle), pdf.sort_values("x"))
+    assert_eq(df.sort_values("x", shuffle=shuffle, npartitions=2), pdf.sort_values("x"))
     pdf.iloc[5, 0] = -10
     df = from_pandas(pdf, npartitions=10)
-    assert_eq(df.sort_values("x", upsample=2.0), pdf.sort_values("x"))
+    assert_eq(df.sort_values("x", shuffle=shuffle, upsample=2.0), pdf.sort_values("x"))
 
     with pytest.raises(NotImplementedError, match="a single boolean for ascending"):
-        df.sort_values(by=["x", "y"], ascending=[True, True])
+        df.sort_values(by=["x", "y"], shuffle=shuffle, ascending=[True, True])
     with pytest.raises(NotImplementedError, match="sorting by named columns"):
-        df.sort_values(by=1)
+        df.sort_values(by=1, shuffle=shuffle)
 
     with pytest.raises(ValueError, match="must be either 'first' or 'last'"):
-        df.sort_values(by="x", na_position="bla")
+        df.sort_values(by="x", shuffle=shuffle, na_position="bla")
+
+
+@pytest.mark.parametrize("shuffle", [None, "tasks"])
+def test_sort_values_temporary_column_dropped(shuffle):
+    pdf = lib.DataFrame(
+        {"x": range(10), "y": [1, 2, 3, 4, 5] * 2, "z": ["cat", "dog"] * 5}
+    )
+    df = from_pandas(pdf, npartitions=2)
+    _sorted = df.sort_values(["z"], shuffle=shuffle)
+    result = _sorted.compute()
+    assert "_partitions" not in result.columns
 
 
 def test_sort_values_optimize(df, pdf):
@@ -328,3 +343,25 @@ def test_set_index_predicate_pushdown(df, pdf):
 
     result = query[(query.index > 5) & (query.y > -1)]
     assert_eq(result, pdf[(pdf.index > 5) & (pdf.y > -1)])
+
+
+def test_set_index_sort_values_one_partition(pdf):
+    divisions_lru.data = OrderedDict()
+    df = from_pandas(pdf, sort=False)
+    query = df.sort_values("x").optimize(fuse=False)
+    assert query.divisions == (None, None)
+    assert_eq(pdf.sort_values("x"), query, sort_results=False)
+    assert len(divisions_lru) == 0
+
+    df = from_pandas(pdf, sort=False)
+    query = df.set_index("x").optimize(fuse=False)
+    assert query.divisions == (None, None)
+    assert_eq(pdf.set_index("x"), query)
+    assert len(divisions_lru) == 0
+
+    df = from_pandas(pdf, sort=False, npartitions=2)
+    query = df.set_index("x", npartitions=1).optimize(fuse=False)
+    assert query.divisions == (None, None)
+    assert_eq(pdf.set_index("x"), query)
+    assert len(divisions_lru) == 0
+    assert len(list(query.expr.find_operations(RepartitionToFewer))) > 0

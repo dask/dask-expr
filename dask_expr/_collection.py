@@ -432,20 +432,28 @@ class FrameBase(DaskMethodsMixin):
     ):
         """Repartition a collection
 
-        Exactly one of `divisions` or `npartitions` should be specified.
-        A ``ValueError`` will be raised when that is not the case.
+        Exactly one of `divisions`, `npartitions` or `partition_size` should be
+        specified. A ``ValueError`` will be raised when that is not the case.
 
         Parameters
         ----------
-        npartitions : int, optional
+        npartitions : int, Callable, optional
             Approximate number of partitions of output. The number of
             partitions used may be slightly lower than npartitions depending
             on data distribution, but will never be higher.
+            The Callable gets the number of partitions of the input as an argument
+            and should return an int.
         divisions : list, optional
             The "dividing lines" used to split the dataframe into partitions.
             For ``divisions=[0, 10, 50, 100]``, there would be three output partitions,
             where the new index contained [0, 10), [10, 50), and [50, 100), respectively.
             See https://docs.dask.org/en/latest/dataframe-design.html#partitions.
+        partition_size : str, optional
+            Max number of bytes of memory for each partition. Use numbers or strings
+            like 5MB. If specified npartitions and divisions will be ignored. Note that
+            the size reflects the number of bytes used as computed by
+            pandas.DataFrame.memory_usage, which will not necessarily match the size
+            when storing to disk.
         force : bool, default False
             Allows the expansion of the existing divisions.
             If False then the new divisions' lower and upper bounds must be
@@ -812,12 +820,14 @@ class DataFrame(FrameBase):
     def memory_usage(self, deep=False, index=True):
         return new_collection(MemoryUsageFrame(self.expr, deep=deep, _index=index))
 
-    def drop_duplicates(self, subset=None, ignore_index=False):
+    def drop_duplicates(self, subset=None, ignore_index=False, split_out=1):
         # Fail early if subset is not valid, e.g. missing columns
         subset = _convert_to_list(subset)
         meta_nonempty(self._meta).drop_duplicates(subset=subset)
         return new_collection(
-            DropDuplicates(self.expr, subset=subset, ignore_index=ignore_index)
+            DropDuplicates(
+                self.expr, subset=subset, ignore_index=ignore_index, split_out=split_out
+            )
         )
 
     def dropna(self, how=no_default, subset=None, thresh=no_default):
@@ -937,6 +947,8 @@ class DataFrame(FrameBase):
         sort_function: Callable[[pd.DataFrame], pd.DataFrame] | None = None,
         sort_function_kwargs: Mapping[str, Any] | None = None,
         upsample: float = 1.0,
+        ignore_index: bool | None = False,
+        shuffle: str | None = None,
     ):
         """See DataFrame.sort_values for docstring"""
         if na_position not in ("first", "last"):
@@ -974,6 +986,8 @@ class DataFrame(FrameBase):
                 sort_function,
                 sort_function_kwargs,
                 upsample,
+                ignore_index,
+                shuffle,
             )
         )
 
@@ -1055,8 +1069,10 @@ class Series(FrameBase):
     def unique(self):
         return new_collection(Unique(self.expr))
 
-    def drop_duplicates(self, ignore_index=False):
-        return new_collection(DropDuplicates(self.expr, ignore_index=ignore_index))
+    def drop_duplicates(self, ignore_index=False, split_out=1):
+        return new_collection(
+            DropDuplicates(self.expr, ignore_index=ignore_index, split_out=split_out)
+        )
 
     def dropna(self):
         return new_collection(expr.DropnaSeries(self.expr))

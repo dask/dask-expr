@@ -164,6 +164,41 @@ def test_predicate_pushdown_compound(tmpdir):
     assert_eq(y, z)
 
 
+def test_io_fusion_blockwise(tmpdir):
+    pdf = lib.DataFrame({c: range(10) for c in "abcdefghijklmn"})
+    dd.from_pandas(pdf, 3).to_parquet(tmpdir)
+    df = read_parquet(tmpdir)["a"].fillna(10).optimize()
+    assert df.npartitions == 1
+    assert len(df.__dask_graph__()) == 1
+    graph = (
+        read_parquet(tmpdir)["a"].repartition(npartitions=4).optimize().__dask_graph__()
+    )
+    assert any("readparquet-fused" in key[0] for key in graph.keys())
+
+
+def test_repartition_io_fusion_blockwise(tmpdir):
+    pdf = lib.DataFrame({c: range(10) for c in "ab"})
+    dd.from_pandas(pdf, 10).to_parquet(tmpdir)
+    df = read_parquet(tmpdir)["a"]
+    df = df.repartition(npartitions=lambda x: max(x // 2, 1)).optimize()
+    assert df.npartitions == 2
+
+
+def test_io_fusion_merge(tmpdir):
+    pdf = lib.DataFrame({c: range(10) for c in "ab"})
+    pdf2 = lib.DataFrame({c: range(10) for c in "uvwxyz"})
+    dd.from_pandas(pdf, 10).to_parquet(tmpdir)
+    dd.from_pandas(pdf2, 10).to_parquet(tmpdir + "x")
+    df = read_parquet(tmpdir)
+    df2 = read_parquet(tmpdir + "x")
+    result = df.merge(df2, left_on="a", right_on="w")[["a", "b", "u"]]
+    assert_eq(
+        result,
+        pdf.merge(pdf2, left_on="a", right_on="w")[["a", "b", "u"]],
+        check_index=False,
+    )
+
+
 @pytest.mark.parametrize("fmt", ["parquet", "csv", "pandas"])
 def test_io_culling(tmpdir, fmt):
     pdf = lib.DataFrame({c: range(10) for c in "abcde"})
