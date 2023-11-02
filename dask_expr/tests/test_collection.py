@@ -512,7 +512,7 @@ def test_head_head(df):
     assert a.optimize()._name == b.optimize()._name
 
 
-def test_head_tai_repartition(df):
+def test_head_tail_repartition(df):
     q = df.head(compute=False).repartition(npartitions=1).optimize()
     expected = df.head(compute=False).optimize()
     assert q._name == expected._name
