@@ -206,11 +206,27 @@ def test_groupby_size_simplify(pdf, df):
         .rename({"x": "z"})
         .optimize()
     )
-    expected.pprint()
-    q.optimize().pprint()
     assert q.optimize()._name == expected._name
     assert_eq(q, pdf.groupby("x").agg({"y": "sum", "z": "size"}))
 
     q = df.groupby("x").agg({"y": "sum", "z": "size", "x": "sum"})
     assert not isinstance(q.optimize().expr, RenameFrame)
     assert_eq(q, pdf.groupby("x").agg({"y": "sum", "z": "size", "x": "sum"}))
+
+    
+def test_groupby_reduction_shuffle(df, pdf):
+    q = df.groupby("x").sum(split_out=True)
+    assert q.optimize().npartitions == df.npartitions
+    expected = pdf.groupby("x").sum()
+    assert_eq(q, expected)
+
+
+def test_groupby_projection_split_out(df, pdf):
+    pdf_result = pdf.groupby("x")["y"].sum()
+    result = df.groupby("x")["y"].sum(split_out=2)
+    assert_eq(result, pdf_result)
+
+    pdf_result = pdf.groupby("y")["x"].sum()
+    df = from_pandas(pdf, npartitions=50)
+    result = df.groupby("y")["x"].sum(split_out=2)
+    assert_eq(result, pdf_result)

@@ -512,6 +512,16 @@ def test_head_head(df):
     assert a.optimize()._name == b.optimize()._name
 
 
+def test_head_tail_repartition(df):
+    q = df.head(compute=False).repartition(npartitions=1).optimize()
+    expected = df.head(compute=False).optimize()
+    assert q._name == expected._name
+
+    q = df.tail(compute=False).repartition(npartitions=1).optimize()
+    expected = df.tail(compute=False).optimize()
+    assert q._name == expected._name
+
+
 def test_tail(pdf, df):
     assert_eq(df.tail(compute=False), pdf.tail())
     assert_eq(df.tail(compute=False, n=7), pdf.tail(n=7))
@@ -882,12 +892,16 @@ def test_drop_duplicates(df, pdf, split_out):
     assert_eq(
         df.drop_duplicates(ignore_index=True, split_out=split_out),
         pdf.drop_duplicates(ignore_index=True),
+        check_index=split_out is not True,
     )
     assert_eq(
         df.drop_duplicates(subset=["x"], split_out=split_out),
         pdf.drop_duplicates(subset=["x"]),
     )
-    assert_eq(df.x.drop_duplicates(split_out=split_out), pdf.x.drop_duplicates())
+    assert_eq(
+        df.x.drop_duplicates(split_out=split_out),
+        pdf.x.drop_duplicates(),
+    )
 
     with pytest.raises(KeyError, match="'a'"):
         df.drop_duplicates(subset=["a"], split_out=split_out)
