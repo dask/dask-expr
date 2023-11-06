@@ -3,8 +3,10 @@ from __future__ import annotations
 import functools
 import math
 
+from dask.dataframe import methods
 from dask.dataframe.core import is_dataframe_like
 from dask.dataframe.io.io import sorted_division_locations
+from dask.utils import funcname
 
 from dask_expr._expr import (
     Blockwise,
@@ -15,7 +17,7 @@ from dask_expr._expr import (
     Projection,
 )
 from dask_expr._reductions import Len
-from dask_expr._util import _convert_to_list
+from dask_expr._util import _BackendData, _convert_to_list, _tokenize_deterministic
 
 
 class IO(Expr):
@@ -49,6 +51,10 @@ class FromGraph(IO):
 
 class BlockwiseIO(Blockwise, IO):
     _absorb_projections = False
+
+    @functools.cached_property
+    def _fusion_compression_factor(self):
+        return 1
 
     def _simplify_up(self, parent):
         if (
@@ -87,7 +93,6 @@ class BlockwiseIO(Blockwise, IO):
                 if columns_operand is None:
                     columns_operand = self.columns
                 columns = set(columns_operand)
-                ops = [self] + alike
                 for op in alike:
                     op_columns = op.operand("columns")
                     if op_columns is None:
@@ -103,13 +108,16 @@ class BlockwiseIO(Blockwise, IO):
                     return
 
                 # Check if we have the operation we want elsewhere in the graph
-                for op in ops:
-                    if op.columns == columns and not op.operand("_series"):
+                for op in alike:
+                    if set(op.columns) == set(columns) and not op.operand("_series"):
                         return (
                             op[columns_operand[0]]
                             if self._series
                             else op[columns_operand]
                         )
+
+                if set(self.columns) == set(columns):
+                    return  # Skip unnecessary projection change
 
                 # Create the "combined" ReadParquet operation
                 subs = {"columns": columns}
@@ -118,6 +126,58 @@ class BlockwiseIO(Blockwise, IO):
                 new = self.substitute_parameters(subs)
                 return new[columns_operand[0]] if self._series else new[columns_operand]
 
+        return
+
+    def _tune_up(self, parent):
+        if self._fusion_compression_factor >= 1:
+            return
+        if isinstance(parent, FusedIO):
+            return
+        return parent.substitute(self, FusedIO(self))
+
+
+class FusedIO(BlockwiseIO):
+    _parameters = ["expr"]
+
+    @functools.cached_property
+    def _name(self):
+        return (
+            funcname(type(self.operand("expr"))).lower()
+            + "-fused-"
+            + _tokenize_deterministic(*self.operands)
+        )
+
+    @functools.cached_property
+    def _meta(self):
+        return self.operand("expr")._meta
+
+    def dependencies(self):
+        return []
+
+    @functools.cached_property
+    def npartitions(self):
+        return len(self._fusion_buckets)
+
+    def _divisions(self):
+        divisions = self.operand("expr")._divisions()
+        new_divisions = [divisions[b[0]] for b in self._fusion_buckets]
+        new_divisions.append(self._fusion_buckets[-1][-1])
+        return tuple(new_divisions)
+
+    def _task(self, index: int):
+        expr = self.operand("expr")
+        bucket = self._fusion_buckets[index]
+        return (methods.concat, [expr._filtered_task(i) for i in bucket])
+
+    @functools.cached_property
+    def _fusion_buckets(self):
+        step = math.ceil(1 / self.operand("expr")._fusion_compression_factor)
+        partitions = self.operand("expr")._partitions
+        npartitions = len(partitions)
+        buckets = [partitions[i : i + step] for i in range(0, npartitions, step)]
+        return buckets
+
+    def _tune_up(self, parent):
         return
 
 
@@ -153,24 +213,30 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
         else:
             return _convert_to_list(columns_operand)
 
-    @functools.cached_property
+    @property
     def _divisions_and_locations(self):
-        data = self.frame
-        nrows = len(data)
+        assert isinstance(self.frame, _BackendData)
         npartitions = self.operand("npartitions")
-        if self.sort:
-            if not data.index.is_monotonic_increasing:
-                data = data.sort_index(ascending=True)
-            divisions, locations = sorted_division_locations(
-                data.index,
-                npartitions=npartitions,
-                chunksize=None,
-            )
-        else:
-            chunksize = int(math.ceil(nrows / npartitions))
-            locations = list(range(0, nrows, chunksize)) + [len(data)]
-            divisions = (None,) * len(locations)
-        return divisions, locations
+        sort = self.sort
+        key = (npartitions, sort)
+        _division_info_cache = self.frame._division_info
+        if key not in _division_info_cache:
+            data = self.frame._data
+            nrows = len(data)
+            if sort:
+                if not data.index.is_monotonic_increasing:
+                    data = data.sort_index(ascending=True)
+                divisions, locations = sorted_division_locations(
+                    data.index,
+                    npartitions=npartitions,
+                    chunksize=None,
+                )
+            else:
+                chunksize = int(math.ceil(nrows / npartitions))
+                locations = list(range(0, nrows, chunksize)) + [len(data)]
+                divisions = (None,) * len(locations)
+            _division_info_cache[key] = divisions, locations
+        return _division_info_cache[key]
 
     def _get_lengths(self) -> tuple | None:
         if self._pd_length_stats is None:

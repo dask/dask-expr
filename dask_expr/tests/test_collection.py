@@ -6,15 +6,15 @@ import pickle
 import dask
 import numpy as np
 import pytest
-from dask.dataframe._compat import PANDAS_GE_210
-from dask.dataframe.utils import UNKNOWN_CATEGORIES, assert_eq
+from dask.dataframe._compat import PANDAS_GE_200, PANDAS_GE_210
+from dask.dataframe.utils import UNKNOWN_CATEGORIES
 from dask.utils import M
 
-from dask_expr import expr, from_pandas, optimize
+from dask_expr import expr, from_pandas, is_scalar, optimize
 from dask_expr._expr import are_co_aligned
 from dask_expr._reductions import Len
 from dask_expr.datasets import timeseries
-from dask_expr.tests._util import _backend_library, xfail_gpu
+from dask_expr.tests._util import _backend_library, assert_eq, xfail_gpu
 
 # Set DataFrame backend for this module
 lib = _backend_library()
@@ -389,9 +389,9 @@ def test_repr(df):
     assert "+ 1" in repr(df + 1)
 
     s = (df["x"] + 1).sum(skipna=False).expr
-    assert '["x"]' in s or "['x']" in s
-    assert "+ 1" in s
-    assert "sum(skipna=False)" in s
+    assert '["x"]' in str(s) or "['x']" in str(s)
+    assert "+ 1" in str(s)
+    assert "sum(skipna=False)" in str(s)
 
 
 @xfail_gpu("combine_first not supported by cudf")
@@ -512,6 +512,16 @@ def test_head_head(df):
     assert a.optimize()._name == b.optimize()._name
 
 
+def test_head_tail_repartition(df):
+    q = df.head(compute=False).repartition(npartitions=1).optimize()
+    expected = df.head(compute=False).optimize()
+    assert q._name == expected._name
+
+    q = df.tail(compute=False).repartition(npartitions=1).optimize()
+    expected = df.tail(compute=False).optimize()
+    assert q._name == expected._name
+
+
 def test_tail(pdf, df):
     assert_eq(df.tail(compute=False), pdf.tail())
     assert_eq(df.tail(compute=False, n=7), pdf.tail(n=7))
@@ -587,23 +597,23 @@ def test_substitute():
     df = from_pandas(pdf, npartitions=3)
     df = df.expr
 
-    result = (df + 1).substitute({1: 2})
+    result = (df + 1).substitute(1, 2)
     expected = df + 2
     assert result._name == expected._name
 
-    result = df["a"].substitute({df["a"]: df["b"]})
+    result = df["a"].substitute(df["a"], df["b"])
     expected = df["b"]
     assert result._name == expected._name
 
-    result = (df["a"] - df["b"]).substitute({df["b"]: df["c"]})
+    result = (df["a"] - df["b"]).substitute(df["b"], df["c"])
     expected = df["a"] - df["c"]
     assert result._name == expected._name
 
-    result = df["a"].substitute({3: 4})
+    result = df["a"].substitute(3, 4)
     expected = from_pandas(pdf, npartitions=4).a
     assert result._name == expected._name
 
-    result = (df["a"].sum() + 5).substitute({df["a"]: df["b"], 5: 6})
+    result = (df["a"].sum() + 5).substitute(df["a"], df["b"]).substitute(5, 6)
     expected = df["b"].sum() + 6
     assert result._name == expected._name
 
@@ -719,18 +729,17 @@ def test_tree_repr(fuse):
     assert "Sum:" in s
     assert "Add:" in s
     assert "Mean:" in s
-    assert "AlignPartitions:" in s
+    assert "AlignPartitions:" not in s
     assert str(df.seed) in s.lower()
 
     # Check result after optimization
     optimized = expr.optimize(fuse=fuse)
-    s = optimized.tree_repr()
+    s = str(optimized.tree_repr())
     assert "Sum(Chunk):" in s
     assert "Sum(TreeReduce): split_every=0" in s
     assert "Add:" in s
     assert "Mean:" not in s
     assert "AlignPartitions:" not in s
-    assert "right=1" in s
     assert "True" not in s
     assert "None" not in s
     assert "skipna=False" in s
@@ -785,6 +794,8 @@ def test_map_partitions_merge(opt):
     # Check result with/without fusion
     expect = pdf1.merge(pdf2, on="x")
     df3 = (df3.optimize() if opt else df3)[list(expect.columns)]
+    if not PANDAS_GE_200:
+        df3 = df3.reset_index(drop=True)
     assert_eq(df3, expect, check_index=False)
 
 
@@ -875,19 +886,28 @@ def test_astype_simplify(df, pdf):
     assert result._name == expected._name
 
 
-def test_drop_duplicates(df, pdf):
-    assert_eq(df.drop_duplicates(), pdf.drop_duplicates())
+@pytest.mark.parametrize("split_out", [1, True])
+def test_drop_duplicates(df, pdf, split_out):
+    assert_eq(df.drop_duplicates(split_out=split_out), pdf.drop_duplicates())
     assert_eq(
-        df.drop_duplicates(ignore_index=True), pdf.drop_duplicates(ignore_index=True)
+        df.drop_duplicates(ignore_index=True, split_out=split_out),
+        pdf.drop_duplicates(ignore_index=True),
+        check_index=split_out is not True,
     )
-    assert_eq(df.drop_duplicates(subset=["x"]), pdf.drop_duplicates(subset=["x"]))
-    assert_eq(df.x.drop_duplicates(), pdf.x.drop_duplicates())
+    assert_eq(
+        df.drop_duplicates(subset=["x"], split_out=split_out),
+        pdf.drop_duplicates(subset=["x"]),
+    )
+    assert_eq(
+        df.x.drop_duplicates(split_out=split_out),
+        pdf.x.drop_duplicates(),
+    )
 
     with pytest.raises(KeyError, match="'a'"):
-        df.drop_duplicates(subset=["a"])
+        df.drop_duplicates(subset=["a"], split_out=split_out)
 
     with pytest.raises(TypeError, match="got an unexpected keyword argument"):
-        df.x.drop_duplicates(subset=["a"])
+        df.x.drop_duplicates(subset=["a"], split_out=split_out)
 
 
 def test_unique(df, pdf):
@@ -904,10 +924,10 @@ def test_unique(df, pdf):
 def test_walk(df):
     df2 = df[df["x"] > 1][["y"]] + 1
     assert all(isinstance(ex, expr.Expr) for ex in df2.walk())
-    exprs = set(df2.walk())
-    assert df.expr in exprs
-    assert df["x"].expr in exprs
-    assert (df["x"] > 1).expr in exprs
+    exprs = {e._name for e in set(df2.walk())}
+    assert df.expr._name in exprs
+    assert df["x"].expr._name in exprs
+    assert (df["x"] > 1).expr._name in exprs
     assert 1 not in exprs
 
 
@@ -1221,3 +1241,37 @@ def test_drop_duplicates_groupby(pdf):
     query = df.groupby("y").z.count()
     expected = pdf.drop_duplicates(subset="x").groupby("y").z.count()
     assert_eq(query, expected)
+
+
+def test_expression_bool_raises(df):
+    with pytest.raises(ValueError, match="The truth value"):
+        bool(df.expr)
+
+
+def test_expr_is_scalar(df):
+    assert not is_scalar(df.expr)
+    with pytest.raises(ValueError, match="The truth value"):
+        df.expr.x in df.expr.columns  # noqa: B015
+
+
+def test_replace_filtered_combine_similar():
+    from dask_expr._expr import Filter, Replace
+
+    pdf = lib.DataFrame({"a": [1, 2, 3, 4, 5, 6], "b": 1, "c": 2})
+
+    df = from_pandas(pdf.copy(), npartitions=2)
+    df = df[df.a > 3]
+    df = df.replace(5, 4)
+    df["new"] = df.a + df.b
+
+    pdf = pdf[pdf.a > 3]
+    pdf = pdf.replace(5, 4)
+    pdf["new"] = pdf.a + pdf.b
+
+    df = df.optimize(fuse=False)
+    assert_eq(df, pdf)  # Check result
+
+    # Check that Replace expressions always operate on
+    # Filter expressions (and not the other way around)
+    similar = list(df.find_operations(Replace))
+    assert all(isinstance(op.frame, Filter) for op in similar)

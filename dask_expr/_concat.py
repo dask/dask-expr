@@ -99,7 +99,7 @@ class Concat(Expr):
             # dtypes of all dfs need to be coherent
             # refer to https://github.com/dask/dask/issues/4685
             # and https://github.com/dask/dask/issues/5968.
-            if is_dataframe_like(df.frame):
+            if is_dataframe_like(df._meta):
                 shared_columns = list(set(df.columns).intersection(self._meta.columns))
                 needs_astype = {
                     col: self._meta[col].dtype
@@ -203,5 +203,6 @@ class ConcatUnindexed(Blockwise):
             **self.operand("_kwargs"),
         )
 
-    def operation(self, *args, ignore_order, _kwargs):
+    @staticmethod
+    def operation(*args, ignore_order, _kwargs):
         return concat_and_check(args, ignore_order=ignore_order)

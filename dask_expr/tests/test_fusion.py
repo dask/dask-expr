@@ -1,8 +1,7 @@
 import pytest
-from dask.dataframe.utils import assert_eq
 
 from dask_expr import from_pandas, optimize
-from dask_expr.tests._util import _backend_library
+from dask_expr.tests._util import _backend_library, assert_eq
 
 # Set DataFrame backend for this module
 lib = _backend_library()
@@ -104,3 +103,24 @@ def test_persist_with_fusion(df):
 
     assert_eq(out, fused)
     assert len(fused.dask) < len(out.dask)
+
+
+def test_fuse_broadcast_deps():
+    pdf = lib.DataFrame({"a": [1, 2, 3]})
+    pdf2 = lib.DataFrame({"a": [2, 3, 4]})
+    pdf3 = lib.DataFrame({"a": [3, 4, 5]})
+    df = from_pandas(pdf, npartitions=1)
+    df2 = from_pandas(pdf2, npartitions=1)
+    df3 = from_pandas(pdf3, npartitions=2)
+
+    query = df.merge(df2).merge(df3)
+    assert len(query.optimize().__dask_graph__()) == 2
+    assert_eq(query, pdf.merge(pdf2).merge(pdf3))
+
+
+def test_name(df):
+    out = (df["x"] + df["y"]) - 1
+    fused = optimize(out, fuse=True)
+    assert "pandas" in str(fused.expr)
+    assert "sub" in str(fused.expr)
+    assert str(fused.expr) == str(fused.expr).lower()

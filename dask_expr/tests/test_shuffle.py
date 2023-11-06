@@ -1,10 +1,13 @@
+from collections import OrderedDict
+
 import pytest
-from dask.dataframe.utils import assert_eq
 
 from dask_expr import SetIndexBlockwise, from_pandas
 from dask_expr._expr import Blockwise
+from dask_expr._repartition import RepartitionToFewer
+from dask_expr._shuffle import divisions_lru
 from dask_expr.io import FromPandas
-from dask_expr.tests._util import _backend_library
+from dask_expr.tests._util import _backend_library, assert_eq
 
 # Set DataFrame backend for this module
 lib = _backend_library()
@@ -168,6 +171,18 @@ def test_set_index_sorted(pdf):
     expected = df[["x", "y"]].set_index("y", sorted=True)["x"].simplify()
     assert result._name == expected._name
 
+    q = df.set_index(["y", "z"], sorted=True)[[]]
+    assert_eq(q, pdf.set_index(["y", "z"])[[]])
+    result = q.optimize(fuse=False)
+    expected = df[["y", "z"]].set_index(["y", "z"], sorted=True)[[]].simplify()
+    assert result._name == expected._name
+
+    with pytest.raises(TypeError, match="not supported by set_index"):
+        df.set_index([df["y"]], sorted=True)
+
+    with pytest.raises(NotImplementedError, match="requires sorted=True"):
+        df.set_index(["y", "z"], sorted=False)
+
 
 def test_set_index_pre_sorted(pdf):
     pdf = pdf.sort_values(by="y", ignore_index=True)
@@ -223,20 +238,32 @@ def test_set_index_without_sort(df, pdf):
         df.set_index("y", sorted=True, npartitions=20)
 
 
-def test_sort_values(df, pdf):
-    assert_eq(df.sort_values("x"), pdf.sort_values("x"))
-    assert_eq(df.sort_values("x", npartitions=2), pdf.sort_values("x"))
+@pytest.mark.parametrize("shuffle", [None, "tasks"])
+def test_sort_values(df, pdf, shuffle):
+    assert_eq(df.sort_values("x", shuffle=shuffle), pdf.sort_values("x"))
+    assert_eq(df.sort_values("x", shuffle=shuffle, npartitions=2), pdf.sort_values("x"))
     pdf.iloc[5, 0] = -10
     df = from_pandas(pdf, npartitions=10)
-    assert_eq(df.sort_values("x", upsample=2.0), pdf.sort_values("x"))
+    assert_eq(df.sort_values("x", shuffle=shuffle, upsample=2.0), pdf.sort_values("x"))
 
     with pytest.raises(NotImplementedError, match="a single boolean for ascending"):
-        df.sort_values(by=["x", "y"], ascending=[True, True])
+        df.sort_values(by=["x", "y"], shuffle=shuffle, ascending=[True, True])
     with pytest.raises(NotImplementedError, match="sorting by named columns"):
-        df.sort_values(by=1)
+        df.sort_values(by=1, shuffle=shuffle)
 
     with pytest.raises(ValueError, match="must be either 'first' or 'last'"):
-        df.sort_values(by="x", na_position="bla")
+        df.sort_values(by="x", shuffle=shuffle, na_position="bla")
+
+
+@pytest.mark.parametrize("shuffle", [None, "tasks"])
+def test_sort_values_temporary_column_dropped(shuffle):
+    pdf = lib.DataFrame(
+        {"x": range(10), "y": [1, 2, 3, 4, 5] * 2, "z": ["cat", "dog"] * 5}
+    )
+    df = from_pandas(pdf, npartitions=2)
+    _sorted = df.sort_values(["z"], shuffle=shuffle)
+    result = _sorted.compute()
+    assert "_partitions" not in result.columns
 
 
 def test_sort_values_optimize(df, pdf):
@@ -260,3 +287,93 @@ def test_sort_values_descending(df, pdf):
         pdf.sort_values(by="y", ascending=False),
         sort_results=False,
     )
+
+
+def test_sort_head_nlargest(df):
+    a = df.sort_values("x", ascending=False).head(10, compute=False).expr
+    b = df.nlargest(10, columns=["x"]).expr
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values("x", ascending=True).head(10, compute=False).expr
+    b = df.nsmallest(10, columns=["x"]).expr
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values("x", ascending=False).tail(10, compute=False).expr
+    b = df.nsmallest(10, columns=["x"]).expr
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values("x", ascending=True).tail(10, compute=False).expr
+    b = df.nlargest(10, columns=["x"]).expr
+    assert a.optimize()._name == b.optimize()._name
+
+
+def test_set_index_head_nlargest(df, pdf):
+    a = df.set_index("x").head(10, compute=False).expr
+    b = df.nsmallest(10, columns="x").set_index("x").expr
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.set_index("x").tail(10, compute=False).expr
+    b = df.nlargest(10, columns="x").set_index("x").expr
+    assert a.optimize()._name == b.optimize()._name
+
+    # These still work, even if we haven't optimized them yet
+    df.set_index(df.x).head(3)
+    # df.set_index([df.x, df.y]).head(3)
+
+
+def test_filter_sort(df):
+    a = df.sort_values("x")
+    a = a[a.y > 40]
+
+    b = df[df.y > 40]
+    b = b.sort_values("x")
+
+    assert a.optimize()._name == b.optimize()._name
+
+
+def test_sort_values_add():
+    pdf = lib.DataFrame({"x": [1, 2, 3, 0, 1, 2, 4, 5], "y": 1})
+    df = from_pandas(pdf, npartitions=2, sort=False)
+    df = df.sort_values("x")
+    df["z"] = df.x + df.y
+    pdf = pdf.sort_values("x")
+    pdf["z"] = pdf.x + pdf.y
+    assert_eq(df, pdf, sort_results=False)
+
+
+def test_set_index_predicate_pushdown(df, pdf):
+    pdf = pdf.set_index("x")
+    query = df.set_index("x")
+    result = query[query.y > 5]
+    expected = pdf[pdf.y > 5]
+    assert_eq(result, expected)
+    expected_query = df[df.y > 5].set_index("x").optimize()
+    assert expected_query._name == result.optimize()._name
+
+    result = query[query.index > 5]
+    assert_eq(result, pdf[pdf.index > 5])
+
+    result = query[(query.index > 5) & (query.y > -1)]
+    assert_eq(result, pdf[(pdf.index > 5) & (pdf.y > -1)])
+
+
+def test_set_index_sort_values_one_partition(pdf):
+    divisions_lru.data = OrderedDict()
+    df = from_pandas(pdf, sort=False)
+    query = df.sort_values("x").optimize(fuse=False)
+    assert query.divisions == (None, None)
+    assert_eq(pdf.sort_values("x"), query, sort_results=False)
+    assert len(divisions_lru) == 0
+
+    df = from_pandas(pdf, sort=False)
+    query = df.set_index("x").optimize(fuse=False)
+    assert query.divisions == (None, None)
+    assert_eq(pdf.set_index("x"), query)
+    assert len(divisions_lru) == 0
+
+    df = from_pandas(pdf, sort=False, npartitions=2)
+    query = df.set_index("x", npartitions=1).optimize(fuse=False)
+    assert query.divisions == (None, None)
+    assert_eq(pdf.set_index("x"), query)
+    assert len(divisions_lru) == 0
+    assert len(list(query.expr.find_operations(RepartitionToFewer))) > 0

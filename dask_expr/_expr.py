@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import toolz
 from dask.base import normalize_token
-from dask.core import flatten, ishashable
+from dask.core import flatten
 from dask.dataframe import methods
 from dask.dataframe.core import (
     _get_divisions_map_partitions,
@@ -29,7 +29,7 @@ from dask.typing import no_default
 from dask.utils import M, apply, funcname, import_required, is_arraylike
 from tlz import merge_sorted, unique
 
-from dask_expr._util import _tokenize_deterministic, _tokenize_partial
+from dask_expr._util import _BackendData, _tokenize_deterministic, _tokenize_partial
 
 replacement_rules = []
 
@@ -52,7 +52,7 @@ class Expr:
                 operands.append(kwargs.pop(parameter))
             except KeyError:
                 operands.append(type(self)._defaults[parameter])
-        assert not kwargs
+        assert not kwargs, kwargs
         self.operands = operands
         if self._required_attribute:
             dep = next(iter(self.dependencies()))._meta
@@ -79,7 +79,7 @@ class Expr:
         s = ", ".join(
             str(param) + "=" + str(operand)
             for param, operand in zip(self._parameters, self.operands)
-            if operand != self._defaults.get(param)
+            if isinstance(operand, Expr) or operand != self._defaults.get(param)
         )
         return f"{type(self).__name__}({s})"
 
@@ -100,6 +100,9 @@ class Expr:
                 except (IndexError, KeyError):
                     param = self._parameters[i] if i < len(self._parameters) else ""
                     default = "--no-default--"
+
+                if isinstance(op, _BackendData):
+                    op = op._data
 
                 if isinstance(op, pd.core.base.PandasObject):
                     op = "<pandas>"
@@ -133,6 +136,8 @@ class Expr:
         return hash(self._name)
 
     def __reduce__(self):
+        if dask.config.get("dask-expr-no-serialize", False):
+            raise RuntimeError(f"Serializing a {type(self)} object")
         return type(self), tuple(self.operands)
 
     def _depth(self):
@@ -238,10 +243,11 @@ class Expr:
 
         return {(self._name, i): self._task(i) for i in range(self.npartitions)}
 
-    def simplify(self):
-        """Simplify expression
+    def rewrite(self, kind: str):
+        """Rewrite an expression
 
-        This leverages the ``._simplify_down`` method defined on each class
+        This leverages the ``._{kind}_down`` and ``._{kind}_up``
+        methods defined on each class
 
         Returns
         -------
@@ -251,41 +257,44 @@ class Expr:
             whether or not any change occured
         """
         expr = self
-
+        down_name = f"_{kind}_down"
+        up_name = f"_{kind}_up"
         while True:
             _continue = False
 
-            # Simplify this node
-            out = expr._simplify_down()
-            if out is None:
-                out = expr
-            if not isinstance(out, Expr):
-                return out
-            if out._name != expr._name:
-                expr = out
-                continue
-
-            # Allow children to simplify their parents
-            for child in expr.dependencies():
-                out = child._simplify_up(expr)
+            # Rewrite this node
+            if down_name in expr.__dir__():
+                out = getattr(expr, down_name)()
                 if out is None:
                     out = expr
                 if not isinstance(out, Expr):
                     return out
-                if out is not expr and out._name != expr._name:
+                if out._name != expr._name:
                     expr = out
-                    _continue = True
-                    break
+                    continue
+
+            # Allow children to rewrite their parents
+            for child in expr.dependencies():
+                if up_name in child.__dir__():
+                    out = getattr(child, up_name)(expr)
+                    if out is None:
+                        out = expr
+                    if not isinstance(out, Expr):
+                        return out
+                    if out is not expr and out._name != expr._name:
+                        expr = out
+                        _continue = True
+                        break
 
             if _continue:
                 continue
 
-            # Simplify all of the children
+            # Rewrite all of the children
             new_operands = []
             changed = False
             for operand in expr.operands:
                 if isinstance(operand, Expr):
-                    new = operand.simplify()
+                    new = operand.rewrite(kind=kind)
                     if new._name != operand._name:
                         changed = True
                 else:
@@ -299,6 +308,21 @@ class Expr:
                 break
 
         return expr
+
+    def simplify(self):
+        """Simplify an expression
+
+        This leverages the ``._simplify_down`` and ``._simplify_up``
+        methods defined on each class
+
+        Returns
+        -------
+        expr:
+            output expression
+        changed:
+            whether or not any change occured
+        """
+        return self.rewrite(kind="simplify")
 
     def _simplify_down(self):
         return
@@ -390,16 +414,15 @@ class Expr:
         """
         expr = self
         update_root = root is None
-        root = root or self
+        root = root if root is not None else self
 
         if _cache is None:
             _cache = {}
         elif (self._name, root._name) in _cache:
             return _cache[(self._name, root._name)]
 
-        while True:
-            changed = False
-
+        seen = set()
+        while expr._name not in seen:
             # Call combine_similar on each dependency
             new_operands = []
             changed_dependency = False
@@ -414,7 +437,12 @@ class Expr:
 
             if changed_dependency:
                 expr = type(expr)(*new_operands)
-                changed = True
+                if isinstance(expr, Projection):
+                    # We might introduce stacked Projections (merge for example).
+                    # So get rid of them here again
+                    expr_simplify_down = expr._simplify_down()
+                    if expr_simplify_down is not None:
+                        expr = expr_simplify_down
                 if update_root:
                     root = expr
                 continue
@@ -426,20 +454,89 @@ class Expr:
             if not isinstance(out, Expr):
                 _cache[(self._name, root._name)] = out
                 return out
-            if out._name != expr._name:
-                changed = True
-                expr = out
-                if update_root:
-                    root = expr
-
-            if not changed:
-                break
+            seen.add(expr._name)
+            if expr._name != out._name and update_root:
+                root = expr
+            expr = out
 
         _cache[(self._name, root._name)] = expr
         return expr
 
     def _combine_similar(self, root: Expr):
         return
+
+    def _combine_similar_branches(self, root, remove_ops, skip_ops=None):
+        # We have to go back until we reach an operation that was not pushed down
+        frame, operations = self._remove_operations(self.frame, remove_ops, skip_ops)
+        try:
+            common = type(self)(frame, *self.operands[1:])
+        except ValueError:
+            # May have encountered a problem with `_required_attribute`.
+            # (There is no guarentee that the same method will exist for
+            # both a Series and DataFrame)
+            return None
+
+        others = self._find_similar_operations(root, ignore=self._parameters)
+
+        others_compatible = []
+        for op in others:
+            if (
+                isinstance(op.frame, remove_ops)
+                and (common._name == type(op)(op.frame.frame, *op.operands[1:])._name)
+            ) or common._name == op._name:
+                others_compatible.append(op)
+
+        if isinstance(self.frame, Filter) and all(
+            isinstance(op.frame, Filter) for op in others_compatible
+        ):
+            # Avoid pushing filters up if all similar ops
+            # are acting on a Filter-based expression anyway
+            return None
+
+        if len(others_compatible) > 0:
+            # Add operations back in the same order
+            for i, op in enumerate(reversed(operations)):
+                common = common[op]
+                if i > 0:
+                    # Combine stacked projections
+                    common = common._simplify_down() or common
+            return common
+
+    def _remove_operations(self, frame, remove_ops, skip_ops=None):
+        """Searches for operations that we have to push up again to avoid
+        the duplication of branches that are doing the same.
+
+        Parameters
+        ----------
+        frame: Expression that we will search.
+        remove_ops: Ops that we will remove to push up again.
+        skip_ops: Ops that were introduced and that we want to ignore.
+
+        Returns
+        -------
+        tuple of the new expression and the operations that we removed.
+        """
+
+        operations, ops_to_push_up = [], []
+        frame_base = frame
+        combined_ops = remove_ops if skip_ops is None else remove_ops + skip_ops
+        while isinstance(frame, combined_ops):
+            # Have to respect ops that were injected while lowering or filters
+            if isinstance(frame, remove_ops):
+                ops_to_push_up.append(frame.operands[1])
+                frame = frame.frame
+                break
+            else:
+                operations.append((type(frame), frame.operands[1:]))
+                frame = frame.frame
+
+        if len(ops_to_push_up) > 0:
+            # Remove the projections but build the remaining things back up
+            for op_type, operands in reversed(operations):
+                frame = op_type(frame, *operands)
+            return frame, ops_to_push_up
+        else:
+            return frame_base, []
 
     def optimize(self, **kwargs):
         return optimize(self, **kwargs)
@@ -461,6 +558,12 @@ class Expr:
             return Filter(self, other)  # df[df.x > 1]
         else:
             return Projection(self, other)  # df[["a", "b", "c"]]
+
+    def __bool__(self):
+        raise ValueError(
+            f"The truth value of a {self.__class__.__name__} is ambiguous. "
+            "Use a.any() or a.all()."
+        )
 
     def __add__(self, other):
         return Add(self, other)
@@ -711,56 +814,80 @@ class Expr:
             seen.add(expr._name)
 
             layers.append(expr._layer())
-            for operand in expr.operands:
-                if isinstance(operand, Expr):
-                    stack.append(operand)
+            for operand in expr.dependencies():
+                stack.append(operand)
 
         return toolz.merge(layers)
 
     def __dask_keys__(self):
         return [(self._name, i) for i in range(self.npartitions)]
 
-    def substitute(self, substitutions: dict) -> Expr:
-        """Substitute specific `Expr` instances within `self`
+    def substitute(self, old, new) -> Expr:
+        """Substitute a specific term within the expression
+
+        Note that replacing non-`Expr` terms may produce
+        unexpected results, and is not recommended.
+        Substituting boolean values is not allowed.
 
         Parameters
         ----------
-        substitutions:
-            mapping old terms to new terms. Note that using
-            non-`Expr` keys may produce unexpected results,
-            and substituting boolean values is not allowed.
+        old:
+            Old term to find and replace.
+        new:
+            New term to replace instances of `old` with.
 
         Examples
         --------
-        >>> (df + 10).substitute({10: 20})
+        >>> (df + 10).substitute(10, 20)
         df + 20
         """
-        if not substitutions:
-            return self
 
-        if self in substitutions:
-            return substitutions[self]
+        # Check if we are replacing a literal
+        if isinstance(old, Expr):
+            substitute_literal = False
+            if self._name == old._name:
+                return new
+        else:
+            substitute_literal = True
+            if isinstance(old, bool):
+                raise TypeError("Arguments to `substitute` cannot be bool.")
 
-        new = []
+        new_exprs = []
         update = False
         for operand in self.operands:
-            if (
-                not isinstance(operand, bool)
-                and ishashable(operand)
-                and operand in substitutions
-            ):
-                new.append(substitutions[operand])
-                update = True
-            elif isinstance(operand, Expr):
-                val = operand.substitute(substitutions)
+            if isinstance(operand, Expr):
+                val = operand.substitute(old, new)
                 if operand._name != val._name:
                     update = True
-                new.append(val)
+                new_exprs.append(val)
+            elif (
+                isinstance(self, Fused)
+                and isinstance(operand, list)
+                and all(isinstance(op, Expr) for op in operand)
+            ):
+                # Special handling for `Fused`.
+                # We make no promise to dive through a
+                # list operand in general, but NEED to
+                # do so for the `Fused.exprs` operand.
+                val = []
+                for op in operand:
+                    val.append(op.substitute(old, new))
+                    if val[-1]._name != op._name:
+                        update = True
+                new_exprs.append(val)
+            elif (
+                substitute_literal
+                and not isinstance(operand, bool)
+                and isinstance(operand, type(old))
+                and operand == old
+            ):
+                new_exprs.append(new)
+                update = True
             else:
-                new.append(operand)
+                new_exprs.append(operand)
 
         if update:  # Only recreate if something changed
-            return type(self)(*new)
+            return type(self)(*new_exprs)
         return self
 
     def substitute_parameters(self, substitutions: dict) -> Expr:
@@ -1078,38 +1205,7 @@ class Blockwise(Expr):
             or self._filter_passthrough
             and isinstance(self.frame, Filter)
         ):
-            frame, operations = self.frame, []
-            # We have to go back until we reach an operation that was not pushed down
-            while isinstance(frame, (Filter, Projection)):
-                operations.append(frame.operands[1])
-                frame = frame.frame
-            else:
-                try:
-                    common = type(self)(frame, *self.operands[1:])
-                except ValueError:
-                    # May have encountered a problem with `_required_attribute`.
-                    # (There is no guarentee that the same method will exist for
-                    # both a Series and DataFrame)
-                    return None
-            push_up_op = False
-            for op in self._find_similar_operations(root, ignore=self._parameters):
-                if (
-                    isinstance(op.frame, (Projection, Filter))
-                    and (
-                        common._name == type(op)(op.frame.frame, *op.operands[1:])._name
-                    )
-                ) or common._name == op._name:
-                    push_up_op = True
-                    break
-
-            if push_up_op:
-                # Add operations back in the same order
-                for i, op in enumerate(reversed(operations)):
-                    common = common[op]
-                    if i > 0:
-                        # Combine stacked projections
-                        common = common._simplify_down() or common
-                return common
+            return self._combine_similar_branches(root, (Filter, Projection))
         return None
 
 
@@ -1268,7 +1364,7 @@ class Sample(Blockwise):
         args = [self._blockwise_arg(self.frame, index)] + [
             self.state_data[index],
             self.frac,
-            self.replace,
+            self.operand("replace"),
         ]
         return (self.operation,) + tuple(args)
 
@@ -1583,6 +1679,7 @@ class Eval(Elemwise):
 
 
 class Filter(Blockwise):
+    _projection_passthrough = True
     _parameters = ["frame", "predicate"]
     operation = operator.getitem
 
@@ -1774,6 +1871,12 @@ class Head(Expr):
         if isinstance(self.frame, Head):
             return Head(self.frame.frame, min(self.n, self.frame.n))
 
+    def _simplify_up(self, parent):
+        from dask_expr import Repartition
+
+        if isinstance(parent, Repartition) and parent.new_partitions == 1:
+            return self
+
     def _lower(self):
         if not isinstance(self, BlockwiseHead):
             # Lower to Blockwise
@@ -1819,6 +1922,12 @@ class Tail(Expr):
             return type(self.frame)(*operands)
         if isinstance(self.frame, Tail):
             return Tail(self.frame.frame, min(self.n, self.frame.n))
+
+    def _simplify_up(self, parent):
+        from dask_expr import Repartition
+
+        if isinstance(parent, Repartition) and parent.new_partitions == 1:
+            return self
 
     def _lower(self):
         if not isinstance(self, BlockwiseTail):
@@ -2022,6 +2131,9 @@ class Partitions(Expr):
             # parameter can internally capture the same logic as `Partitions`
             return self.frame.substitute_parameters({"_partitions": partitions})
 
+    def _cull_down(self):
+        return self._simplify_down()
+
     def _node_label_args(self):
         return [self.frame, self.partitions]
 
@@ -2112,16 +2224,23 @@ def optimize(expr: Expr, combine_similar: bool = True, fuse: bool = True) -> Exp
     optimize_blockwise_fusion
     """
 
-    result = expr
-    while True:
-        out = result.simplify().lower_once()
-        if out._name == result._name:
-            break
-        result = out
+    # Simplify
+    result = expr.simplify()
 
+    # Combine similar
     if combine_similar:
         result = result.combine_similar()
 
+    # Manipulate Expression to make it more efficient
+    result = result.rewrite(kind="tune")
+
+    # Lower
+    result = result.lower_completely()
+
+    # Cull
+    result = result.rewrite(kind="cull")
+
+    # Final graph-specific optimizations
     if fuse:
         result = optimize_blockwise_fusion(result)
 
@@ -2152,14 +2271,20 @@ def non_blockwise_ancestors(expr):
 
 def are_co_aligned(*exprs):
     """Do inputs come from different parents, modulo blockwise?"""
-    exprs = [expr for expr in exprs if not is_broadcastable(expr)]
     ancestors = [set(non_blockwise_ancestors(e)) for e in exprs]
     unique_ancestors = {
         # Account for column projection within IO expressions
         _tokenize_partial(item, ["columns", "_series"])
         for item in flatten(ancestors, container=set)
     }
-    return len(unique_ancestors) == 1
+    if len(unique_ancestors) <= 1:
+        return True
+    # We tried avoiding an `npartitions` check above, but
+    # now we need to consider "broadcastable" expressions.
+    exprs_except_broadcast = [expr for expr in exprs if not is_broadcastable(expr)]
+    if len(exprs_except_broadcast) < len(exprs):
+        return are_co_aligned(*exprs_except_broadcast)
+    return False
 
 
 ## Utilites for Expr fusion
@@ -2174,6 +2299,8 @@ def optimize_blockwise_fusion(expr):
         stack = [expr]
         dependents = defaultdict(set)
         dependencies = {}
+        expr_mapping = {}
+
         while stack:
             next = stack.pop()
 
@@ -2182,25 +2309,29 @@ def optimize_blockwise_fusion(expr):
             seen.add(next._name)
 
             if isinstance(next, Blockwise):
-                dependencies[next] = set()
-                if next not in dependents:
-                    dependents[next] = set()
+                dependencies[next._name] = set()
+                if next._name not in dependents:
+                    dependents[next._name] = set()
+                    expr_mapping[next._name] = next
 
             for operand in next.operands:
                 if isinstance(operand, Expr):
                     stack.append(operand)
                     if isinstance(operand, Blockwise):
-                        if next in dependencies:
-                            dependencies[next].add(operand)
-                        dependents[operand].add(next)
+                        if next._name in dependencies:
+                            dependencies[next._name].add(operand._name)
+                        dependents[operand._name].add(next._name)
+                        expr_mapping[operand._name] = operand
+                        expr_mapping[next._name] = next
 
         # Traverse each "root" until we find a fusable sub-group.
         # Here we use root to refer to a Blockwise Expr node that
         # has no Blockwise dependents
         roots = [
-            k
+            expr_mapping[k]
             for k, v in dependents.items()
-            if v == set() or all(not isinstance(_expr, Blockwise) for _expr in v)
+            if v == set()
+            or all(not isinstance(expr_mapping[_expr], Blockwise) for _expr in v)
         ]
         while roots:
             root = roots.pop()
@@ -2215,10 +2346,14 @@ def optimize_blockwise_fusion(expr):
                 seen.add(next._name)
 
                 group.append(next)
-                for dep in dependencies[next]:
-                    if (dep.npartitions == root.npartitions) and not (
-                        dependents[dep] - set(stack) - set(group)
-                    ):
+                for dep_name in dependencies[next._name]:
+                    dep = expr_mapping[dep_name]
+
+                    stack_names = {s._name for s in stack}
+                    group_names = {g._name for g in group}
+                    if (
+                        dep.npartitions == root.npartitions or next._broadcast_dep(dep)
+                    ) and not (dependents[dep._name] - stack_names - group_names):
                         # All of deps dependents are contained
                         # in the local group (or the local stack
                         # of expr nodes that we know we will be
@@ -2227,7 +2362,7 @@ def optimize_blockwise_fusion(expr):
                         # of partitions, since broadcasting within
                         # a group is not allowed.
                         stack.append(dep)
-                    elif dependencies[dep] and dep._name not in [
+                    elif dependencies[dep._name] and dep._name not in [
                         r._name for r in roots
                     ]:
                         # Couldn't fuse dep, but we may be able to
@@ -2244,8 +2379,8 @@ def optimize_blockwise_fusion(expr):
                         for operand in _expr.dependencies()
                         if operand._name not in local_names
                     ]
-                to_replace = {group[0]: Fused(group, *group_deps)}
-                return expr.substitute(to_replace), not roots
+                _ret = expr.substitute(group[0], Fused(group, *group_deps))
+                return _ret, not roots
 
         # Return original expr if no fusable sub-groups were found
         return expr, True
@@ -2324,11 +2459,12 @@ class Fused(Blockwise):
         return lines
 
     def __str__(self):
-        names = [expr._name.split("-")[0] for expr in self.exprs]
-        if len(names) > 3:
-            names = [names[0], f"{len(names) - 2}", names[-1]]
-        descr = "-".join(names)
-        return f"Fused-{descr}"
+        exprs = sorted(self.exprs, key=M._depth)
+        names = [expr._name.split("-")[0] for expr in exprs]
+        if len(names) > 4:
+            return names[0] + "-fused-" + names[-1]
+        else:
+            return "-".join(names)
 
     @functools.cached_property
     def _name(self):
@@ -2348,6 +2484,10 @@ class Fused(Blockwise):
                 subgraph, name = _expr._task(index)[1:3]
                 graph.update(subgraph)
                 graph[(name, index)] = name
+            elif self._broadcast_dep(_expr):
+                # When _expr is being broadcasted, we only
+                # want to define a fused task for index 0
+                graph[(_expr._name, 0)] = _expr._task(0)
             else:
                 graph[(_expr._name, index)] = _expr._task(index)
 

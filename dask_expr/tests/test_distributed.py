@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import pytest
-from distributed import Client, LocalCluster
 
 from dask_expr import from_pandas
 from dask_expr.tests._util import _backend_library
 
 distributed = pytest.importorskip("distributed")
 
+from distributed import Client, LocalCluster
+from distributed.shuffle._core import id_from_key
 from distributed.utils_test import client as c  # noqa F401
 from distributed.utils_test import gen_cluster
 
@@ -55,6 +56,79 @@ async def test_merge_p2p_shuffle(c, s, a, b, npartitions_left):
     lib.testing.assert_frame_equal(x.reset_index(drop=True), df_left.merge(df_right))
 
 
+@gen_cluster(client=True)
+async def test_self_merge_p2p_shuffle(c, s, a, b):
+    pdf = lib.DataFrame({"a": range(100), "b": range(0, 200, 2)})
+    ddf = from_pandas(pdf, npartitions=5)
+
+    out = ddf.merge(ddf, left_on="a", right_on="b", shuffle_backend="p2p")
+    # Generate unique shuffle IDs if the input frame is the same but parameters differ
+    assert sum(id_from_key(k) is not None for k in out.dask) == 2
+    x = await c.compute(out)
+    expected = pdf.merge(pdf, left_on="a", right_on="b")
+    lib.testing.assert_frame_equal(
+        x.sort_values("a_x", ignore_index=True),
+        expected.sort_values("a_x", ignore_index=True),
+    )
+
+
+@gen_cluster(client=True)
+async def test_merge_p2p_shuffle_reused_dataframe_with_different_parameters(c, s, a, b):
+    pdf1 = lib.DataFrame({"a": range(100), "b": range(0, 200, 2)})
+    pdf2 = lib.DataFrame({"x": range(200), "y": [1, 2, 3, 4] * 50})
+    ddf1 = from_pandas(pdf1, npartitions=5)
+    ddf2 = from_pandas(pdf2, npartitions=10)
+
+    out = (
+        ddf1.merge(ddf2, left_on="a", right_on="x", shuffle_backend="p2p")
+        # Vary the number of output partitions for the shuffles of dd2
+        .repartition(20).merge(ddf2, left_on="b", right_on="x", shuffle_backend="p2p")
+    )
+    # Generate unique shuffle IDs if the input frame is the same but parameters differ
+    assert sum(id_from_key(k) is not None for k in out.dask) == 4
+    x = await c.compute(out)
+    expected = pdf1.merge(pdf2, left_on="a", right_on="x").merge(
+        pdf2, left_on="b", right_on="x"
+    )
+    lib.testing.assert_frame_equal(
+        x.sort_values("a", ignore_index=True),
+        expected.sort_values("a", ignore_index=True),
+    )
+
+
+@gen_cluster(client=True)
+async def test_merge_p2p_shuffle_reused_dataframe_with_same_parameters(c, s, a, b):
+    pdf1 = lib.DataFrame({"a": range(100), "b": range(0, 200, 2)})
+    pdf2 = lib.DataFrame({"x": range(200), "y": [1, 2, 3, 4] * 50})
+    ddf1 = from_pandas(pdf1, npartitions=5)
+    ddf2 = from_pandas(pdf2, npartitions=10)
+
+    # This performs two shuffles:
+    #   * ddf1 is shuffled on `a`
+    #   * ddf2 is shuffled on `x`
+    ddf3 = ddf1.merge(ddf2, left_on="a", right_on="x", shuffle_backend="p2p")
+
+    # This performs one shuffle:
+    #   * ddf3 is shuffled on `b`
+    # We can reuse the shuffle of dd2 on `x` from the previous merge.
+    out = ddf2.merge(
+        ddf3,
+        left_on="x",
+        right_on="b",
+        shuffle_backend="p2p",
+    )
+    # Generate the same shuffle IDs if the input frame is the same and all its parameters match
+    assert sum(id_from_key(k) is not None for k in out.dask) == 3
+    x = await c.compute(out)
+    expected = pdf2.merge(
+        pdf1.merge(pdf2, left_on="a", right_on="x"), left_on="x", right_on="b"
+    )
+    lib.testing.assert_frame_equal(
+        x.sort_values("a", ignore_index=True),
+        expected.sort_values("a", ignore_index=True),
+    )
+
+
 @pytest.mark.parametrize("npartitions_left", [5, 6])
 @gen_cluster(client=True)
 async def test_index_merge_p2p_shuffle(c, s, a, b, npartitions_left):
@@ -89,6 +163,26 @@ async def test_merge_p2p_shuffle(c, s, a, b):
     )
 
 
+@gen_cluster(client=True)
+async def test_merge_p2p_shuffle_projection_error(c, s, a, b):
+    pdf1 = lib.DataFrame({"a": [1, 2, 3], "b": 1})
+    pdf2 = lib.DataFrame({"x": [1, 2, 3, 4, 5, 6], "y": 1})
+    df1 = from_pandas(pdf1, npartitions=2)
+    df2 = from_pandas(pdf2, npartitions=3)
+    df = df1.merge(df2, left_on="a", right_on="x")
+    min_val = df.groupby("x")["y"].sum().reset_index()
+    result = df.merge(min_val)
+    expected = lib.DataFrame(
+        {"a": [2, 3, 1], "b": 1, "x": [2, 3, 1], "y": 1}, index=[0, 0, 1]
+    )
+    x = c.compute(result)
+    x = await x
+    lib.testing.assert_frame_equal(
+        x.sort_values("a", ignore_index=True),
+        expected.sort_values("a", ignore_index=True),
+    )
+
+
 def test_sort_values():
     with LocalCluster(processes=False, n_workers=2) as cluster:
         with Client(cluster) as client:  # noqa: F841
@@ -99,4 +193,61 @@ def test_sort_values():
     lib.testing.assert_frame_equal(
         out.reset_index(drop=True),
         pdf.sort_values(by="a", ignore_index=True),
+    )
+
+
+@pytest.mark.parametrize("add_repartition", [True, False])
+def test_merge_combine_similar_squash_merges(add_repartition):
+    with LocalCluster(processes=False, n_workers=2) as cluster:
+        with Client(cluster) as client:  # noqa: F841
+            pdf = lib.DataFrame(
+                {
+                    "a": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] * 2,
+                    "b": 1,
+                    "c": 1,
+                }
+            )
+            pdf2 = lib.DataFrame(
+                {"m": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] * 2, "n": 1, "o": 2, "p": 3}
+            )
+            pdf3 = lib.DataFrame(
+                {"x": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] * 2, "y": 1, "z": 1, "zz": 2}
+            )
+
+            df = from_pandas(pdf, npartitions=5)
+            df2 = from_pandas(pdf2, npartitions=10)
+            df3 = from_pandas(pdf3, npartitions=10)
+
+            df = df[df.a > 1]
+            df2 = df2[df2.m > 1]
+            df3 = df3[df3.x > 1]
+            if add_repartition:
+                df = df.repartition(df.npartitions // 2)
+                df2 = df2.repartition(df2.npartitions // 2)
+            q = df.merge(df2, left_on="a", right_on="m")
+            if add_repartition:
+                df3 = df3.repartition(df3.npartitions // 2)
+                q = q.repartition(q.npartitions // 2)
+            q = q.merge(df3, left_on="n", right_on="x")
+            q["revenue"] = q.y * (1 - q.z)
+            result = q[["x", "n", "o", "revenue"]]
+            result_q = result.optimize(fuse=False)
+
+            assert (
+                result_q.expr.frame.frame.frame._name
+                == result_q.expr.frame.value.left.frame._name
+            )
+            out = result.compute()
+
+    pdf = pdf[pdf.a > 1]
+    pdf2 = pdf2[pdf2.m > 1]
+    pdf3 = pdf3[pdf3.x > 1]
+    q = pdf.merge(pdf2, left_on="a", right_on="m")
+    q = q.merge(pdf3, left_on="n", right_on="x")
+    q["revenue"] = q.y * (1 - q.z)
+    expected = q[["x", "n", "o", "revenue"]]
+
+    lib.testing.assert_frame_equal(
+        out.reset_index(drop=True),
+        expected,
     )

@@ -21,7 +21,14 @@ from dask.dataframe.shuffle import (
 )
 from dask.utils import M, digit, get_default_shuffle_method, insert
 
-from dask_expr._expr import Assign, Blockwise, Expr, PartitionsFiltered, Projection
+from dask_expr._expr import (
+    Assign,
+    Blockwise,
+    Expr,
+    Filter,
+    PartitionsFiltered,
+    Projection,
+)
 from dask_expr._reductions import (
     All,
     Any,
@@ -42,8 +49,8 @@ from dask_expr._reductions import (
     Unique,
     ValueCounts,
 )
-from dask_expr._repartition import Repartition
-from dask_expr._util import LRU
+from dask_expr._repartition import Repartition, RepartitionToFewer
+from dask_expr._util import LRU, _convert_to_list
 
 
 class Shuffle(Expr):
@@ -217,22 +224,22 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
 
         # Reduce partition count if necessary
         if npartitions_out < frame.npartitions:
-            frame = Repartition(frame, n=npartitions_out)
-
-        if cls.lazy_hash_support:
-            # Don't need to assign "_partitions" column
-            # if we are shuffling on a list of columns
-            nset = set(partitioning_index)
-            if nset & set(frame.columns) == nset:
-                return cls(
-                    frame,
-                    partitioning_index,
-                    npartitions_out,
-                    ignore_index,
-                    options,
-                )
+            frame = Repartition(frame, new_partitions=npartitions_out)
 
         if partitioning_index != ["_partitions"]:
+            if cls.lazy_hash_support:
+                # Don't need to assign "_partitions" column
+                # if we are shuffling on a list of columns
+                nset = set(partitioning_index)
+                if nset & set(frame.columns) == nset:
+                    return cls(
+                        frame,
+                        partitioning_index,
+                        npartitions_out,
+                        ignore_index,
+                        options,
+                    )
+
             # Assign new "_partitions" column
             index_added = AssignPartitioningIndex(
                 frame,
@@ -499,6 +506,7 @@ class P2PShuffle(SimpleShuffle):
                 self.partitioning_index,
                 self.frame._meta,
                 set(parts_out),
+                True,
             )
 
         dsk[_barrier_key] = (shuffle_barrier, token, transfer_keys)
@@ -607,8 +615,8 @@ class AssignPartitioningIndex(Blockwise):
 
     _parameters = ["frame", "partitioning_index", "index_name", "npartitions_out"]
 
-    @classmethod
-    def operation(cls, df, index, name: str, npartitions: int):
+    @staticmethod
+    def operation(df, index, name: str, npartitions: int):
         """Construct a hash-based partitioning index"""
         index = _select_columns_or_index(df, index)
         if isinstance(index, (str, list, tuple)):
@@ -618,6 +626,18 @@ class AssignPartitioningIndex(Blockwise):
         else:
             index = partitioning_index(index, npartitions)
         return df.assign(**{name: index})
+
+    def _combine_similar(self, root: Expr):
+        return self._combine_similar_branches(root, (Filter, Projection))
+
+    def _remove_operations(self, frame, remove_ops, skip_ops=None):
+        expr, ops = super()._remove_operations(frame, remove_ops, skip_ops)
+        if len(ops) > 0 and isinstance(ops[0], list):
+            if sorted(ops[0]) == sorted(self.frame.columns):
+                expr, ops = super()._remove_operations(frame, remove_ops, skip_ops)
+                return expr, []
+            ops[0] = ops[0] + [self.index_name]
+        return expr, ops
 
 
 class BaseSetIndexSortValues(Expr):
@@ -686,6 +706,9 @@ class SetIndex(BaseSetIndexSortValues):
     def _divisions(self):
         if self.user_divisions is not None:
             return self.user_divisions
+        if self.npartitions == 1:
+            return (None, None)
+
         divisions, mins, maxes, presorted = _get_divisions(
             self.frame,
             self.other,
@@ -718,6 +741,14 @@ class SetIndex(BaseSetIndexSortValues):
         return self.frame[self._other]
 
     def _lower(self):
+        if self.npartitions == 1:
+            expr = self.frame
+            if self.frame.npartitions > 1:
+                expr = RepartitionToFewer(expr, 1)
+
+            index_set = SetIndexBlockwise(expr, self._other, self.drop, None)
+            return SortIndexBlockwise(index_set)
+
         if self.user_divisions is None:
             divisions = self._divisions()
             presorted = _get_divisions(
@@ -740,6 +771,29 @@ class SetIndex(BaseSetIndexSortValues):
         return SetPartition(self.frame, self._other, self.drop, divisions)
 
     def _simplify_up(self, parent):
+        from dask_expr._expr import Filter, Head, Index, Tail
+
+        # TODO, handle setting index with other frame
+        if (
+            isinstance(parent, Head)
+            and isinstance(self._other, (int, str))
+            and self._other in self.frame.columns
+        ):
+            return SetIndex(
+                NSmallest(self.frame, n=parent.n, _columns=self._other),
+                _other=self._other,
+            )
+
+        if (
+            isinstance(parent, Tail)
+            and isinstance(self._other, (int, str))
+            and self._other in self.frame.columns
+        ):
+            return SetIndex(
+                NLargest(self.frame, n=parent.n, _columns=self._other),
+                _other=self._other,
+            )
+
         if isinstance(parent, Projection):
             columns = parent.columns + (
                 [self._other] if not isinstance(self._other, Expr) else []
@@ -750,6 +804,14 @@ class SetIndex(BaseSetIndexSortValues):
                 type(self)(self.frame[columns], *self.operands[1:]),
                 parent.operand("columns"),
             )
+
+        if isinstance(parent, Filter):
+            p = parent.predicate
+            if any(isinstance(x, Index) for x in p.walk()):
+                # Punt on cases where the new index is part of the filter
+                return
+            predicate = parent.substitute(self, self.frame).predicate
+            return type(self)(self.frame[predicate], *self.operands[1:])
 
 
 class SortValues(BaseSetIndexSortValues):
@@ -763,6 +825,8 @@ class SortValues(BaseSetIndexSortValues):
         "sort_function",
         "sort_function_kwargs",
         "upsample",
+        "ignore_index",
+        "shuffle",  # Shuffle backend
     ]
     _defaults = {
         "partition_size": 128e6,
@@ -772,7 +836,25 @@ class SortValues(BaseSetIndexSortValues):
         "sort_function": None,
         "sort_function_kwargs": None,
         "upsample": 1.0,
+        "ignore_index": False,
+        "shuffle": None,
     }
+
+    def _divisions(self):
+        if self.frame.npartitions == 1:
+            # Protect against triggering calculations when we only have one division
+            return (None, None)
+
+        divisions, mins, maxes, presorted = _get_divisions(
+            self.frame,
+            self.frame[self.by[0]],
+            self.npartitions,
+            self.ascending,
+            upsample=self.upsample,
+        )
+        if presorted:
+            return mins.copy() + [maxes[-1]]
+        return (None,) * len(divisions)
 
     @property
     def sort_function(self):
@@ -786,6 +868,7 @@ class SortValues(BaseSetIndexSortValues):
             "by": self.by,
             "ascending": self.ascending,
             "na_position": self.na_position,
+            "ignore_index": self.ignore_index,
         }
         if self.operand("sort_function_kwargs") is not None:
             sort_kwargs.update(self.operand("sort_function_kwargs"))
@@ -796,6 +879,11 @@ class SortValues(BaseSetIndexSortValues):
         return self.frame._meta
 
     def _lower(self):
+        if self.frame.npartitions == 1:
+            return SortValuesBlockwise(
+                self.frame, self.sort_function, self.sort_function_kwargs
+            )
+
         by = self.frame[self.by[0]]
         divisions, _, _, presorted = _get_divisions(
             self.frame, by, self.npartitions, self.ascending, upsample=self.upsample
@@ -813,13 +901,31 @@ class SortValues(BaseSetIndexSortValues):
             assigned,
             "_partitions",
             npartitions_out=len(divisions) - 1,
-            ignore_index=True,
+            ignore_index=self.ignore_index,
+            backend=self.shuffle,
         )
         return SortValuesBlockwise(
             shuffled, self.sort_function, self.sort_function_kwargs
         )
 
     def _simplify_up(self, parent):
+        from dask_expr._expr import Filter, Head, Tail
+
+        if isinstance(parent, Head):
+            if self.ascending:
+                return NSmallest(self.frame, n=parent.n, _columns=self.by)
+            else:
+                return NLargest(self.frame, n=parent.n, _columns=self.by)
+        if isinstance(parent, Tail):
+            if self.ascending:
+                return NLargest(self.frame, n=parent.n, _columns=self.by)
+            else:
+                return NSmallest(self.frame, n=parent.n, _columns=self.by)
+        if isinstance(parent, Filter):
+            return SortValues(
+                Filter(self.frame, parent.predicate.substitute(self, self.frame)),
+                *self.operands[1:],
+            )
         if isinstance(parent, Projection):
             parent_columns = parent.columns
             columns = parent_columns + [
@@ -898,7 +1004,8 @@ class _SetIndexPost(Blockwise):
     _parameters = ["frame", "index_name", "drop", "set_name"]
     _is_length_preserving = True
 
-    def operation(self, df, index_name, drop, set_name):
+    @staticmethod
+    def operation(df, index_name, drop, set_name):
         return df.set_index(set_name, drop=drop).rename_axis(index=index_name)
 
 
@@ -915,7 +1022,8 @@ class SortValuesBlockwise(Blockwise):
     _keyword_only = ["sort_function", "sort_kwargs"]
     _is_length_preserving = True
 
-    def operation(self, *args, **kwargs):
+    @staticmethod
+    def operation(*args, **kwargs):
         sort_func = kwargs.pop("sort_function")
         sort_kwargs = kwargs.pop("sort_kwargs")
         return sort_func(*args, **kwargs, **sort_kwargs)
@@ -930,7 +1038,8 @@ class SetIndexBlockwise(Blockwise):
     _keyword_only = ["drop", "new_divisions"]
     _is_length_preserving = True
 
-    def operation(self, df, *args, new_divisions, **kwargs):
+    @staticmethod
+    def operation(df, *args, new_divisions, **kwargs):
         return df.set_index(*args, **kwargs)
 
     def _divisions(self):
@@ -941,7 +1050,7 @@ class SetIndexBlockwise(Blockwise):
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
             columns = parent.columns + (
-                [self.other] if not isinstance(self.other, Expr) else []
+                _convert_to_list(self.other) if not isinstance(self.other, Expr) else []
             )
             if self.frame.columns == columns:
                 return

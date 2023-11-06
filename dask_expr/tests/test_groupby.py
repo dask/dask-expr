@@ -1,11 +1,10 @@
 import pytest
-from dask.dataframe.utils import assert_eq
 
 from dask_expr import from_pandas
 from dask_expr._groupby import GroupByApplyBlockwise
 from dask_expr._reductions import TreeReduce
 from dask_expr._shuffle import Shuffle
-from dask_expr.tests._util import _backend_library, xfail_gpu
+from dask_expr.tests._util import _backend_library, assert_eq, xfail_gpu
 
 # Set DataFrame backend for this module
 lib = _backend_library()
@@ -174,3 +173,53 @@ def test_groupby_apply(df, pdf):
     expected = df[["x", "y"]].groupby("x")[["y"]].apply(test).simplify()
     assert query._name == expected._name
     assert_eq(query, pdf.groupby("x")[["y"]].apply(test))
+
+
+@pytest.mark.parametrize("api", ["sum", "mean", "min", "max", "prod", "var", "std"])
+@pytest.mark.parametrize("sort", [True, False])
+@pytest.mark.parametrize("split_out", [1, 2])
+def test_groupby_single_agg_split_out(pdf, df, api, sort, split_out):
+    g = df.groupby("x", sort=sort)
+    agg = getattr(g, api)(split_out=split_out)
+
+    expect = getattr(pdf.groupby("x", sort=sort), api)()
+    assert_eq(agg, expect, sort_results=not sort)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"x": "count"},
+        {"x": ["count"]},
+        {"x": ["count"], "y": "mean"},
+        {"x": ["sum", "mean"]},
+        ["min", "mean"],
+        "sum",
+    ],
+)
+@pytest.mark.parametrize("sort", [True, False])
+@pytest.mark.parametrize("split_out", [1, 2])
+def test_groupby_agg_split_out(pdf, df, spec, sort, split_out):
+    g = df.groupby("x", sort=sort)
+    agg = g.agg(spec, split_out=split_out)
+
+    expect = pdf.groupby("x", sort=sort).agg(spec)
+    assert_eq(agg, expect, sort_results=not sort)
+
+
+def test_groupby_reduction_shuffle(df, pdf):
+    q = df.groupby("x").sum(split_out=True)
+    assert q.optimize().npartitions == df.npartitions
+    expected = pdf.groupby("x").sum()
+    assert_eq(q, expected)
+
+
+def test_groupby_projection_split_out(df, pdf):
+    pdf_result = pdf.groupby("x")["y"].sum()
+    result = df.groupby("x")["y"].sum(split_out=2)
+    assert_eq(result, pdf_result)
+
+    pdf_result = pdf.groupby("y")["x"].sum()
+    df = from_pandas(pdf, npartitions=50)
+    result = df.groupby("y")["x"].sum(split_out=2)
+    assert_eq(result, pdf_result)

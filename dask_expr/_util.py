@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+import functools
 from collections import OrderedDict, UserDict
 from collections.abc import Hashable, Sequence
 from types import LambdaType
-from typing import TypeVar, cast
+from typing import Any, TypeVar, cast
 
+import dask
 from dask import config
 from dask.base import normalize_token, tokenize
+from packaging.version import Version
 
 K = TypeVar("K", bound=Hashable)
 V = TypeVar("V")
+
+DASK_VERSION = Version(dask.__version__)
+DASK_GT_20231000 = DASK_VERSION > Version("2023.10.0")
 
 
 def _convert_to_list(column) -> list | None:
@@ -26,7 +32,14 @@ def _convert_to_list(column) -> list | None:
 
 def is_scalar(x):
     # np.isscalar does not work for some pandas scalars, for example pd.NA
-    return not (isinstance(x, Sequence) or hasattr(x, "dtype")) or isinstance(x, str)
+    if isinstance(x, Sequence) and not isinstance(x, str) or hasattr(x, "dtype"):
+        return False
+    if isinstance(x, (str, int)):
+        return True
+
+    from dask_expr._expr import Expr
+
+    return not isinstance(x, Expr)
 
 
 @normalize_token.register(LambdaType)
@@ -70,3 +83,39 @@ class LRU(UserDict[K, V]):
         if len(self) >= self.maxsize:
             cast(OrderedDict, self.data).popitem(last=False)
         super().__setitem__(key, value)
+
+
+class _BackendData:
+    """Helper class to wrap backend data
+
+    The primary purpose of this class is to provide
+    caching outside the ``FromPandas`` class.
+    """
+
+    def __init__(self, data):
+        self._data = data
+        self._division_info = LRU(10)
+
+    @functools.cached_property
+    def _token(self):
+        from dask_expr._util import _tokenize_deterministic
+
+        return _tokenize_deterministic(self._data)
+
+    def __len__(self):
+        return len(self._data)
+
+    def __getattr__(self, key: str) -> Any:
+        try:
+            return object.__getattribute__(self, key)
+        except AttributeError:
+            # Return the underlying backend attribute
+            return getattr(self._data, key)
+
+    def __reduce__(self):
+        return type(self), (self._data,)
+
+
+@normalize_token.register(_BackendData)
+def normalize_data_wrapper(data):
+    return data._token

@@ -59,6 +59,11 @@ class Accessor:
             FunctionMap(self._series.expr, self._accessor_name, attr, args, kwargs)
         )
 
+    def _property_map(self, attr, *args, **kwargs):
+        from dask_expr._collection import new_collection
+
+        return new_collection(PropertyMap(self._series.expr, self._accessor_name, attr))
+
 
 class PropertyMap(Elemwise):
     _parameters = [
@@ -67,7 +72,8 @@ class PropertyMap(Elemwise):
         "attr",
     ]
 
-    def operation(self, obj, accessor, attr):
+    @staticmethod
+    def operation(obj, accessor, attr):
         out = getattr(getattr(obj, accessor, obj), attr)
         return maybe_wrap_pandas(obj, out)
 
@@ -75,6 +81,7 @@ class PropertyMap(Elemwise):
 class FunctionMap(Elemwise):
     _parameters = ["frame", "accessor", "attr", "args", "kwargs"]
 
-    def operation(self, obj, accessor, attr, args, kwargs):
+    @staticmethod
+    def operation(obj, accessor, attr, args, kwargs):
         out = getattr(getattr(obj, accessor, obj), attr)(*args, **kwargs)
         return maybe_wrap_pandas(obj, out)
