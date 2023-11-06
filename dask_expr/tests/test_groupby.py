@@ -213,7 +213,7 @@ def test_groupby_size_simplify(pdf, df):
     assert not isinstance(q.optimize().expr, RenameFrame)
     assert_eq(q, pdf.groupby("x").agg({"y": "sum", "z": "size", "x": "sum"}))
 
-    
+
 def test_groupby_reduction_shuffle(df, pdf):
     q = df.groupby("x").sum(split_out=True)
     assert q.optimize().npartitions == df.npartitions
