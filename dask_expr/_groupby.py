@@ -514,8 +514,8 @@ class GroupByApplyBlockwise(Blockwise):
     def _meta(self):
         return _meta_apply(self)
 
+    @staticmethod
     def operation(
-        self,
         frame,
         by,
         _slice,
