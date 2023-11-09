@@ -1265,9 +1265,10 @@ def from_map(
     label=None,
     token=None,
     enforce_metadata=False,
+    allow_projection=False,
     **kwargs,
 ):
-    from dask_expr.io import FromMap
+    from dask_expr.io import FromMap, FromMapProjectable
 
     if token is not None:
         raise NotImplementedError()
@@ -1276,14 +1277,29 @@ def from_map(
 
     args = [] if args is None else args
     kwargs = {} if kwargs is None else kwargs
-    return new_collection(
-        FromMap(
-            func,
-            iterables,
-            args,
-            kwargs,
-            meta,
-            divisions,
-            label,
+    if allow_projection:
+        columns = kwargs.pop("columns", None)
+        return new_collection(
+            FromMapProjectable(
+                func,
+                iterables,
+                columns,
+                args,
+                kwargs,
+                meta,
+                divisions,
+                label,
+            )
         )
-    )
+    else:
+        return new_collection(
+            FromMap(
+                func,
+                iterables,
+                args,
+                kwargs,
+                meta,
+                divisions,
+                label,
+            )
+        )

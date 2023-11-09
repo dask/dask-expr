@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import functools
 import math
+import operator
 
 from dask.dataframe import methods
-from dask.dataframe.core import is_dataframe_like
+from dask.dataframe.core import is_dataframe_like, make_meta
 from dask.dataframe.io.io import sorted_division_locations
 from dask.utils import apply, funcname
 
@@ -192,14 +193,12 @@ class FromMap(PartitionsFiltered, BlockwiseIO):
         "user_divisions",
         "label",
         "_partitions",
-        "_series",
     ]
     _defaults = {
         "user_meta": no_default,
         "user_divisions": None,
         "label": None,
         "_partitions": None,
-        "_series": False,
     }
     _absorb_projections = False
 
@@ -207,7 +206,8 @@ class FromMap(PartitionsFiltered, BlockwiseIO):
     def _name(self):
         if self.label:
             return self.label + "-" + _tokenize_deterministic(*self.operands)
-        return super()._name
+        else:
+            return "from_map-" + _tokenize_deterministic(*self.operands)
 
     @functools.cached_property
     def _meta(self):
@@ -216,8 +216,7 @@ class FromMap(PartitionsFiltered, BlockwiseIO):
         else:
             vals = [v[0] for v in self.iterables]
             meta = self.func(*vals, *self.args, **self.kwargs)
-        # TODO: Column projection?
-        return meta
+        return make_meta(meta)
 
     def _divisions(self):
         if self.operand("user_divisions"):
@@ -232,6 +231,61 @@ class FromMap(PartitionsFiltered, BlockwiseIO):
             return (apply, self.func, vals + self.args, self.kwargs)
         else:
             return (self.func, *vals, *self.args)
+
+
+class FromMapProjectable(FromMap):
+    _parameters = [
+        "func",
+        "iterables",
+        "columns",
+        "args",
+        "kwargs",
+        "user_meta",
+        "user_divisions",
+        "label",
+        "_partitions",
+        "_series",
+    ]
+    _defaults = {
+        "user_meta": no_default,
+        "user_divisions": None,
+        "label": None,
+        "_partitions": None,
+        "_series": False,
+    }
+    _absorb_projections = True
+
+    @property
+    def columns(self):
+        columns_operand = self.operand("columns")
+        if columns_operand is None:
+            return list(self._meta.columns)
+        else:
+            return _convert_to_list(columns_operand)
+
+    @functools.cached_property
+    def kwargs(self):
+        options = self.operand("kwargs")
+        if self.operand("columns"):
+            options["columns"] = self.operand("columns")
+        return options
+
+    @property
+    def _meta(self):
+        meta = super()._meta
+        columns = _convert_to_list(self.operand("columns"))
+        if self._series:
+            assert len(columns) > 0
+            return meta[columns[0]]
+        elif columns is not None:
+            return meta[columns]
+        return meta
+
+    def _filtered_task(self, index: int):
+        tsk = super()._filtered_task(index)
+        if self._series:
+            return (operator.getitem, tsk, self.columns[0])
+        return tsk
 
 
 class FromPandas(PartitionsFiltered, BlockwiseIO):

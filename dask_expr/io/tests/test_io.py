@@ -15,7 +15,7 @@ from dask_expr import (
 )
 from dask_expr._expr import Expr, Lengths, Literal, Replace
 from dask_expr._reductions import Len
-from dask_expr.io import ReadCSV, ReadParquet
+from dask_expr.io import FromMap, ReadCSV, ReadParquet
 from dask_expr.tests._util import _backend_library
 
 # Set DataFrame backend for this module
@@ -388,3 +388,19 @@ def test_from_map(tmpdir):
 
     dfab = from_map(lib.read_parquet, files, columns=["a", "b"])
     assert_eq(dfab, pdf[["a", "b"]], check_index=False)
+
+
+def test_from_map_projectable(tmpdir):
+    pdf = lib.DataFrame({c: range(10) for c in "abcdefghijklmn"})
+    dd.from_pandas(pdf, 3).to_parquet(tmpdir, write_index=False)
+    files = sorted(glob.glob(str(tmpdir) + "/*.parquet"))
+
+    df = from_map(lib.read_parquet, files, allow_projection=True)
+    assert_eq(df, pdf, check_index=False)
+    assert_eq(df["a"], pdf["a"], check_index=False)
+    assert_eq(df[["a"]], pdf[["a"]], check_index=False)
+    assert_eq(df["a", "b"], pdf["a", "b"], check_index=False)
+
+    got = df[["a", "b"]].optimize(fuse=False)
+    assert isinstance(got.expr, FromMap)
+    assert got.expr.operand("columns") == ["a", "b"]
