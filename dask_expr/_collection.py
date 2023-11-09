@@ -1254,3 +1254,36 @@ def concat(
             *[df.expr for df in dfs],
         )
     )
+
+
+def from_map(
+    func,
+    *iterables,
+    args=None,
+    meta=no_default,
+    divisions=None,
+    label=None,
+    token=None,
+    enforce_metadata=False,
+    **kwargs,
+):
+    from dask_expr.io import FromMap
+
+    if token is not None:
+        raise NotImplementedError()
+    if enforce_metadata:
+        raise NotImplementedError()
+
+    args = [] if args is None else args
+    kwargs = {} if kwargs is None else kwargs
+    return new_collection(
+        FromMap(
+            func,
+            iterables,
+            args,
+            kwargs,
+            meta,
+            divisions,
+            label,
+        )
+    )

@@ -6,7 +6,7 @@ import math
 from dask.dataframe import methods
 from dask.dataframe.core import is_dataframe_like
 from dask.dataframe.io.io import sorted_division_locations
-from dask.utils import funcname
+from dask.utils import apply, funcname
 
 from dask_expr._expr import (
     Blockwise,
@@ -15,6 +15,7 @@ from dask_expr._expr import (
     Literal,
     PartitionsFiltered,
     Projection,
+    no_default,
 )
 from dask_expr._reductions import Len
 from dask_expr._util import _BackendData, _convert_to_list, _tokenize_deterministic
@@ -179,6 +180,58 @@ class FusedIO(BlockwiseIO):
 
     def _tune_up(self, parent):
         return
+
+
+class FromMap(PartitionsFiltered, BlockwiseIO):
+    _parameters = [
+        "func",
+        "iterables",
+        "args",
+        "kwargs",
+        "user_meta",
+        "user_divisions",
+        "label",
+        "_partitions",
+        "_series",
+    ]
+    _defaults = {
+        "user_meta": no_default,
+        "user_divisions": None,
+        "label": None,
+        "_partitions": None,
+        "_series": False,
+    }
+    _absorb_projections = False
+
+    @functools.cached_property
+    def _name(self):
+        if self.label:
+            return self.label + "-" + _tokenize_deterministic(*self.operands)
+        return super()._name
+
+    @functools.cached_property
+    def _meta(self):
+        if self.operand("user_meta") is not no_default:
+            meta = self.operand("user_meta")
+        else:
+            vals = [v[0] for v in self.iterables]
+            meta = self.func(*vals, *self.args, **self.kwargs)
+        # TODO: Column projection?
+        return meta
+
+    def _divisions(self):
+        if self.operand("user_divisions"):
+            return self.operand("user_divisions")
+        else:
+            npartitions = len(self.iterables[0])
+            return (None,) * (npartitions + 1)
+
+    def _filtered_task(self, index: int):
+        vals = [v[index] for v in self.iterables]
+        if self.kwargs:
+            return (apply, self.func, vals + self.args, self.kwargs)
+        else:
+            return (self.func, *vals, *self.args)
 
 
 class FromPandas(PartitionsFiltered, BlockwiseIO):

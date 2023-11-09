@@ -1,10 +1,18 @@
+import glob
 import os
 
 import dask.dataframe as dd
 import pytest
 from dask.dataframe.utils import assert_eq
 
-from dask_expr import from_dask_dataframe, from_pandas, optimize, read_csv, read_parquet
+from dask_expr import (
+    from_dask_dataframe,
+    from_map,
+    from_pandas,
+    optimize,
+    read_csv,
+    read_parquet,
+)
 from dask_expr._expr import Expr, Lengths, Literal, Replace
 from dask_expr._reductions import Len
 from dask_expr.io import ReadCSV, ReadParquet
@@ -365,3 +373,18 @@ def test_combine_similar_no_projection_on_one_branch(tmpdir):
 
     pdf["xx"] = pdf.x != 0
     assert_eq(df, pdf)
+
+
+def test_from_map(tmpdir):
+    pdf = lib.DataFrame({c: range(10) for c in "abcdefghijklmn"})
+    dd.from_pandas(pdf, 3).to_parquet(tmpdir, write_index=False)
+    files = sorted(glob.glob(str(tmpdir) + "/*.parquet"))
+
+    df = from_map(lib.read_parquet, files)
+    assert_eq(df, pdf, check_index=False)
+
+    dfa = from_map(lib.read_parquet, files, columns="a")
+    assert_eq(dfa, pdf[["a"]], check_index=False)
+
+    dfab = from_map(lib.read_parquet, files, columns=["a", "b"])
+    assert_eq(dfab, pdf[["a", "b"]], check_index=False)
