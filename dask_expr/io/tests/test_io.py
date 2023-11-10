@@ -380,13 +380,13 @@ def test_from_map(tmpdir):
     dd.from_pandas(pdf, 3).to_parquet(tmpdir, write_index=False)
     files = sorted(glob.glob(str(tmpdir) + "/*.parquet"))
 
-    df = from_map(lib.read_parquet, files)
+    df = from_map(lib.read_parquet, files, allow_projection=False)
     assert_eq(df, pdf, check_index=False)
 
-    dfa = from_map(lib.read_parquet, files, columns="a")
+    dfa = from_map(lib.read_parquet, files, columns="a", allow_projection=False)
     assert_eq(dfa, pdf[["a"]], check_index=False)
 
-    dfab = from_map(lib.read_parquet, files, columns=["a", "b"])
+    dfab = from_map(lib.read_parquet, files, columns=["a", "b"], allow_projection=False)
     assert_eq(dfab, pdf[["a", "b"]], check_index=False)
 
 
@@ -395,11 +395,11 @@ def test_from_map_projectable(tmpdir):
     dd.from_pandas(pdf, 3).to_parquet(tmpdir, write_index=False)
     files = sorted(glob.glob(str(tmpdir) + "/*.parquet"))
 
-    df = from_map(lib.read_parquet, files, allow_projection=True)
+    df = from_map(lib.read_parquet, files)
     assert_eq(df, pdf, check_index=False)
     assert_eq(df["a"], pdf["a"], check_index=False)
     assert_eq(df[["a"]], pdf[["a"]], check_index=False)
-    assert_eq(df["a", "b"], pdf["a", "b"], check_index=False)
+    assert_eq(df[["a", "b"]], pdf[["a", "b"]], check_index=False)
 
     got = df[["a", "b"]].optimize(fuse=False)
     assert isinstance(got.expr, FromMap)

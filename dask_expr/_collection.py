@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import inspect
 import warnings
 from collections.abc import Callable, Hashable, Mapping
 from numbers import Number
@@ -1265,15 +1266,31 @@ def from_map(
     label=None,
     token=None,
     enforce_metadata=False,
-    allow_projection=False,
+    allow_projection=True,
     **kwargs,
 ):
+    """Create a dask-expr collection from a custom function map"""
     from dask_expr.io import FromMap, FromMapProjectable
 
     if token is not None:
         raise NotImplementedError()
     if enforce_metadata:
         raise NotImplementedError()
+
+    if allow_projection:
+        from dask.dataframe.io.utils import DataFrameIOFunction
+
+        if "columns" in inspect.signature(func).parameters:
+            allow_projection = True
+        elif isinstance(func, DataFrameIOFunction):
+            warnings.warn(
+                "dask_expr does not support the DataFrameIOFunction "
+                "protocol for column projection. To enable column "
+                "projection, please ensure that the signature of `func` "
+                "includes a `columns=` keyword argument instead."
+            )
+        else:
+            allow_projection = False
 
     args = [] if args is None else args
     kwargs = {} if kwargs is None else kwargs
