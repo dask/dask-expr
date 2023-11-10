@@ -414,6 +414,9 @@ def test_from_map(tmpdir, meta, label, allow_projection, enforce_metadata):
     assert_eq(df[["a"]], pdf[["a"]], check_index=False)
     assert_eq(df[["a", "b"]], pdf[["a", "b"]], check_index=False)
 
+    if label:
+        assert df.expr._name.startswith(label)
+
     if allow_projection:
         got = df[["a", "b"]].optimize(fuse=False)
         assert isinstance(got.expr, FromMap)
