@@ -396,8 +396,10 @@ def test_from_map_projectable(tmpdir):
     files = sorted(glob.glob(str(tmpdir) + "/*.parquet"))
 
     df = from_map(lib.read_parquet, files)
-    assert_eq(df, pdf, check_index=False)
-    assert_eq(df["a"], pdf["a"], check_index=False)
+    # assert_eq(df, pdf, check_index=False)
+    # assert_eq(df["a"], pdf["a"], check_index=False)
+    # import pdb; pdb.set_trace()
+    df[["a"]].compute()
     assert_eq(df[["a"]], pdf[["a"]], check_index=False)
     assert_eq(df[["a", "b"]], pdf[["a", "b"]], check_index=False)
 

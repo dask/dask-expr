@@ -1265,7 +1265,7 @@ def from_map(
     divisions=None,
     label=None,
     token=None,
-    enforce_metadata=False,
+    enforce_metadata=True,
     allow_projection=True,
     **kwargs,
 ):
@@ -1273,8 +1273,7 @@ def from_map(
     from dask_expr.io import FromMap, FromMapProjectable
 
     if token is not None:
-        raise NotImplementedError()
-    if enforce_metadata:
+        # This option doens't really make sense in dask-expr
         raise NotImplementedError()
 
     if allow_projection:
@@ -1304,6 +1303,7 @@ def from_map(
                 args,
                 kwargs,
                 meta,
+                enforce_metadata,
                 divisions,
                 label,
             )
@@ -1316,6 +1316,7 @@ def from_map(
                 args,
                 kwargs,
                 meta,
+                enforce_metadata,
                 divisions,
                 label,
             )

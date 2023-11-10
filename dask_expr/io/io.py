@@ -5,7 +5,7 @@ import math
 import operator
 
 from dask.dataframe import methods
-from dask.dataframe.core import is_dataframe_like, make_meta
+from dask.dataframe.core import apply_and_enforce, is_dataframe_like, make_meta
 from dask.dataframe.io.io import sorted_division_locations
 from dask.utils import apply, funcname
 
@@ -190,12 +190,14 @@ class FromMap(PartitionsFiltered, BlockwiseIO):
         "args",
         "kwargs",
         "user_meta",
+        "enforce_metadata",
         "user_divisions",
         "label",
         "_partitions",
     ]
     _defaults = {
         "user_meta": no_default,
+        "enforce_metadata": True,
         "user_divisions": None,
         "label": None,
         "_partitions": None,
@@ -225,10 +227,33 @@ class FromMap(PartitionsFiltered, BlockwiseIO):
             npartitions = len(self.iterables[0])
             return (None,) * (npartitions + 1)
 
+    @property
+    def kwargs(self):
+        return self.operand("kwargs")
+
+    @property
+    def apply_func(self):
+        if self.enforce_metadata:
+            return apply_and_enforce
+        return self.func
+
+    @functools.cached_property
+    def apply_kwargs(self):
+        kwargs = self.kwargs
+        if self.enforce_metadata:
+            kwargs = kwargs.copy()
+            kwargs.update(
+                {
+                    "_func": self.func,
+                    "_meta": self._meta,
+                }
+            )
+        return kwargs
+
     def _filtered_task(self, index: int):
         vals = [v[index] for v in self.iterables]
-        if self.kwargs:
-            return (apply, self.func, vals + self.args, self.kwargs)
+        if self.apply_kwargs:
+            return (apply, self.apply_func, vals + self.args, self.apply_kwargs)
         else:
             return (self.func, *vals, *self.args)
 
@@ -241,6 +266,7 @@ class FromMapProjectable(FromMap):
         "args",
         "kwargs",
         "user_meta",
+        "enforce_metadata",
         "user_divisions",
         "label",
         "_partitions",
@@ -248,6 +274,7 @@ class FromMapProjectable(FromMap):
     ]
     _defaults = {
         "user_meta": no_default,
+        "enforce_metadata": True,
         "user_divisions": None,
         "label": None,
         "_partitions": None,
@@ -265,9 +292,10 @@ class FromMapProjectable(FromMap):
 
     @functools.cached_property
     def kwargs(self):
-        options = self.operand("kwargs")
-        if self.operand("columns"):
-            options["columns"] = self.operand("columns")
+        options = super().kwargs
+        columns_operand = self.operand("columns")
+        if columns_operand:
+            options["columns"] = _convert_to_list(columns_operand)
         return options
 
     @property
