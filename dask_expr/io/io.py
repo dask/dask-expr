@@ -227,9 +227,9 @@ class FromMap(PartitionsFiltered, BlockwiseIO):
             npartitions = len(self.iterables[0])
             return (None,) * (npartitions + 1)
 
-    @property
-    def kwargs(self):
-        return self.operand("kwargs")
+    # @property
+    # def kwargs(self):
+    #     return self.operand("kwargs")
 
     @property
     def apply_func(self):
@@ -286,27 +286,46 @@ class FromMapProjectable(FromMap):
     def columns(self):
         columns_operand = self.operand("columns")
         if columns_operand is None:
-            return list(self._meta.columns)
+            return list(self.frame_meta.columns)
         else:
             return _convert_to_list(columns_operand)
 
     @functools.cached_property
     def kwargs(self):
-        options = super().kwargs
+        options = self.operand("kwargs")
         columns_operand = self.operand("columns")
         if columns_operand:
             options["columns"] = _convert_to_list(columns_operand)
         return options
 
+    @functools.cached_property
+    def apply_kwargs(self):
+        kwargs = self.kwargs
+        if self.enforce_metadata:
+            kwargs = kwargs.copy()
+            kwargs.update(
+                {
+                    "_func": self.func,
+                    "_meta": self.frame_meta,
+                }
+            )
+        return kwargs
+
+    @functools.cached_property
+    def frame_meta(self):
+        meta = super()._meta
+        columns = self.operand("columns")
+        if columns is not None:
+            return meta[_convert_to_list(columns)]
+        return meta
+
     @property
     def _meta(self):
-        meta = super()._meta
+        meta = self.frame_meta
         columns = _convert_to_list(self.operand("columns"))
         if self._series:
             assert len(columns) > 0
             return meta[columns[0]]
-        elif columns is not None:
-            return meta[columns]
         return meta
 
     def _filtered_task(self, index: int):
