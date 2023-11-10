@@ -375,27 +375,31 @@ def test_combine_similar_no_projection_on_one_branch(tmpdir):
     assert_eq(df, pdf)
 
 
-def test_from_map(tmpdir):
+@pytest.mark.parametrize("enforce_metadata", [True, False])
+def test_from_map(tmpdir, enforce_metadata):
     pdf = lib.DataFrame({c: range(10) for c in "abcdefghijklmn"})
     dd.from_pandas(pdf, 3).to_parquet(tmpdir, write_index=False)
     files = sorted(glob.glob(str(tmpdir) + "/*.parquet"))
+    options = {"enforce_metadata": enforce_metadata, "allow_projection": False}
 
-    df = from_map(lib.read_parquet, files, allow_projection=False)
+    df = from_map(lib.read_parquet, files, **options)
     assert_eq(df, pdf, check_index=False)
 
-    dfa = from_map(lib.read_parquet, files, columns="a", allow_projection=False)
+    dfa = from_map(lib.read_parquet, files, columns="a", **options)
     assert_eq(dfa, pdf[["a"]], check_index=False)
 
-    dfab = from_map(lib.read_parquet, files, columns=["a", "b"], allow_projection=False)
+    dfab = from_map(lib.read_parquet, files, columns=["a", "b"], **options)
     assert_eq(dfab, pdf[["a", "b"]], check_index=False)
 
 
-def test_from_map_projectable(tmpdir):
+@pytest.mark.parametrize("enforce_metadata", [True, False])
+def test_from_map_projectable(tmpdir, enforce_metadata):
     pdf = lib.DataFrame({c: range(10) for c in "abcdefghijklmn"})
     dd.from_pandas(pdf, 3).to_parquet(tmpdir, write_index=False)
     files = sorted(glob.glob(str(tmpdir) + "/*.parquet"))
+    options = {"enforce_metadata": enforce_metadata, "allow_projection": True}
 
-    df = from_map(lib.read_parquet, files)
+    df = from_map(lib.read_parquet, files, **options)
     assert_eq(df, pdf, check_index=False)
     assert_eq(df["a"], pdf["a"], check_index=False)
     assert_eq(df[["a"]], pdf[["a"]], check_index=False)

@@ -1264,17 +1264,16 @@ def from_map(
     meta=no_default,
     divisions=None,
     label=None,
-    token=None,
-    enforce_metadata=True,
+    enforce_metadata=False,
     allow_projection=True,
     **kwargs,
 ):
     """Create a dask-expr collection from a custom function map"""
     from dask_expr.io import FromMap, FromMapProjectable
 
-    if token is not None:
-        # This option doens't really make sense in dask-expr
-        raise NotImplementedError()
+    if "token" in kwargs:
+        # This option doesn't really make sense in dask-expr
+        raise NotImplementedError("dask_expr does not support a token argument.")
 
     if allow_projection:
         from dask.dataframe.io.utils import DataFrameIOFunction

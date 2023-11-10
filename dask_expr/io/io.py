@@ -197,7 +197,7 @@ class FromMap(PartitionsFiltered, BlockwiseIO):
     ]
     _defaults = {
         "user_meta": no_default,
-        "enforce_metadata": True,
+        "enforce_metadata": False,
         "user_divisions": None,
         "label": None,
         "_partitions": None,
@@ -209,7 +209,11 @@ class FromMap(PartitionsFiltered, BlockwiseIO):
         if self.label:
             return self.label + "-" + _tokenize_deterministic(*self.operands)
         else:
-            return "from_map-" + _tokenize_deterministic(*self.operands)
+            return (
+                funcname(self.func).lower()
+                + "-"
+                + _tokenize_deterministic(*self.operands)
+            )
 
     @functools.cached_property
     def _meta(self):
@@ -226,10 +230,6 @@ class FromMap(PartitionsFiltered, BlockwiseIO):
         else:
             npartitions = len(self.iterables[0])
             return (None,) * (npartitions + 1)
-
-    # @property
-    # def kwargs(self):
-    #     return self.operand("kwargs")
 
     @property
     def apply_func(self):
@@ -274,7 +274,7 @@ class FromMapProjectable(FromMap):
     ]
     _defaults = {
         "user_meta": no_default,
-        "enforce_metadata": True,
+        "enforce_metadata": False,
         "user_divisions": None,
         "label": None,
         "_partitions": None,
