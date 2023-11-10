@@ -282,20 +282,28 @@ class FromMapProjectable(FromMap):
     }
     _absorb_projections = True
 
+    @functools.cached_property
+    def columns_operand(self):
+        return _convert_to_list(self.operand("columns"))
+
     @property
     def columns(self):
-        columns_operand = self.operand("columns")
-        if columns_operand is None:
+        if self.columns_operand is None:
             return list(self.frame_meta.columns)
         else:
-            return _convert_to_list(columns_operand)
+            return self.columns_operand
+
+    @functools.cached_property
+    def _series(self):
+        # Only need to convert to _series if func
+        # doesn't produce a Series already
+        return self.operand("_series") and self.frame_meta.ndim > 1
 
     @functools.cached_property
     def kwargs(self):
         options = self.operand("kwargs")
-        columns_operand = self.operand("columns")
-        if columns_operand:
-            options["columns"] = _convert_to_list(columns_operand)
+        if self.columns_operand:
+            options["columns"] = self.columns_operand
         return options
 
     @functools.cached_property
@@ -313,19 +321,21 @@ class FromMapProjectable(FromMap):
 
     @functools.cached_property
     def frame_meta(self):
+        # This is our `_meta` result before possibly
+        # converting to a Series
         meta = super()._meta
-        columns = self.operand("columns")
-        if columns is not None:
-            return meta[_convert_to_list(columns)]
+        if meta.ndim > 1 and self.columns_operand is not None:
+            return meta[self.columns_operand]
         return meta
 
     @property
     def _meta(self):
+        # This is our final `_meta` result
+        # (may need to be a Series)
         meta = self.frame_meta
-        columns = _convert_to_list(self.operand("columns"))
         if self._series:
-            assert len(columns) > 0
-            return meta[columns[0]]
+            assert len(self.columns_operand) > 0
+            return meta[self.columns_operand[0]]
         return meta
 
     def _filtered_task(self, index: int):

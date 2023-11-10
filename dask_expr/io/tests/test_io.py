@@ -375,29 +375,38 @@ def test_combine_similar_no_projection_on_one_branch(tmpdir):
     assert_eq(df, pdf)
 
 
+# @pytest.mark.parametrize("enforce_metadata", [True, False])
+# def test_from_map(tmpdir, enforce_metadata):
+#     pdf = lib.DataFrame({c: range(10) for c in "abcdefghijklmn"})
+#     dd.from_pandas(pdf, 3).to_parquet(tmpdir, write_index=False)
+#     files = sorted(glob.glob(str(tmpdir) + "/*.parquet"))
+#     options = {"enforce_metadata": enforce_metadata, "allow_projection": False}
+
+#     df = from_map(lib.read_parquet, files, **options)
+#     assert_eq(df, pdf, check_index=False)
+
+#     dfa = from_map(lib.read_parquet, files, columns="a", **options)
+#     assert_eq(dfa, pdf[["a"]], check_index=False)
+
+#     dfab = from_map(lib.read_parquet, files, columns=["a", "b"], **options)
+#     assert_eq(dfab, pdf[["a", "b"]], check_index=False)
+
+
+@pytest.mark.parametrize("meta", [True, False])
+@pytest.mark.parametrize("label", [None, "foo"])
+@pytest.mark.parametrize("allow_projection", [True, False])
 @pytest.mark.parametrize("enforce_metadata", [True, False])
-def test_from_map(tmpdir, enforce_metadata):
+def test_from_map(tmpdir, meta, label, allow_projection, enforce_metadata):
     pdf = lib.DataFrame({c: range(10) for c in "abcdefghijklmn"})
     dd.from_pandas(pdf, 3).to_parquet(tmpdir, write_index=False)
     files = sorted(glob.glob(str(tmpdir) + "/*.parquet"))
-    options = {"enforce_metadata": enforce_metadata, "allow_projection": False}
-
-    df = from_map(lib.read_parquet, files, **options)
-    assert_eq(df, pdf, check_index=False)
-
-    dfa = from_map(lib.read_parquet, files, columns="a", **options)
-    assert_eq(dfa, pdf[["a"]], check_index=False)
-
-    dfab = from_map(lib.read_parquet, files, columns=["a", "b"], **options)
-    assert_eq(dfab, pdf[["a", "b"]], check_index=False)
-
-
-@pytest.mark.parametrize("enforce_metadata", [True, False])
-def test_from_map_projectable(tmpdir, enforce_metadata):
-    pdf = lib.DataFrame({c: range(10) for c in "abcdefghijklmn"})
-    dd.from_pandas(pdf, 3).to_parquet(tmpdir, write_index=False)
-    files = sorted(glob.glob(str(tmpdir) + "/*.parquet"))
-    options = {"enforce_metadata": enforce_metadata, "allow_projection": True}
+    options = {
+        "enforce_metadata": enforce_metadata,
+        "allow_projection": allow_projection,
+        "label": label,
+    }
+    if meta:
+        options["meta"] = pdf.iloc[:0]
 
     df = from_map(lib.read_parquet, files, **options)
     assert_eq(df, pdf, check_index=False)
@@ -405,6 +414,23 @@ def test_from_map_projectable(tmpdir, enforce_metadata):
     assert_eq(df[["a"]], pdf[["a"]], check_index=False)
     assert_eq(df[["a", "b"]], pdf[["a", "b"]], check_index=False)
 
-    got = df[["a", "b"]].optimize(fuse=False)
-    assert isinstance(got.expr, FromMap)
-    assert got.expr.operand("columns") == ["a", "b"]
+    if allow_projection:
+        got = df[["a", "b"]].optimize(fuse=False)
+        assert isinstance(got.expr, FromMap)
+        assert got.expr.operand("columns") == ["a", "b"]
+
+    # Check that we can always pass columns up front
+    if meta:
+        options["meta"] = options["meta"][["a", "b"]]
+    result = from_map(lib.read_parquet, files, columns=["a", "b"], **options)
+    assert_eq(result, pdf[["a", "b"]], check_index=False)
+    if meta:
+        options["meta"] = options["meta"][["a"]]
+    result = from_map(lib.read_parquet, files, columns="a", **options)
+    assert_eq(result, pdf[["a"]], check_index=False)
+
+    # Check the case that func returns a Series
+    if meta:
+        options["meta"] = options["meta"]["a"]
+    result = from_map(lambda x: lib.read_parquet(x)["a"], files, **options)
+    assert_eq(result, pdf["a"], check_index=False)
