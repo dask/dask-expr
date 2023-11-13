@@ -1689,6 +1689,11 @@ class Filter(Blockwise):
         if isinstance(parent, Index):
             return self.frame.index[self.predicate]
 
+    def _simplify_down(self):
+        if isinstance(self.frame, Filter):
+            predicate = self.predicate.substitute(self.frame, self.frame.frame)
+            return self.frame.frame[self.frame.predicate & predicate]
+
 
 class Projection(Elemwise):
     """Column Selection"""

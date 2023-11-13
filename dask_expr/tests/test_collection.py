@@ -1219,6 +1219,17 @@ def test_filter_pushdown(df, pdf):
     assert result._name == expected._name
 
 
+def test_filter_fusion(df):
+    orig = df
+    df = df[df.x > 1]
+    df = df[df.x < 5]
+
+    result = df.optimize(fuse=False)
+    expected = orig[(orig.x > 1) & (orig.x < 5)]
+
+    assert result._name == expected._name
+
+
 def test_shape(df, pdf):
     result = df.shape
     assert result[0]._name == (df.size / 2)._name
