@@ -1265,30 +1265,35 @@ def from_map(
     divisions=None,
     label=None,
     enforce_metadata=False,
-    allow_projection=True,
     **kwargs,
 ):
-    """Create a dask-expr collection from a custom function map"""
+    """Create a dask-expr collection from a custom function map
+
+    NOTE: The underlying ``Expr`` object produced by this API
+    will support column projection (via ``simplify``) if
+    the ``func`` argument has "columns" in its signature.
+    """
+    from dask.dataframe.io.utils import DataFrameIOFunction
+
     from dask_expr.io import FromMap, FromMapProjectable
 
     if "token" in kwargs:
         # This option doesn't really make sense in dask-expr
         raise NotImplementedError("dask_expr does not support a token argument.")
 
-    if allow_projection:
-        from dask.dataframe.io.utils import DataFrameIOFunction
-
-        if "columns" in inspect.signature(func).parameters:
-            allow_projection = True
-        elif isinstance(func, DataFrameIOFunction):
-            warnings.warn(
-                "dask_expr does not support the DataFrameIOFunction "
-                "protocol for column projection. To enable column "
-                "projection, please ensure that the signature of `func` "
-                "includes a `columns=` keyword argument instead."
-            )
-        else:
-            allow_projection = False
+    # Check if `func` supports column projection
+    allow_projection = True
+    if "columns" in inspect.signature(func).parameters:
+        allow_projection = True
+    elif isinstance(func, DataFrameIOFunction):
+        warnings.warn(
+            "dask_expr does not support the DataFrameIOFunction "
+            "protocol for column projection. To enable column "
+            "projection, please ensure that the signature of `func` "
+            "includes a `columns=` keyword argument instead."
+        )
+    else:
+        allow_projection = False
 
     args = [] if args is None else args
     kwargs = {} if kwargs is None else kwargs

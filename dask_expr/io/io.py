@@ -206,14 +206,14 @@ class FromMap(PartitionsFiltered, BlockwiseIO):
 
     @functools.cached_property
     def _name(self):
-        if self.label:
-            return self.label + "-" + _tokenize_deterministic(*self.operands)
-        else:
+        if self.label is None:
             return (
                 funcname(self.func).lower()
                 + "-"
                 + _tokenize_deterministic(*self.operands)
             )
+        else:
+            return self.label + "-" + _tokenize_deterministic(*self.operands)
 
     @functools.cached_property
     def _meta(self):
@@ -303,7 +303,7 @@ class FromMapProjectable(FromMap):
     def kwargs(self):
         options = self.operand("kwargs")
         if self.columns_operand:
-            options["columns"] = self.columns_operand
+            options["columns"] = self.columns_operand.copy()
         return options
 
     @functools.cached_property

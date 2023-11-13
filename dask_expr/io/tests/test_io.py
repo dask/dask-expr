@@ -400,15 +400,18 @@ def test_from_map(tmpdir, meta, label, allow_projection, enforce_metadata):
     pdf = lib.DataFrame({c: range(10) for c in "abcdefghijklmn"})
     dd.from_pandas(pdf, 3).to_parquet(tmpdir, write_index=False)
     files = sorted(glob.glob(str(tmpdir) + "/*.parquet"))
+    if allow_projection:
+        func = lib.read_parquet
+    else:
+        func = lambda *args, **kwargs: lib.read_parquet(*args, **kwargs)
     options = {
         "enforce_metadata": enforce_metadata,
-        "allow_projection": allow_projection,
         "label": label,
     }
     if meta:
         options["meta"] = pdf.iloc[:0]
 
-    df = from_map(lib.read_parquet, files, **options)
+    df = from_map(func, files, **options)
     assert_eq(df, pdf, check_index=False)
     assert_eq(df["a"], pdf["a"], check_index=False)
     assert_eq(df[["a"]], pdf[["a"]], check_index=False)
@@ -425,11 +428,11 @@ def test_from_map(tmpdir, meta, label, allow_projection, enforce_metadata):
     # Check that we can always pass columns up front
     if meta:
         options["meta"] = options["meta"][["a", "b"]]
-    result = from_map(lib.read_parquet, files, columns=["a", "b"], **options)
+    result = from_map(func, files, columns=["a", "b"], **options)
     assert_eq(result, pdf[["a", "b"]], check_index=False)
     if meta:
         options["meta"] = options["meta"][["a"]]
-    result = from_map(lib.read_parquet, files, columns="a", **options)
+    result = from_map(func, files, columns="a", **options)
     assert_eq(result, pdf[["a"]], check_index=False)
 
     # Check the case that func returns a Series
