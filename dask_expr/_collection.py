@@ -615,7 +615,7 @@ class DataFrame(FrameBase):
 
             if isinstance(v, (Scalar, Series)):
                 if isinstance(v, Series):
-                    if not expr.are_co_aligned(self, v):
+                    if not expr.are_co_aligned(self.expr, v.expr):
                         raise NotImplementedError(
                             "Setting a Series with a different base is not supported",
                         )
