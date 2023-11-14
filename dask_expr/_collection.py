@@ -614,6 +614,12 @@ class DataFrame(FrameBase):
                 v = v(data)
 
             if isinstance(v, (Scalar, Series)):
+                if isinstance(v, Series):
+                    if not expr.are_co_aligned(self, v):
+                        raise NotImplementedError(
+                            "Setting a Series with a different base is not supported",
+                        )
+
                 result = new_collection(expr.Assign(result.expr, k, v.expr))
             elif not isinstance(v, FrameBase) and isinstance(v, Hashable):
                 result = new_collection(expr.Assign(result.expr, k, v))
