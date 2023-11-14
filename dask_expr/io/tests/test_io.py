@@ -375,23 +375,6 @@ def test_combine_similar_no_projection_on_one_branch(tmpdir):
     assert_eq(df, pdf)
 
 
-# @pytest.mark.parametrize("enforce_metadata", [True, False])
-# def test_from_map(tmpdir, enforce_metadata):
-#     pdf = lib.DataFrame({c: range(10) for c in "abcdefghijklmn"})
-#     dd.from_pandas(pdf, 3).to_parquet(tmpdir, write_index=False)
-#     files = sorted(glob.glob(str(tmpdir) + "/*.parquet"))
-#     options = {"enforce_metadata": enforce_metadata, "allow_projection": False}
-
-#     df = from_map(lib.read_parquet, files, **options)
-#     assert_eq(df, pdf, check_index=False)
-
-#     dfa = from_map(lib.read_parquet, files, columns="a", **options)
-#     assert_eq(dfa, pdf[["a"]], check_index=False)
-
-#     dfab = from_map(lib.read_parquet, files, columns=["a", "b"], **options)
-#     assert_eq(dfab, pdf[["a", "b"]], check_index=False)
-
-
 @pytest.mark.parametrize("meta", [True, False])
 @pytest.mark.parametrize("label", [None, "foo"])
 @pytest.mark.parametrize("allow_projection", [True, False])
