@@ -1177,47 +1177,16 @@ def read_csv(path, *args, usecols=None, **kwargs):
 def read_parquet(
     path=None,
     columns=None,
-    filters=None,
-    categories=None,
-    index=None,
-    storage_options=None,
-    dtype_backend=None,
-    calculate_divisions=False,
-    ignore_metadata_file=False,
-    metadata_task_size=None,
-    split_row_groups="infer",
-    blocksize="default",
-    aggregate_files=None,
-    parquet_file_extension=(".parq", ".parquet", ".pq"),
-    filesystem="fsspec",
-    engine=None,
-    **kwargs,
 ):
-    from dask_expr.io.parquet import ReadParquet, _set_parquet_engine
+    from dask_expr.io.parquet import ReadParquet
 
     if not isinstance(path, str):
         path = stringify_path(path)
-
-    kwargs["dtype_backend"] = dtype_backend
 
     return new_collection(
         ReadParquet(
             path,
             columns=_convert_to_list(columns),
-            filters=filters,
-            categories=categories,
-            index=index,
-            storage_options=storage_options,
-            calculate_divisions=calculate_divisions,
-            ignore_metadata_file=ignore_metadata_file,
-            metadata_task_size=metadata_task_size,
-            split_row_groups=split_row_groups,
-            blocksize=blocksize,
-            aggregate_files=aggregate_files,
-            parquet_file_extension=parquet_file_extension,
-            filesystem=filesystem,
-            engine=_set_parquet_engine(engine),
-            kwargs=kwargs,
         )
     )
 
