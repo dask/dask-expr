@@ -29,6 +29,7 @@ from dask_expr._expr import (
     Expr,
     MapPartitions,
     Projection,
+    are_co_aligned,
     no_default,
 )
 from dask_expr._reductions import ApplyConcatApply, Chunk, Reduction
@@ -638,8 +639,8 @@ class GroupBy:
         elif isinstance(by, Index) and by._name == obj.index._name:
             pass
         elif isinstance(by, Series):
-            # TODO: Implement this
-            raise ValueError("by must be in the DataFrames columns.")
+            if not are_co_aligned(obj.expr, by.expr):
+                raise ValueError("by must be in the DataFrames columns.")
 
         by_ = by if isinstance(by, (tuple, list)) else [by]
         self._slice = slice
@@ -668,7 +669,7 @@ class GroupBy:
                 "groupby only supports DataFrame collections for now."
             )
 
-        if isinstance(by, Index):
+        if isinstance(by, Series):
             self.by = by.expr
         else:
             self.by = [by] if np.isscalar(by) else list(by)

@@ -240,3 +240,10 @@ def test_groupby_projection_split_out(df, pdf):
     df = from_pandas(pdf, npartitions=50)
     result = df.groupby("y")["x"].sum(split_out=2)
     assert_eq(result, pdf_result)
+
+
+def test_groupby_co_aligned_grouper(df, pdf):
+    assert_eq(
+        df[["y"]].groupby(df["x"]).sum(),
+        pdf[["y"]].groupby(pdf["x"]).sum(),
+    )
