@@ -1083,6 +1083,11 @@ class Series(FrameBase):
             RepartitionQuantiles(self.expr, npartitions, upsample, random_state)
         )
 
+    def groupby(self, by, **kwargs):
+        from dask_expr._groupby import SeriesGroupBy
+
+        return SeriesGroupBy(self, by, **kwargs)
+
 
 class Index(Series):
     """Index-like Expr Collection"""

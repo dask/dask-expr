@@ -244,6 +244,7 @@ API Coverage
 - `value_counts`
 - `var`
 
+Support for ``SeriesGroupBy`` and ``DataFrameGroupBy``.
 
 **Binary operators (`DataFrame`, `Series`, and `Index`)**:
 

@@ -45,6 +45,12 @@ def test_groupby_numeric(pdf, df, api, numeric_only):
     expect = getattr(pdf.groupby("x"), api)(numeric_only=numeric_only)
     assert_eq(agg, expect)
 
+    g = df.y.groupby(df.x)
+    agg = getattr(g, api)()
+
+    expect = getattr(pdf.y.groupby(pdf.x), api)()
+    assert_eq(agg, expect)
+
     g = df.groupby("x")
     agg = getattr(g, api)(numeric_only=numeric_only)["y"]
 
@@ -71,6 +77,12 @@ def test_groupby_no_numeric_only(pdf, func):
     expect = getattr(pdf.groupby("x"), func)()
     assert_eq(agg, expect)
 
+    g = df.y.groupby(df.x)
+    agg = getattr(g, func)()
+
+    expect = getattr(pdf.y.groupby(pdf.x), func)()
+    assert_eq(agg, expect)
+
 
 def test_groupby_mean_slice(pdf, df):
     g = df.groupby("x")
@@ -87,7 +99,7 @@ def test_groupby_series(pdf, df):
     result = df.groupby("x").sum()
     assert_eq(result, pdf_result)
 
-    df2 = from_pandas(lib.DataFrame({"a": [1, 2, 3]}))
+    df2 = from_pandas(lib.DataFrame({"a": [1, 2, 3]}), npartitions=2)
 
     with pytest.raises(ValueError, match="DataFrames columns"):
         df.groupby(df2.a)
@@ -109,6 +121,22 @@ def test_groupby_agg(pdf, df, spec):
     agg = g.agg(spec)
 
     expect = pdf.groupby("x").agg(spec)
+    assert_eq(agg, expect)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "sum",
+        ["sum"],
+        ["sum", "mean"],
+    ],
+)
+def test_series_groupby_agg(pdf, df, spec):
+    g = df.y.groupby(df.x)
+    agg = g.agg(spec)
+
+    expect = pdf.y.groupby(pdf.x).agg(spec)
     assert_eq(agg, expect)
 
 

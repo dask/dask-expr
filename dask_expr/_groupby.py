@@ -22,7 +22,7 @@ from dask.dataframe.groupby import (
 )
 from dask.utils import M, is_index_like
 
-from dask_expr._collection import DataFrame, Index, Series, new_collection
+from dask_expr._collection import Index, Series, new_collection
 from dask_expr._expr import (
     Assign,
     Blockwise,
@@ -226,14 +226,31 @@ class GroupbyAggregation(GroupByApplyConcatApply):
     def spec(self):
         # Converts the `arg` operand into specific
         # chunk, aggregate, and finalizer functions
-        if isinstance(self.by, Expr):
-            group_columns = []
+        if is_dataframe_like(self.frame._meta):
+            if isinstance(self.by, Expr):
+                group_columns = []
+            else:
+                group_columns = set(self.by)
+            non_group_columns = [
+                col for col in self.frame.columns if col not in group_columns
+            ]
+            spec = _normalize_spec(self.arg, non_group_columns)
+        elif is_series_like(self.frame._meta):
+            if isinstance(self.arg, (list, tuple, dict)):
+                spec = _normalize_spec({None: self.arg}, [])
+                spec = [
+                    (result_column, func, input_column)
+                    for ((_, result_column), func, input_column) in spec
+                ]
+
+            else:
+                spec = _normalize_spec({None: self.arg}, [])
+                spec = [
+                    (self.frame.columns[0], func, input_column)
+                    for (_, func, input_column) in spec
+                ]
         else:
-            group_columns = set(self.by)
-        non_group_columns = [
-            col for col in self.frame.columns if col not in group_columns
-        ]
-        spec = _normalize_spec(self.arg, non_group_columns)
+            raise ValueError(f"aggregate on unknown object {self.frame._meta}")
 
         # Median not supported yet
         has_median = any(s[1] in ("median", np.median) for s in spec)
@@ -663,11 +680,6 @@ class GroupBy:
         self.observed = observed
         self.dropna = dropna
 
-        if not isinstance(self.obj, DataFrame):
-            raise NotImplementedError(
-                "groupby only supports DataFrame collections for now."
-            )
-
         if isinstance(by, Index):
             self.by = by.expr
         else:
@@ -778,24 +790,30 @@ class GroupBy:
     def var(self, ddof=1, numeric_only=True, split_out=1):
         if not numeric_only:
             raise NotImplementedError("numeric_only=False is not implemented")
-        return self._aca_agg(
+        result = self._aca_agg(
             Var,
             ddof=ddof,
             numeric_only=numeric_only,
             split_out=split_out,
             sort=self.sort,
         )
+        if isinstance(self.obj, Series):
+            result = result[result.columns[0]]
+        return result
 
     def std(self, ddof=1, numeric_only=True, split_out=1):
         if not numeric_only:
             raise NotImplementedError("numeric_only=False is not implemented")
-        return self._aca_agg(
+        result = self._aca_agg(
             Std,
             ddof=ddof,
             numeric_only=numeric_only,
             split_out=split_out,
             sort=self.sort,
         )
+        if isinstance(self.obj, Series):
+            result = result[result.columns[0]]
+        return result
 
     def aggregate(self, arg=None, split_every=8, split_out=1):
         if arg is None:
@@ -844,3 +862,45 @@ class GroupBy:
                 kwargs=kwargs,
             )
         )
+
+
+class SeriesGroupBy(GroupBy):
+    def __init__(
+        self,
+        obj,
+        by,
+        sort=None,
+        observed=None,
+        dropna=None,
+        slice=None,
+    ):
+        # Raise pandas errors if applicable
+        if isinstance(obj, Series):
+            if isinstance(by, Series):
+                pass
+            elif isinstance(by, list):
+                if len(by) == 0:
+                    raise ValueError("No group keys passed!")
+
+                non_series_items = [item for item in by if not isinstance(item, Series)]
+                obj._meta.groupby(non_series_items, **observed)
+            else:
+                obj._meta.groupby(by, **observed)
+
+        super().__init__(
+            obj, by=by, slice=slice, observed=observed, dropna=dropna, sort=sort
+        )
+
+    def aggregate(self, arg=None, split_every=8, split_out=1):
+        result = super().aggregate(
+            arg=arg, split_every=split_every, split_out=split_out
+        )
+
+        if (
+            arg is not None
+            and not isinstance(arg, (list, dict))
+            and is_dataframe_like(result._meta)
+        ):
+            result = result[result.columns[0]]
+
+        return result
