@@ -4,6 +4,7 @@ import functools
 import numbers
 import operator
 import os
+import weakref
 from collections import defaultdict
 from collections.abc import Generator, Mapping
 
@@ -60,6 +61,15 @@ class Expr:
                 # Raise a ValueError instead of AttributeError to
                 # avoid infinite recursion
                 raise ValueError(f"{dep} has no attribute {self._required_attribute}")
+        self._dependents = []
+        self._register_dependents()
+
+    def _register_dependents(self):
+        for dep in self.dependencies():
+            dep._add_dependents(self)
+
+    def _add_dependents(self, expr: Expr):
+        self._dependents.append(weakref.ref(expr))
 
     @property
     def _required_attribute(self) -> str:
