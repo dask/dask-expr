@@ -66,10 +66,27 @@ class Expr:
 
     def _register_dependents(self):
         for dep in self.dependencies():
-            dep._add_dependents(self)
+            dep._add_dependent(self)
 
-    def _add_dependents(self, expr: Expr):
+    def _add_dependent(self, expr: Expr):
         self._dependents.append(weakref.ref(expr))
+
+    def _remove_dependent(self, expr: Expr):
+        for i, dep in enumerate(self._dependents):
+            dep = dep()
+            if dep is not None and dep._name == expr._name:
+                self._dependents.pop(i)
+                return
+
+    def _purge_dependencies(self):
+        for dep in self.dependencies():
+            dep._remove_dependent(self)
+
+    @property
+    def dependents(self):
+        # Clear out dead references
+        self._dependents = [ref for ref in self._dependents if ref() is not None]
+        return [ref() for ref in self._dependents]
 
     @property
     def _required_attribute(self) -> str:
@@ -319,11 +336,17 @@ class Expr:
 
         return expr
 
-    def simplify(self):
+    def simplify(self, cache=None):
         """Simplify an expression
 
         This leverages the ``._simplify_down`` and ``._simplify_up``
         methods defined on each class
+
+        Parameters
+        ----------
+
+        cache: dict, optional
+            Expressions that were previously rewritten
 
         Returns
         -------
@@ -332,7 +355,63 @@ class Expr:
         changed:
             whether or not any change occured
         """
-        return self.rewrite(kind="simplify")
+        expr = self
+        if cache is None:
+            cache = {}
+
+        while True:
+            _continue = False
+
+            if expr._name in cache:
+                return cache[expr._name]
+
+            out = expr._simplify_down()
+            if out is None:
+                out = expr
+            if not isinstance(out, Expr):
+                return out
+            if out._name != expr._name:
+                expr = out
+                continue
+
+            # Allow children to rewrite their parents
+            for child in expr.dependencies():
+                out = child._simplify_up(expr)
+
+                if out is None:
+                    out = expr
+                if not isinstance(out, Expr):
+                    return out
+                if out is not expr and out._name != expr._name:
+                    child._purge_dependencies()
+                    expr = out
+                    break
+
+            if _continue:
+                continue
+
+            # Rewrite all of the children
+            new_operands = []
+            changed = False
+            for operand in expr.operands:
+                if isinstance(operand, Expr):
+                    new = operand.simplify(cache=cache)
+                    if new._name != operand._name:
+                        changed = True
+                else:
+                    new = operand
+                new_operands.append(new)
+
+            if changed:
+                expr = type(expr)(*new_operands)
+                continue
+            else:
+                break
+
+        if self._name not in cache and self._name != expr._name:
+            cache[self._name] = expr
+
+        return expr
 
     def _simplify_down(self):
         return
@@ -1204,7 +1283,15 @@ class Blockwise(Expr):
 
     def _simplify_up(self, parent):
         if self._projection_passthrough and isinstance(parent, Projection):
-            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+            column_union = [expr.columns for expr in self.dependents]
+            column_union = sorted(set(flatten(column_union, container=list)))
+            column_union = [col for col in column_union if col in self.frame.columns]
+            if column_union == self.frame.columns:
+                return
+            result = type(self)(self.frame[column_union], *self.operands[1:])
+            if result.columns == parent.operand("columns"):
+                return result
+            return type(parent)(result, parent.operand("columns"))
 
     def _combine_similar(self, root: Expr):
         # Push projections back up through `_projection_passthrough`
