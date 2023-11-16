@@ -62,25 +62,28 @@ class Expr:
                 # avoid infinite recursion
                 raise ValueError(f"{dep} has no attribute {self._required_attribute}")
         self._dependents = []
-        self._register_dependents()
+
+    def _clear_dependents(self):
+        self._dependents = []
 
     def _register_dependents(self):
-        for dep in self.dependencies():
-            dep._add_dependent(self)
+        for node in self.walk():
+            node._clear_dependents()
 
-    def _add_dependent(self, expr: Expr):
+        stack = [self]
+        seen = set()
+        while stack:
+            node = stack.pop()
+            if node._name in seen:
+                continue
+            seen.add(node._name)
+
+            for dep in node.dependencies():
+                stack.append(dep)
+                dep._add_dependents(node)
+
+    def _add_dependents(self, expr: Expr):
         self._dependents.append(weakref.ref(expr))
-
-    def _remove_dependent(self, expr: Expr):
-        for i, dep in enumerate(self._dependents):
-            dep = dep()
-            if dep is not None and dep._name == expr._name:
-                self._dependents.pop(i)
-                return
-
-    def _purge_dependencies(self):
-        for dep in self.dependencies():
-            dep._remove_dependent(self)
 
     @property
     def dependents(self):
@@ -336,7 +339,7 @@ class Expr:
 
         return expr
 
-    def simplify(self, cache=None):
+    def simplify_once(self, cache):
         """Simplify an expression
 
         This leverages the ``._simplify_down`` and ``._simplify_up``
@@ -356,12 +359,8 @@ class Expr:
             whether or not any change occured
         """
         expr = self
-        if cache is None:
-            cache = {}
 
         while True:
-            _continue = False
-
             if expr._name in cache:
                 return cache[expr._name]
 
@@ -383,19 +382,15 @@ class Expr:
                 if not isinstance(out, Expr):
                     return out
                 if out is not expr and out._name != expr._name:
-                    child._purge_dependencies()
                     expr = out
                     break
-
-            if _continue:
-                continue
 
             # Rewrite all of the children
             new_operands = []
             changed = False
             for operand in expr.operands:
                 if isinstance(operand, Expr):
-                    new = operand.simplify(cache=cache)
+                    new = operand.simplify_once(cache=cache)
                     if new._name != operand._name:
                         changed = True
                 else:
@@ -404,13 +399,23 @@ class Expr:
 
             if changed:
                 expr = type(expr)(*new_operands)
-                continue
-            else:
-                break
+
+            break
 
         if self._name not in cache and self._name != expr._name:
             cache[self._name] = expr
 
+        return expr
+
+    def simplify(self) -> Expr:
+        expr = self
+        cache = {}
+        while True:
+            expr._register_dependents()
+            new = expr.simplify_once(cache=cache)
+            if new._name == expr._name:
+                break
+            expr = new
         return expr
 
     def _simplify_down(self):
