@@ -87,7 +87,7 @@ def test_groupby_series(pdf, df):
     result = df.groupby("x").sum()
     assert_eq(result, pdf_result)
 
-    df2 = from_pandas(lib.DataFrame({"a": [1, 2, 3]}))
+    df2 = from_pandas(lib.DataFrame({"a": [1, 2, 3]}), npartitions=2)
 
     with pytest.raises(ValueError, match="DataFrames columns"):
         df.groupby(df2.a)
