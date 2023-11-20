@@ -2,6 +2,7 @@ import functools
 from collections import namedtuple
 
 import numpy as np
+from dask.dataframe.dispatch import meta_nonempty
 from dask.dataframe.tseries.resample import _resample_bin_and_out_divs, _resample_series
 
 from dask_expr._collection import new_collection
@@ -39,9 +40,9 @@ class ResampleReduction(Expr):
 
     @functools.cached_property
     def _meta(self):
-        return getattr(self.frame._meta.resample(self.rule, **self.kwargs), self.how)(
-            *self.how_args, **self.how_kwargs or {}
-        )
+        return getattr(
+            meta_nonempty(self.frame._meta).resample(self.rule, **self.kwargs), self.how
+        )(*self.how_args, **self.how_kwargs or {})
 
     @functools.cached_property
     def kwargs(self):
@@ -93,9 +94,9 @@ class ResampleAggregation(Blockwise):
 
     @functools.cached_property
     def _meta(self):
-        return getattr(self.frame._meta.resample(self.rule, **self.kwargs), self.how)(
-            *self.how_args, **self.how_kwargs
-        )
+        return getattr(
+            meta_nonempty(self.frame._meta).resample(self.rule, **self.kwargs), self.how
+        )(*self.how_args, **self.how_kwargs)
 
     def _blockwise_arg(self, arg, i):
         if isinstance(arg, BlockwiseDep):
