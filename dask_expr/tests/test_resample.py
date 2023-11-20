@@ -70,6 +70,7 @@ def test_resample_agg(df, pdf):
     expected = pdf.resample("2T").agg(my_sum)["foo"]
     assert_eq(result, expected)
 
+    # simplify up disabled for `agg`, function may access other columns
     q = df.resample("2T").agg(my_sum)["foo"].simplify()
     eq = df["foo"].resample("2T").agg(my_sum).simplify()
-    assert q._name == eq._name
+    assert q._name != eq._name

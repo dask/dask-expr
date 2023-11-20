@@ -55,7 +55,8 @@ class ResampleReduction(Expr):
         )
 
     def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
+        # Disable for `agg`; function may access other columns
+        if isinstance(parent, Projection) and self.how != "agg":
             return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
 
     def _lower(self):
