@@ -1440,9 +1440,21 @@ class Replace(Elemwise):
 
 
 class Isin(Elemwise):
+    _filter_passthrough = False
     _projection_passthrough = True
     _parameters = ["frame", "values"]
     operation = M.isin
+
+    def _simplify_up(self, parent):
+        if self._filter_passthrough and isinstance(parent, Filter):
+            # Protect against pushing through predicate
+            if not isinstance(parent.predicate, Expr) or not any(
+                x._name == self._name for x in parent.predicate.walk()
+            ):
+                return type(self)(
+                    self.frame[parent.operand("predicate")], *self.operands[1:]
+                )
+        return super()._simplify_up(parent)
 
 
 class Clip(Elemwise):
