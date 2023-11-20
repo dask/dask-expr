@@ -50,7 +50,7 @@ from dask_expr._reductions import (
     ValueCounts,
 )
 from dask_expr._repartition import Repartition, RepartitionToFewer
-from dask_expr._util import LRU, _convert_to_list
+from dask_expr._util import LRU, _convert_to_list, is_valid_nth_dtype
 
 
 class Shuffle(Expr):
@@ -779,20 +779,22 @@ class SetIndex(BaseSetIndexSortValues):
             and isinstance(self._other, (int, str))
             and self._other in self.frame.columns
         ):
-            return SetIndex(
-                NSmallest(self.frame, n=parent.n, _columns=self._other),
-                _other=self._other,
-            )
+            if is_valid_nth_dtype(self._meta.dypes[self._other]):
+                return SetIndex(
+                    NSmallest(self.frame, n=parent.n, _columns=self._other),
+                    _other=self._other,
+                )
 
         if (
             isinstance(parent, Tail)
             and isinstance(self._other, (int, str))
             and self._other in self.frame.columns
         ):
-            return SetIndex(
-                NLargest(self.frame, n=parent.n, _columns=self._other),
-                _other=self._other,
-            )
+            if is_valid_nth_dtype(self._meta.dypes[self._other]):
+                return SetIndex(
+                    NLargest(self.frame, n=parent.n, _columns=self._other),
+                    _other=self._other,
+                )
 
         if isinstance(parent, Projection):
             columns = parent.columns + (
@@ -913,14 +915,18 @@ class SortValues(BaseSetIndexSortValues):
 
         if isinstance(parent, Head):
             if self.ascending:
-                return NSmallest(self.frame, n=parent.n, _columns=self.by)
+                if is_valid_nth_dtype(self._meta.dypes[self._other]):
+                    return NSmallest(self.frame, n=parent.n, _columns=self.by)
             else:
-                return NLargest(self.frame, n=parent.n, _columns=self.by)
+                if is_valid_nth_dtype(self._meta.dypes[self._other]):
+                    return NLargest(self.frame, n=parent.n, _columns=self.by)
         if isinstance(parent, Tail):
             if self.ascending:
-                return NLargest(self.frame, n=parent.n, _columns=self.by)
+                if is_valid_nth_dtype(self._meta.dypes[self._other]):
+                    return NLargest(self.frame, n=parent.n, _columns=self.by)
             else:
-                return NSmallest(self.frame, n=parent.n, _columns=self.by)
+                if is_valid_nth_dtype(self._meta.dypes[self._other]):
+                    return NSmallest(self.frame, n=parent.n, _columns=self.by)
         if isinstance(parent, Filter):
             return SortValues(
                 Filter(self.frame, parent.predicate.substitute(self, self.frame)),
