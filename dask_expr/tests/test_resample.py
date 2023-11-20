@@ -34,6 +34,7 @@ def df(pdf):
         "var",
         "std",
         "size",
+        "nunique",
     ],
 )
 def test_resample_apis(df, pdf, api):

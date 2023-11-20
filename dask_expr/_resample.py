@@ -143,6 +143,10 @@ class ResampleSize(ResampleReduction):
     how = "size"
 
 
+class ResampleNUnique(ResampleReduction):
+    how = "nunique"
+
+
 class Resampler:
     """Aggregate using one or more operations
 
@@ -206,3 +210,6 @@ class Resampler:
 
     def size(self):
         return self._single_agg(ResampleSize)
+
+    def nunique(self):
+        return self._single_agg(ResampleNUnique)
