@@ -147,6 +147,10 @@ class ResampleNUnique(ResampleReduction):
     how = "nunique"
 
 
+class ResampleMedian(ResampleReduction):
+    how = "median"
+
+
 class Resampler:
     """Aggregate using one or more operations
 
@@ -213,3 +217,6 @@ class Resampler:
 
     def nunique(self):
         return self._single_agg(ResampleNUnique)
+
+    def median(self):
+        return self._single_agg(ResampleMedian)
