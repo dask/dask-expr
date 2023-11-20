@@ -19,7 +19,7 @@ from dask.dataframe.shuffle import (
     shuffle_group_2,
     shuffle_group_get,
 )
-from dask.utils import M, digit, get_default_shuffle_method, insert
+from dask.utils import M, digit, get_default_shuffle_method, insert, is_series_like
 
 from dask_expr._expr import (
     Assign,
@@ -42,7 +42,9 @@ from dask_expr._reductions import (
     Mode,
     NBytes,
     NLargest,
+    NLargestSlow,
     NSmallest,
+    NSmallestSlow,
     Prod,
     Size,
     Sum,
@@ -779,22 +781,22 @@ class SetIndex(BaseSetIndexSortValues):
             and isinstance(self._other, (int, str))
             and self._other in self.frame.columns
         ):
-            if is_valid_nth_dtype(self._meta.dypes[self._other]):
-                return SetIndex(
-                    NSmallest(self.frame, n=parent.n, _columns=self._other),
-                    _other=self._other,
-                )
+            if is_valid_nth_dtype(self.frame._meta.dtypes[self._other]):
+                head = NSmallest(self.frame, n=parent.n, _columns=self._other)
+            else:
+                head = NSmallestSlow(self.frame, n=parent.n, _columns=self._other)
+            return SetIndex(head, _other=self._other)
 
         if (
             isinstance(parent, Tail)
             and isinstance(self._other, (int, str))
             and self._other in self.frame.columns
         ):
-            if is_valid_nth_dtype(self._meta.dypes[self._other]):
-                return SetIndex(
-                    NLargest(self.frame, n=parent.n, _columns=self._other),
-                    _other=self._other,
-                )
+            if is_valid_nth_dtype(self.frame._meta.dtypes[self._other]):
+                tail = NLargest(self.frame, n=parent.n, _columns=self._other)
+            else:
+                tail = NLargestSlow(self.frame, n=parent.n, _columns=self._other)
+            return SetIndex(tail, _other=self._other)
 
         if isinstance(parent, Projection):
             columns = parent.columns + (
@@ -880,6 +882,13 @@ class SortValues(BaseSetIndexSortValues):
     def _meta(self):
         return self.frame._meta
 
+    @functools.cached_property
+    def _meta_by_dtype(self):
+        dtype = self._meta.dtypes[self.by]
+        if is_series_like(dtype):
+            dtype = dtype.iloc[0]
+        return dtype
+
     def _lower(self):
         if self.frame.npartitions == 1:
             return SortValuesBlockwise(
@@ -915,18 +924,28 @@ class SortValues(BaseSetIndexSortValues):
 
         if isinstance(parent, Head):
             if self.ascending:
-                if is_valid_nth_dtype(self._meta.dypes[self._other]):
+                if is_valid_nth_dtype(self._meta_by_dtype):
                     return NSmallest(self.frame, n=parent.n, _columns=self.by)
+                else:
+                    return NSmallestSlow(self.frame, n=parent.n, _columns=self.by)
             else:
-                if is_valid_nth_dtype(self._meta.dypes[self._other]):
+                if is_valid_nth_dtype(self._meta_by_dtype):
                     return NLargest(self.frame, n=parent.n, _columns=self.by)
+                else:
+                    return NLargestSlow(self.frame, n=parent.n, _columns=self.by)
+
         if isinstance(parent, Tail):
             if self.ascending:
-                if is_valid_nth_dtype(self._meta.dypes[self._other]):
+                if is_valid_nth_dtype(self._meta_by_dtype):
                     return NLargest(self.frame, n=parent.n, _columns=self.by)
+                else:
+                    return NLargestSlow(self.frame, n=parent.n, _columns=self.by)
             else:
-                if is_valid_nth_dtype(self._meta.dypes[self._other]):
+                if is_valid_nth_dtype(self._meta_by_dtype):
                     return NSmallest(self.frame, n=parent.n, _columns=self.by)
+                else:
+                    return NSmallestSlow(self.frame, n=parent.n, _columns=self.by)
+
         if isinstance(parent, Filter):
             return SortValues(
                 Filter(self.frame, parent.predicate.substitute(self, self.frame)),

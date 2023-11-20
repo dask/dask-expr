@@ -307,6 +307,30 @@ def test_sort_head_nlargest(df):
     assert a.optimize()._name == b.optimize()._name
 
 
+def test_sort_head_nlargest_string(pdf):
+    pdf["z"] = "a" + pdf.x.map(str)
+    df = from_pandas(pdf, npartitions=5)
+    a = df.sort_values("z", ascending=False).head(10, compute=False)
+    b = df.nlargest(10, columns=["z"]).expr
+    assert a.optimize()._name != b.optimize()._name
+    assert_eq(a, pdf.sort_values("z", ascending=False).head(10))
+
+    a = df.sort_values("z", ascending=True).head(10, compute=False)
+    b = df.nsmallest(10, columns=["z"]).expr
+    assert a.optimize()._name != b.optimize()._name
+    assert_eq(a, pdf.sort_values("z", ascending=True).head(10))
+
+    a = df.sort_values("z", ascending=False).tail(10, compute=False)
+    b = df.nsmallest(10, columns=["z"]).expr
+    assert a.optimize()._name != b.optimize()._name
+    assert_eq(a, pdf.sort_values("z", ascending=False).tail(10))
+
+    a = df.sort_values("z", ascending=True).tail(10, compute=False)
+    b = df.nlargest(10, columns=["z"]).expr
+    assert a.optimize()._name != b.optimize()._name
+    assert_eq(a, pdf.sort_values("z", ascending=True).tail(10))
+
+
 def test_set_index_head_nlargest(df, pdf):
     a = df.set_index("x").head(10, compute=False).expr
     b = df.nsmallest(10, columns="x").set_index("x").expr
@@ -319,6 +343,21 @@ def test_set_index_head_nlargest(df, pdf):
     # These still work, even if we haven't optimized them yet
     df.set_index(df.x).head(3)
     # df.set_index([df.x, df.y]).head(3)
+
+
+def test_set_index_head_nlargest_string(pdf):
+    pdf["z"] = "a" + pdf.x.map(str)
+    df = from_pandas(pdf, npartitions=5)
+
+    a = df.set_index("z").head(10, compute=False)
+    b = df.nsmallest(10, columns="z").set_index("z").expr
+    assert a.optimize()._name != b.optimize()._name
+    assert_eq(a, pdf.set_index("z").sort_index().head(10))
+
+    a = df.set_index("z").tail(10, compute=False)
+    b = df.nlargest(10, columns="z").set_index("z").expr
+    assert a.optimize()._name != b.optimize()._name
+    assert_eq(a, pdf.set_index("z").sort_index().tail(10))
 
 
 def test_filter_sort(df):
