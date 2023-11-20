@@ -20,15 +20,22 @@ def df(pdf):
     yield from_pandas(pdf, npartitions=4)
 
 
-def test_resample_count(df, pdf):
-    result = df.resample("2T").count()
-    expected = pdf.resample("2T").count()
+@pytest.mark.parametrize(
+    "api",
+    [
+        "count",
+        "prod",
+    ],  # "sum", "mean", "min", "max", "prod", "first", "last", "var", "std"]
+)
+def test_resample_apis(df, pdf, api):
+    result = getattr(df.resample("2T"), api)()
+    expected = getattr(pdf.resample("2T"), api)()
     assert_eq(result, expected)
 
-    result = df.resample("2T").count()["foo"]
-    expected = pdf.resample("2T").count()["foo"]
+    result = getattr(df.resample("2T"), api)()["foo"]
+    expected = getattr(pdf.resample("2T"), api)()["foo"]
     assert_eq(result, expected)
 
     q = result.simplify()
-    eq = df["foo"].resample("2T").count().simplify()
+    eq = getattr(df["foo"].resample("2T"), api)().simplify()
     assert q._name == eq._name

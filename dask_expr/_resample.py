@@ -103,6 +103,10 @@ class ResampleCount(ResampleReduction):
     how = "count"
 
 
+class ResampleProd(ResampleReduction):
+    how = "prod"
+
+
 class Resampler:
     """Aggregate using one or more operations
 
@@ -136,3 +140,6 @@ class Resampler:
 
     def count(self):
         return self._single_agg(ResampleCount)
+
+    def prod(self):
+        return self._single_agg(ResampleProd)
