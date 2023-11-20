@@ -191,12 +191,7 @@ class Resampler:
         self.rule = rule
         self.kwargs = kwargs
 
-    def _single_agg(
-        self,
-        expr_cls,
-        how_args=ResampleReduction._defaults["how_args"],
-        how_kwargs=ResampleReduction._defaults["how_kwargs"],
-    ):
+    def _single_agg(self, expr_cls, how_args=(), how_kwargs=None):
         return new_collection(
             expr_cls(
                 self.obj.expr,
