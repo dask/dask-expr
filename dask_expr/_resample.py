@@ -151,6 +151,18 @@ class ResampleMedian(ResampleReduction):
     how = "median"
 
 
+class ResampleQuantile(ResampleReduction):
+    how = "quantile"
+
+
+class ResampleOhlc(ResampleReduction):
+    how = "ohlc"
+
+
+class ResampleSem(ResampleReduction):
+    how = "sem"
+
+
 class Resampler:
     """Aggregate using one or more operations
 
@@ -220,3 +232,12 @@ class Resampler:
 
     def median(self):
         return self._single_agg(ResampleMedian)
+
+    def quantile(self):
+        return self._single_agg(ResampleQuantile)
+
+    def ohlc(self):
+        return self._single_agg(ResampleOhlc)
+
+    def sem(self):
+        return self._single_agg(ResampleSem)

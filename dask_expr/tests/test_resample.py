@@ -36,6 +36,9 @@ def df(pdf):
         "size",
         "nunique",
         "median",
+        "quantile",
+        "ohlc",
+        "sem",
     ],
 )
 def test_resample_apis(df, pdf, api):
