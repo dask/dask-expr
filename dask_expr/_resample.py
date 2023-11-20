@@ -107,6 +107,10 @@ class ResampleProd(ResampleReduction):
     how = "prod"
 
 
+class ResampleMean(ResampleReduction):
+    how = "mean"
+
+
 class Resampler:
     """Aggregate using one or more operations
 
@@ -143,3 +147,6 @@ class Resampler:
 
     def prod(self):
         return self._single_agg(ResampleProd)
+
+    def mean(self):
+        return self._single_agg(ResampleMean)

@@ -25,7 +25,8 @@ def df(pdf):
     [
         "count",
         "prod",
-    ],  # "sum", "mean", "min", "max", "prod", "first", "last", "var", "std"]
+        "mean",
+    ],  # "sum", "min", "max", "first", "last", "var", "std"]
 )
 def test_resample_apis(df, pdf, api):
     result = getattr(df.resample("2T"), api)()
