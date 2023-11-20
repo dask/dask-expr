@@ -428,4 +428,4 @@ def test_from_map(tmpdir, meta, label, allow_projection, enforce_metadata):
 def test_from_pandas_sort():
     pdf = lib.DataFrame({"a": [1, 2, 3, 1, 2, 2]}, index=[6, 5, 4, 3, 2, 1])
     df = from_pandas(pdf, npartitions=2)
-    assert_eq(df, pdf.sort_index())
+    assert_eq(df, pdf.sort_index(), sort_results=False)
