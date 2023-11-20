@@ -135,6 +135,10 @@ class ResampleVar(ResampleReduction):
     how = "var"
 
 
+class ResampleStd(ResampleReduction):
+    how = "std"
+
+
 class Resampler:
     """Aggregate using one or more operations
 
@@ -192,3 +196,6 @@ class Resampler:
 
     def var(self):
         return self._single_agg(ResampleVar)
+
+    def std(self):
+        return self._single_agg(ResampleStd)
