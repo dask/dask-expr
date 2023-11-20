@@ -458,13 +458,7 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
 
 class FromPandasDivisions(FromPandas):
     _parameters = ["frame", "divisions", "columns", "_partitions", "_series"]
-    _defaults = {
-        "columns": None,
-        "_partitions": None,
-        "_series": False,
-    }
-    _pd_length_stats = None
-    _absorb_projections = True
+    _defaults = {"columns": None, "_partitions": None, "_series": False}
     sort = True
 
     @property
