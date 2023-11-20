@@ -437,5 +437,9 @@ def test_from_pandas_divisions():
     df = repartition(pdf, (1, 5, 8))
     assert_eq(df, pdf.sort_index())
 
-    df = repartition(df, divisions=(1, 4, 8), force=True)
+    pdf = lib.DataFrame({"a": [1, 2, 3, 1, 2, 2]}, index=[7, 6, 4, 3, 2, 1])
+    df = repartition(pdf, (1, 4, 8))
+    assert_eq(df.partitions[1], lib.DataFrame({"a": [3, 2, 1]}, index=[4, 6, 7]))
+
+    df = repartition(df, divisions=(1, 3, 8), force=True)
     assert_eq(df, pdf.sort_index())
