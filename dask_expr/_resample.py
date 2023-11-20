@@ -131,6 +131,10 @@ class ResampleLast(ResampleReduction):
     how = "last"
 
 
+class ResampleVar(ResampleReduction):
+    how = "var"
+
+
 class Resampler:
     """Aggregate using one or more operations
 
@@ -185,3 +189,6 @@ class Resampler:
 
     def last(self):
         return self._single_agg(ResampleLast)
+
+    def var(self):
+        return self._single_agg(ResampleVar)

@@ -31,7 +31,8 @@ def df(pdf):
         "max",
         "first",
         "last",
-    ],  # "var", "std"]
+        "var",
+    ],  # "std"]
 )
 def test_resample_apis(df, pdf, api):
     result = getattr(df.resample("2T"), api)()
