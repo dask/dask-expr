@@ -30,6 +30,10 @@ class ResampleReduction(Expr):
     }
     how = None
 
+    @functools.cached_property
+    def npartitions(self):
+        return self.frame.npartitions
+
     def _divisions(self):
         return self._resample_divisions[0]
 
