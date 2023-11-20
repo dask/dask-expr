@@ -1446,7 +1446,7 @@ class Isin(Elemwise):
     operation = M.isin
 
     def _simplify_up(self, parent):
-        if self._filter_passthrough and isinstance(parent, Filter):
+        if isinstance(parent, Filter):
             # Protect against pushing through predicate
             if not isinstance(parent.predicate, Expr) or not any(
                 x._name == self._name for x in parent.predicate.walk()
