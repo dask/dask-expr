@@ -115,6 +115,10 @@ class ResampleMean(ResampleReduction):
     how = "mean"
 
 
+class ResampleMin(ResampleReduction):
+    how = "min"
+
+
 class Resampler:
     """Aggregate using one or more operations
 
@@ -157,3 +161,6 @@ class Resampler:
 
     def mean(self):
         return self._single_agg(ResampleMean)
+
+    def min(self):
+        return self._single_agg(ResampleMin)
