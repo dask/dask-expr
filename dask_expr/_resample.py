@@ -139,6 +139,10 @@ class ResampleStd(ResampleReduction):
     how = "std"
 
 
+class ResampleSize(ResampleReduction):
+    how = "size"
+
+
 class Resampler:
     """Aggregate using one or more operations
 
@@ -199,3 +203,6 @@ class Resampler:
 
     def std(self):
         return self._single_agg(ResampleStd)
+
+    def size(self):
+        return self._single_agg(ResampleSize)

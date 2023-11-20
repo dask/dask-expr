@@ -33,6 +33,7 @@ def df(pdf):
         "last",
         "var",
         "std",
+        "size",
     ],
 )
 def test_resample_apis(df, pdf, api):
@@ -40,10 +41,12 @@ def test_resample_apis(df, pdf, api):
     expected = getattr(pdf.resample("2T"), api)()
     assert_eq(result, expected)
 
-    result = getattr(df.resample("2T"), api)()["foo"]
-    expected = getattr(pdf.resample("2T"), api)()["foo"]
-    assert_eq(result, expected)
+    # No column output
+    if api not in ("size",):
+        result = getattr(df.resample("2T"), api)()["foo"]
+        expected = getattr(pdf.resample("2T"), api)()["foo"]
+        assert_eq(result, expected)
 
-    q = result.simplify()
-    eq = getattr(df["foo"].resample("2T"), api)().simplify()
-    assert q._name == eq._name
+        q = result.simplify()
+        eq = getattr(df["foo"].resample("2T"), api)().simplify()
+        assert q._name == eq._name
