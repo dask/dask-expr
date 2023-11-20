@@ -123,6 +123,10 @@ class ResampleMax(ResampleReduction):
     how = "max"
 
 
+class ResampleFirst(ResampleReduction):
+    how = "first"
+
+
 class Resampler:
     """Aggregate using one or more operations
 
@@ -171,3 +175,6 @@ class Resampler:
 
     def max(self):
         return self._single_agg(ResampleMax)
+
+    def first(self):
+        return self._single_agg(ResampleFirst)
