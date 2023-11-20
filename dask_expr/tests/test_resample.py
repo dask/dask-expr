@@ -55,3 +55,21 @@ def test_resample_apis(df, pdf, api):
         q = result.simplify()
         eq = getattr(df["foo"].resample("2T"), api)().simplify()
         assert q._name == eq._name
+
+
+def test_resample_agg(df, pdf):
+    def my_sum(vals, foo=None, *, bar=None):
+        return vals.sum()
+
+    # TODO: w/o .compute() assert_eq fails w/ dtype assertion error
+    result = df.resample("2T").agg(my_sum, "foo", bar="bar").compute()
+    expected = pdf.resample("2T").agg(my_sum, "foo", bar="bar")
+    assert_eq(result, expected)
+
+    result = df.resample("2T").agg(my_sum)["foo"].compute()
+    expected = pdf.resample("2T").agg(my_sum)["foo"]
+    assert_eq(result, expected)
+
+    q = df.resample("2T").agg(my_sum)["foo"].simplify()
+    eq = df["foo"].resample("2T").agg(my_sum).simplify()
+    assert q._name == eq._name

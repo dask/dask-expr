@@ -39,7 +39,9 @@ class ResampleReduction(Expr):
 
     @functools.cached_property
     def _meta(self):
-        return getattr(self.frame._meta.resample(self.rule, **self.kwargs), self.how)()
+        return getattr(self.frame._meta.resample(self.rule, **self.kwargs), self.how)(
+            *self.how_args, **self.how_kwargs or {}
+        )
 
     @functools.cached_property
     def kwargs(self):
@@ -48,7 +50,7 @@ class ResampleReduction(Expr):
     @functools.cached_property
     def _resample_divisions(self):
         return _resample_bin_and_out_divs(
-            self.frame.divisions, self.rule, **self.kwargs
+            self.frame.divisions, self.rule, **self.kwargs or {}
         )
 
     def _simplify_up(self, parent):
@@ -91,7 +93,9 @@ class ResampleAggregation(Blockwise):
 
     @functools.cached_property
     def _meta(self):
-        return getattr(self.frame._meta.resample(self.rule, **self.kwargs), self.how)()
+        return getattr(self.frame._meta.resample(self.rule, **self.kwargs), self.how)(
+            *self.how_args, **self.how_kwargs
+        )
 
     def _blockwise_arg(self, arg, i):
         if isinstance(arg, BlockwiseDep):
@@ -163,6 +167,10 @@ class ResampleSem(ResampleReduction):
     how = "sem"
 
 
+class ResampleAgg(ResampleReduction):
+    how = "agg"
+
+
 class Resampler:
     """Aggregate using one or more operations
 
@@ -185,12 +193,16 @@ class Resampler:
     def _single_agg(
         self,
         expr_cls,
+        how_args=ResampleReduction._defaults["how_args"],
+        how_kwargs=ResampleReduction._defaults["how_kwargs"],
     ):
         return new_collection(
             expr_cls(
                 self.obj.expr,
                 self.rule,
                 self.kwargs,
+                how_args=how_args,
+                how_kwargs=how_kwargs,
             )
         )
 
@@ -241,3 +253,6 @@ class Resampler:
 
     def sem(self):
         return self._single_agg(ResampleSem)
+
+    def agg(self, func, *args, **kwargs):
+        return self._single_agg(ResampleAgg, how_args=(func, *args), how_kwargs=kwargs)
