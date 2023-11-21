@@ -6,7 +6,7 @@ from dask.dataframe.dispatch import meta_nonempty
 from dask.dataframe.tseries.resample import _resample_bin_and_out_divs, _resample_series
 
 from dask_expr._collection import new_collection
-from dask_expr._expr import Blockwise, Expr, Projection
+from dask_expr._expr import Blockwise, Expr, Projection, make_meta
 from dask_expr._repartition import Repartition
 
 BlockwiseDep = namedtuple(typename="BlockwiseDep", field_names=["iterable"])
@@ -40,9 +40,9 @@ class ResampleReduction(Expr):
 
     @functools.cached_property
     def _meta(self):
-        return getattr(
-            meta_nonempty(self.frame._meta).resample(self.rule, **self.kwargs), self.how
-        )(*self.how_args, **self.how_kwargs or {})
+        resample = meta_nonempty(self.frame._meta).resample(self.rule, **self.kwargs)
+        meta = getattr(resample, self.how)(*self.how_args, **self.how_kwargs or {})
+        return make_meta(meta)
 
     @functools.cached_property
     def kwargs(self):
@@ -95,9 +95,9 @@ class ResampleAggregation(Blockwise):
 
     @functools.cached_property
     def _meta(self):
-        return getattr(
-            meta_nonempty(self.frame._meta).resample(self.rule, **self.kwargs), self.how
-        )(*self.how_args, **self.how_kwargs)
+        resample = meta_nonempty(self.frame._meta).resample(self.rule, **self.kwargs)
+        meta = getattr(resample, self.how)(*self.how_args, **self.how_kwargs or {})
+        return make_meta(meta)
 
     def _blockwise_arg(self, arg, i):
         if isinstance(arg, BlockwiseDep):
