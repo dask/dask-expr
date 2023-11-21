@@ -192,7 +192,7 @@ def to_parquet(
     from dask_expr._collection import new_collection
     from dask_expr.io.parquet import NONE_LABEL, ToParquet
 
-    engine = kwargs.pop("engine")
+    engine = kwargs.pop("engine", None)
     if engine == "fastparquet":
         raise NotImplementedError("Fastparquet engine is not supported")
 
