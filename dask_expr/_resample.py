@@ -55,8 +55,7 @@ class ResampleReduction(Expr):
         )
 
     def _simplify_up(self, parent):
-        # Disable for `agg`; function may access other columns
-        if isinstance(parent, Projection) and self.how != "agg":
+        if isinstance(parent, Projection):
             return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
 
     def _lower(self):
@@ -171,6 +170,10 @@ class ResampleSem(ResampleReduction):
 
 class ResampleAgg(ResampleReduction):
     how = "agg"
+
+    def _simplify_up(self, parent):
+        # Disable optimization in `agg`; function may access other columns
+        return
 
 
 class Resampler:
