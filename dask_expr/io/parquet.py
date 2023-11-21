@@ -192,7 +192,11 @@ def to_parquet(
     from dask_expr._collection import new_collection
     from dask_expr.io.parquet import NONE_LABEL, ToParquet
 
-    engine = _set_parquet_engine(meta=df._meta)
+    engine = kwargs.pop("engine")
+    if engine == "fastparquet":
+        raise NotImplementedError("Fastparquet engine is not supported")
+
+    engine = _set_parquet_engine(engine=engine, meta=df._meta)
     compute_kwargs = compute_kwargs or {}
 
     partition_on = partition_on or []
