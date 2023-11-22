@@ -45,7 +45,7 @@ class RollingReduction(Expr):
             return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
 
     @property
-    def _has_single_partition(self):
+    def _is_blockwise_op(self):
         return (
             self.kwargs.get("axis") in (1, "columns")
             or (isinstance(self.window, Integral) and self.window <= 1)
@@ -53,11 +53,11 @@ class RollingReduction(Expr):
         )
 
     def _lower(self):
-        if not self._has_single_partition:
+        if not self._is_blockwise_op:
             raise NotImplementedError("Not implemented for more than 1 partitions")
         return RollingAggregation(
             self.frame,
-            self._has_single_partition,
+            self._is_blockwise_op,
             self.window,
             self.kwargs,
             self.how,
