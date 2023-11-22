@@ -86,7 +86,7 @@ class RollingAggregation(Blockwise):
 
     @functools.cached_property
     def _meta(self):
-        return self.frame.meta
+        return self.frame._meta
 
 
 class RollingCount(RollingReduction):
