@@ -2,10 +2,17 @@ import functools
 from collections import namedtuple
 from numbers import Integral
 
+import pandas as pd
+
 from dask_expr._collection import new_collection
-from dask_expr._expr import Blockwise, Expr, Projection, make_meta
+from dask_expr._expr import Blockwise, Expr, MapOverlap, Projection, make_meta
 
 BlockwiseDep = namedtuple(typename="BlockwiseDep", field_names=["iterable"])
+
+
+def _rolling_agg(frame, window, kwargs, how, how_args, how_kwargs):
+    rolling = frame.rolling(window, **kwargs)
+    return getattr(rolling, how)(*how_args, **(how_kwargs or {}))
 
 
 class RollingReduction(Expr):
@@ -33,6 +40,7 @@ class RollingReduction(Expr):
     @functools.cached_property
     def _meta(self):
         rolling = self.frame._meta.rolling(self.window, **self.kwargs)
+        self.center = rolling.center
         meta = getattr(rolling, self.how)(*self.how_args, **self.how_kwargs or {})
         return make_meta(meta)
 
@@ -53,23 +61,46 @@ class RollingReduction(Expr):
         )
 
     def _lower(self):
-        if not self._is_blockwise_op:
-            raise NotImplementedError("Not implemented for more than 1 partitions")
-        return RollingAggregation(
-            self.frame,
-            self._is_blockwise_op,
-            self.window,
-            self.kwargs,
-            self.how,
-            list(self.how_args),
-            self.how_kwargs,
+        if self._is_blockwise_op:
+            return RollingAggregation(
+                self.frame,
+                self.window,
+                self.kwargs,
+                self.how,
+                list(self.how_args),
+                self.how_kwargs,
+            )
+
+        if self.kwargs.get("center"):
+            before = self.window // 2
+            after = self.window - before - 1
+        elif not isinstance(self.window, int):
+            before = pd.Timedelta(self.window)
+            after = 0
+        else:
+            before = self.window - 1
+            after = 0
+
+        return MapOverlap(
+            frame=self.frame,
+            func=_rolling_agg,
+            before=before,
+            after=after,
+            meta=self._meta,
+            enforce_metadata=True,
+            kwargs=dict(
+                window=self.window,
+                kwargs=self.kwargs,
+                how=self.how,
+                how_args=self.how_args,
+                how_kwargs=self.how_kwargs,
+            ),
         )
 
 
 class RollingAggregation(Blockwise):
     _parameters = [
         "frame",
-        "_has_single_partition",
         "window",
         "kwargs",
         "how",
@@ -77,12 +108,7 @@ class RollingAggregation(Blockwise):
         "how_kwargs",
     ]
 
-    @staticmethod
-    def operation(
-        frame, _has_single_partition, window, kwargs, how, how_args, how_kwargs
-    ):
-        rolling = frame.rolling(window, **kwargs)
-        return getattr(rolling, how)(*how_args, **(how_kwargs or {}))
+    operation = staticmethod(_rolling_agg)
 
     @functools.cached_property
     def _meta(self):
