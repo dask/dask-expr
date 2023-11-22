@@ -93,11 +93,6 @@ class RollingAggregation(Blockwise):
         meta = getattr(rolling, self.how)(*self.how_args, **self.how_kwargs or {})
         return make_meta(meta)
 
-    def _blockwise_arg(self, arg, i):
-        if isinstance(arg, BlockwiseDep):
-            return arg.iterable[i]
-        return super()._blockwise_arg(arg, i)
-
 
 class RollingCount(RollingReduction):
     how = "count"
