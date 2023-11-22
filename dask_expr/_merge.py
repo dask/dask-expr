@@ -190,7 +190,7 @@ class Merge(Expr):
             return HashJoinP2P(
                 left,
                 right,
-                how=how,
+                how=self.how,
                 left_on=left_on,
                 right_on=right_on,
                 suffixes=self.suffixes,
