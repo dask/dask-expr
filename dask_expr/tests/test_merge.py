@@ -440,6 +440,6 @@ def test_merge_npartitions():
     df = from_pandas(pdf, npartitions=2, sort=False)
     df2 = from_pandas(pdf2, npartitions=3, sort=False)
 
-    result = df.join(df2)
-    # assert result.npartitions == 6
+    result = df.join(df2, npartitions=6)
+    assert result.npartitions == 6
     assert_eq(result, pdf.join(pdf2))
