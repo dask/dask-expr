@@ -190,6 +190,7 @@ class Merge(Expr):
             return HashJoinP2P(
                 left,
                 right,
+                how=how,
                 left_on=left_on,
                 right_on=right_on,
                 suffixes=self.suffixes,
@@ -208,6 +209,7 @@ class Merge(Expr):
                 shuffle_left_on,
                 npartitions_out=self._npartitions,
                 backend=shuffle_backend,
+                index_shuffle=left_index,
             )
 
         if shuffle_right_on:
@@ -217,6 +219,7 @@ class Merge(Expr):
                 shuffle_right_on,
                 npartitions_out=self._npartitions,
                 backend=shuffle_backend,
+                index_shuffle=right_index,
             )
 
         # Blockwise merge
@@ -485,6 +488,7 @@ class HashJoinP2P(Merge, PartitionsFiltered):
                 i,
                 self.left._meta,
                 self._partitions,
+                self.left_index,
             )
         for i in range(self.right.npartitions):
             transfer_keys_right.append((transfer_name_right, i))
@@ -498,6 +502,7 @@ class HashJoinP2P(Merge, PartitionsFiltered):
                 i,
                 self.right._meta,
                 self._partitions,
+                self.right_index,
             )
 
         dsk[_barrier_key_left] = (shuffle_barrier, token_left, transfer_keys_left)
@@ -543,8 +548,13 @@ def create_assign_index_merge_transfer():
         input_partition: int,
         meta: pd.DataFrame,
         parts_out: set[int],
+        index_merge,
     ):
-        index = _select_columns_or_index(df, index)
+        if index_merge:
+            index = df[[]]
+            index["_index"] = df.index
+        else:
+            index = _select_columns_or_index(df, index)
         if isinstance(index, (str, list, tuple)):
             # Assume column selection from df
             index = [index] if isinstance(index, str) else list(index)
