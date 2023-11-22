@@ -40,7 +40,6 @@ class RollingReduction(Expr):
     @functools.cached_property
     def _meta(self):
         rolling = self.frame._meta.rolling(self.window, **self.kwargs)
-        self.center = rolling.center
         meta = getattr(rolling, self.how)(*self.how_args, **self.how_kwargs or {})
         return make_meta(meta)
 
