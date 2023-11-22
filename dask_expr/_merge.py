@@ -4,6 +4,7 @@ from dask.core import flatten
 from dask.dataframe.dispatch import make_meta, meta_nonempty
 from dask.dataframe.shuffle import partitioning_index
 from dask.utils import M, apply, get_default_shuffle_method
+from toolz import merge_sorted, unique
 
 from dask_expr._expr import (
     Blockwise,
@@ -141,10 +142,9 @@ class Merge(Expr):
         shuffle_right_on = right_on
         if merge_indexed_left and merge_indexed_right:
             # fully-indexed merge
-            if left.npartitions >= right.npartitions:
-                right = Repartition(right, new_divisions=left.divisions, force=True)
-            else:
-                left = Repartition(left, new_divisions=right.divisions, force=True)
+            divisions = list(unique(merge_sorted(left.divisions, right.divisions)))
+            right = Repartition(right, new_divisions=divisions, force=True)
+            left = Repartition(left, new_divisions=divisions, force=True)
             shuffle_left_on = shuffle_right_on = None
 
         # TODO:
