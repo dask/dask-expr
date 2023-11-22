@@ -92,10 +92,25 @@ class Merge(Expr):
         return make_meta(left.merge(right, **self.kwargs))
 
     def _divisions(self):
+        if self.merge_indexed_left and self.merge_indexed_right:
+            return list(unique(merge_sorted(self.left.divisions, self.right.divisions)))
+
         npartitions_left = self.left.npartitions
         npartitions_right = self.right.npartitions
         npartitions = max(npartitions_left, npartitions_right)
         return (None,) * (npartitions + 1)
+
+    @functools.cached_property
+    def merge_indexed_left(self):
+        return (
+            self.left_index or _contains_index_name(self.left, self.left_on)
+        ) and self.left.known_divisions
+
+    @functools.cached_property
+    def merge_indexed_right(self):
+        return (
+            self.right_index or _contains_index_name(self.right, self.right_on)
+        ) and self.right.known_divisions
 
     def _lower(self):
         # Lower from an abstract expression
@@ -124,14 +139,6 @@ class Merge(Expr):
         ):
             return BlockwiseMerge(left, right, **self.kwargs)
 
-        # Check if we are merging on indices with known divisions
-        merge_indexed_left = (
-            left_index or _contains_index_name(left, left_on)
-        ) and left.known_divisions
-        merge_indexed_right = (
-            right_index or _contains_index_name(right, right_on)
-        ) and right.known_divisions
-
         # NOTE: Merging on an index is fragile. Pandas behavior
         # depends on the actual data, and so we cannot use `meta`
         # to accurately predict the output columns. Once general
@@ -140,7 +147,7 @@ class Merge(Expr):
 
         shuffle_left_on = left_on
         shuffle_right_on = right_on
-        if merge_indexed_left and merge_indexed_right:
+        if self.merge_indexed_left and self.merge_indexed_right:
             # fully-indexed merge
             divisions = list(unique(merge_sorted(left.divisions, right.divisions)))
             right = Repartition(right, new_divisions=divisions, force=True)
