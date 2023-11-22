@@ -480,7 +480,6 @@ class FromPandasDivisions(FromPandas):
             else:
                 # get_indexer for doesn't support method
                 indexer = np.searchsorted(data.index.values, key, side="left")
-                # indexer -= 1
             indexer[-1] = len(data)
             _division_info_cache[key] = key, indexer
         return _division_info_cache[key]
