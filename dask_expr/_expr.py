@@ -1332,7 +1332,7 @@ class MapOverlap(MapPartitions):
         return after
 
     def _lower(self):
-        overlapped = MapOverlapInterleavePartitions(self.frame, self.before, self.after)
+        overlapped = CreateOverlappingPartitions(self.frame, self.before, self.after)
 
         return MapPartitions(
             overlapped,
@@ -1345,7 +1345,7 @@ class MapOverlap(MapPartitions):
         )
 
 
-class MapOverlapInterleavePartitions(Expr):
+class CreateOverlappingPartitions(Expr):
     _parameters = ["frame", "before", "after"]
 
     @functools.cached_property
