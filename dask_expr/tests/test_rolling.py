@@ -39,7 +39,7 @@ def df(pdf, request):
         ("kurt", ()),
     ],
 )
-@pytest.mark.parametrize("window", (2,))
+@pytest.mark.parametrize("window", (1, 2))
 @pytest.mark.parametrize("min_periods", (None, 1))
 @pytest.mark.parametrize("center", (True, False))
 @pytest.mark.parametrize("df", (1, 2), indirect=True)
@@ -60,7 +60,7 @@ def test_rolling_apis(df, pdf, window, api, how_args, min_periods, center):
     assert q._name == eq._name
 
 
-@pytest.mark.parametrize("window", (2,))
+@pytest.mark.parametrize("window", (1, 2))
 @pytest.mark.parametrize("df", (1, 2), indirect=True)
 def test_resample_agg(df, pdf, window):
     if df.npartitions > 1:
