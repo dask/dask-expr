@@ -2,8 +2,6 @@ import functools
 from collections import namedtuple
 from numbers import Integral
 
-from dask.dataframe.dispatch import meta_nonempty
-
 from dask_expr._collection import new_collection
 from dask_expr._expr import Blockwise, Expr, Projection, make_meta
 
@@ -34,7 +32,7 @@ class RollingReduction(Expr):
 
     @functools.cached_property
     def _meta(self):
-        rolling = meta_nonempty(self.frame._meta).rolling(self.window, **self.kwargs)
+        rolling = self.frame._meta.rolling(self.window, **self.kwargs)
         meta = getattr(rolling, self.how)(*self.how_args, **self.how_kwargs or {})
         return make_meta(meta)
 
@@ -89,7 +87,7 @@ class RollingAggregation(Blockwise):
 
     @functools.cached_property
     def _meta(self):
-        rolling = meta_nonempty(self.frame._meta).rolling(self.window, **self.kwargs)
+        rolling = self.frame._meta.rolling(self.window, **self.kwargs)
         meta = getattr(rolling, self.how)(*self.how_args, **self.how_kwargs or {})
         return make_meta(meta)
 
