@@ -82,11 +82,13 @@ class Shuffle(Expr):
         "ignore_index",
         "backend",
         "options",
+        "index_shuffle",
     ]
     _defaults = {
         "ignore_index": False,
         "backend": None,
         "options": None,
+        "index_shuffle": None,
     }
     _is_length_preserving = True
 
@@ -215,6 +217,7 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
         npartitions_out = expr.npartitions_out
         ignore_index = expr.ignore_index
         options = expr.options
+        index_shuffle = expr.index_shuffle
 
         # Normalize partitioning_index
         if isinstance(partitioning_index, str):
@@ -233,7 +236,7 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
                 # Don't need to assign "_partitions" column
                 # if we are shuffling on a list of columns
                 nset = set(partitioning_index)
-                if nset & set(frame.columns) == nset:
+                if nset & set(frame.columns) == nset and not index_shuffle:
                     return cls(
                         frame,
                         partitioning_index,
@@ -248,6 +251,7 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
                 partitioning_index,
                 "_partitions",
                 npartitions_out,
+                index_shuffle,
             )
         else:
             index_added = frame
@@ -615,12 +619,23 @@ class AssignPartitioningIndex(Blockwise):
         Number of partitions after repartitioning is finished.
     """
 
-    _parameters = ["frame", "partitioning_index", "index_name", "npartitions_out"]
+    _parameters = [
+        "frame",
+        "partitioning_index",
+        "index_name",
+        "npartitions_out",
+        "assign_index",
+    ]
 
     @staticmethod
-    def operation(df, index, name: str, npartitions: int):
+    def operation(df, index, name: str, npartitions: int, assign_index):
         """Construct a hash-based partitioning index"""
-        index = _select_columns_or_index(df, index)
+        if assign_index:
+            index = df[[]]
+            index["_index"] = df.index
+        else:
+            index = _select_columns_or_index(df, index)
+
         if isinstance(index, (str, list, tuple)):
             # Assume column selection from df
             index = [index] if isinstance(index, str) else list(index)
