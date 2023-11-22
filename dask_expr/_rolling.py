@@ -53,6 +53,8 @@ class RollingReduction(Expr):
         )
 
     def _lower(self):
+        if not self._has_single_partition:
+            raise NotImplementedError("Not implemented for more than 1 partitions")
         return RollingAggregation(
             self.frame,
             self._has_single_partition,
@@ -79,11 +81,8 @@ class RollingAggregation(Blockwise):
     def operation(
         frame, _has_single_partition, window, kwargs, how, how_args, how_kwargs
     ):
-        if _has_single_partition:
-            rolling = frame.rolling(window, **kwargs)
-            return getattr(rolling, how)(*how_args, **(how_kwargs or {}))
-        else:
-            raise NotImplementedError("Not implemented for more than 1 partitions")
+        rolling = frame.rolling(window, **kwargs)
+        return getattr(rolling, how)(*how_args, **(how_kwargs or {}))
 
     @functools.cached_property
     def _meta(self):
