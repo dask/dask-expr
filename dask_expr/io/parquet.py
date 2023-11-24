@@ -173,7 +173,7 @@ class ToParquetBarrier(Expr):
 def to_parquet(
     df,
     path,
-    compression="snappy",
+    compression="lz4",
     write_index=True,
     append=False,
     overwrite=False,
