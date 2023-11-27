@@ -2489,7 +2489,7 @@ def non_blockwise_ancestors(expr):
         e = stack.pop()
         if isinstance(e, IO):
             yield e
-        elif isinstance(e, Blockwise):
+        elif isinstance(e, BlockwiseOverlapping):
             dependencies = e.dependencies()
             stack.extend([expr for expr in dependencies if not is_broadcastable(expr)])
         else:
