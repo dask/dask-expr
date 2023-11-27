@@ -81,6 +81,7 @@ API Coverage
 - `drop`
 - `drop_duplicates`
 - `dropna`
+- `dtypes`
 - `eval`
 - `explode`
 - `fillna`
@@ -93,6 +94,7 @@ API Coverage
 - `isna`
 - `join`
 - `map`
+- `map_overlap`
 - `map_partitions`
 - `max`
 - `memory_usage`
@@ -142,6 +144,7 @@ API Coverage
 - `dask`
 - `drop_duplicates`
 - `dropna`
+- `dtype`
 - `explode`
 - `fillna`
 - `groupby`
@@ -193,6 +196,7 @@ API Coverage
 - `copy`
 - `count`
 - `dask`
+- `dtype`
 - `fillna`
 - `groupby`
 - `head`
@@ -237,6 +241,7 @@ API Coverage
 - `mean`
 - `min`
 - `prod`
+- `shift`
 - `size`
 - `std`
 - `sum`
@@ -245,6 +250,43 @@ API Coverage
 - `var`
 
 Support for ``SeriesGroupBy`` and ``DataFrameGroupBy``.
+
+**`dask_expr._resample.Resampler`**
+
+- `agg`
+- `count`
+- `first`
+- `last`
+- `max`
+- `mean`
+- `median`
+- `min`
+- `nunique`
+- `ohlc`
+- `prod`
+- `quantile`
+- `sem`
+- `size`
+- `std`
+- `sum`
+- `var`
+
+
+**`dask_expr._rolling.Rolling`**
+
+- `agg`
+- `count`
+- `max`
+- `mean`
+- `median`
+- `min`
+- `quantile`
+- `std`
+- `sum`
+- `var`
+- `skew`
+- `kurt`
+
 
 **Binary operators (`DataFrame`, `Series`, and `Index`)**:
 
@@ -285,3 +327,13 @@ Support for ``SeriesGroupBy`` and ``DataFrameGroupBy``.
 - `CategoricalAccessor`
 - `DatetimeAccessor`
 - `StringAccessor`
+
+**Function**
+
+- `concat`
+- `from_pandas`
+- `merge`
+- `read_csv`
+- `read_parquet`
+- `repartition`
+- `to_parquet`

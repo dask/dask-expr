@@ -4,6 +4,7 @@ import functools
 import math
 import operator
 
+import numpy as np
 from dask.dataframe import methods
 from dask.dataframe.core import apply_and_enforce, is_dataframe_like, make_meta
 from dask.dataframe.io.io import sorted_division_locations
@@ -173,9 +174,12 @@ class FusedIO(BlockwiseIO):
 
     @functools.cached_property
     def _fusion_buckets(self):
-        step = math.ceil(1 / self.operand("expr")._fusion_compression_factor)
         partitions = self.operand("expr")._partitions
         npartitions = len(partitions)
+
+        step = math.ceil(1 / self.operand("expr")._fusion_compression_factor)
+        step = min(step, math.ceil(math.sqrt(npartitions)), 100)
+
         buckets = [partitions[i : i + step] for i in range(0, npartitions, step)]
         return buckets
 
@@ -361,6 +365,14 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
     _absorb_projections = True
 
     @functools.cached_property
+    def frame(self):
+        frame = self.operand("frame")._data
+        if self.sort and not frame.index.is_monotonic_increasing:
+            frame = frame.sort_index()
+            return _BackendData(frame)
+        return self.operand("frame")
+
+    @functools.cached_property
     def _meta(self):
         meta = self.frame.head(0)
         if self.operand("columns") is not None:
@@ -388,9 +400,10 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
         if key not in _division_info_cache:
             data = self.frame._data
             nrows = len(data)
-            if sort:
-                if not data.index.is_monotonic_increasing:
-                    data = data.sort_index(ascending=True)
+            if nrows == 0:
+                locations = [0] * (npartitions + 1)
+                divisions = (None,) * len(locations)
+            elif sort:
                 divisions, locations = sorted_division_locations(
                     data.index,
                     npartitions=npartitions,
@@ -436,7 +449,7 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
     def _filtered_task(self, index: int):
         start, stop = self._locations()[index : index + 2]
         part = self.frame.iloc[start:stop]
-        if self.columns:
+        if self.operand("columns") is not None:
             return part[self.columns[0]] if self._series else part[self.columns]
         return part
 
@@ -448,3 +461,25 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
         return "df"
 
     __repr__ = __str__
+
+
+class FromPandasDivisions(FromPandas):
+    _parameters = ["frame", "divisions", "columns", "_partitions", "_series"]
+    _defaults = {"columns": None, "_partitions": None, "_series": False}
+    sort = True
+
+    @property
+    def _divisions_and_locations(self):
+        assert isinstance(self.frame, _BackendData)
+        key = tuple(self.operand("divisions"))
+        _division_info_cache = self.frame._division_info
+        if key not in _division_info_cache:
+            data = self.frame._data
+            if data.index.is_unique:
+                indexer = data.index.get_indexer(key, method="bfill")
+            else:
+                # get_indexer for doesn't support method
+                indexer = np.searchsorted(data.index.values, key, side="left")
+            indexer[-1] = len(data)
+            _division_info_cache[key] = key, indexer
+        return _division_info_cache[key]

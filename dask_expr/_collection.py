@@ -50,6 +50,7 @@ from dask_expr._repartition import Repartition
 from dask_expr._shuffle import SetIndex, SetIndexBlockwise, SortValues
 from dask_expr._str_accessor import StringAccessor
 from dask_expr._util import _BackendData, _convert_to_list, is_scalar
+from dask_expr.io import FromPandasDivisions
 
 #
 # Utilities to wrap Expr API
@@ -120,6 +121,10 @@ class FrameBase(DaskMethodsMixin):
     @functools.cached_property
     def _meta_nonempty(self):
         return meta_nonempty(self._meta)
+
+    @property
+    def dtypes(self):
+        return self.expr._meta.dtypes
 
     @property
     def size(self):
@@ -351,6 +356,16 @@ class FrameBase(DaskMethodsMixin):
 
         return GroupBy(self, by, **kwargs)
 
+    def resample(self, rule, **kwargs):
+        from dask_expr._resample import Resampler
+
+        return Resampler(self, rule, **kwargs)
+
+    def rolling(self, window, **kwargs):
+        from dask_expr._rolling import Rolling
+
+        return Rolling(self, window, **kwargs)
+
     def map_partitions(
         self,
         func,
@@ -402,6 +417,35 @@ class FrameBase(DaskMethodsMixin):
         new_expr = expr.MapPartitions(
             self.expr,
             func,
+            meta,
+            enforce_metadata,
+            transform_divisions,
+            clear_divisions,
+            kwargs,
+            *[arg.expr if isinstance(arg, FrameBase) else arg for arg in args],
+        )
+        return new_collection(new_expr)
+
+    def map_overlap(
+        self,
+        func,
+        before,
+        after,
+        *args,
+        meta=no_default,
+        enforce_metadata=True,
+        transform_divisions=True,
+        clear_divisions=False,
+        align_dataframes=False,
+        **kwargs,
+    ):
+        if align_dataframes:
+            raise NotImplementedError()
+        new_expr = expr.MapOverlap(
+            self.expr,
+            func,
+            before,
+            after,
             meta,
             enforce_metadata,
             transform_divisions,
@@ -615,6 +659,12 @@ class DataFrame(FrameBase):
                 v = v(data)
 
             if isinstance(v, (Scalar, Series)):
+                if isinstance(v, Series):
+                    if not expr.are_co_aligned(self.expr, v.expr):
+                        raise NotImplementedError(
+                            "Setting a Series with a different base is not supported",
+                        )
+
                 result = new_collection(expr.Assign(result.expr, k, v.expr))
             elif not isinstance(v, FrameBase) and isinstance(v, Hashable):
                 result = new_collection(expr.Assign(result.expr, k, v))
@@ -804,7 +854,7 @@ class DataFrame(FrameBase):
     def memory_usage(self, deep=False, index=True):
         return new_collection(MemoryUsageFrame(self.expr, deep=deep, _index=index))
 
-    def drop_duplicates(self, subset=None, ignore_index=False, split_out=1):
+    def drop_duplicates(self, subset=None, ignore_index=False, split_out=True):
         # Fail early if subset is not valid, e.g. missing columns
         subset = _convert_to_list(subset)
         meta_nonempty(self._meta).drop_duplicates(subset=subset)
@@ -1029,6 +1079,10 @@ class Series(FrameBase):
         return self.expr._meta.name
 
     @property
+    def dtype(self):
+        return self.expr._meta.dtype
+
+    @property
     def nbytes(self):
         return new_collection(self.expr.nbytes)
 
@@ -1058,7 +1112,7 @@ class Series(FrameBase):
     def unique(self):
         return new_collection(Unique(self.expr))
 
-    def drop_duplicates(self, ignore_index=False, split_out=1):
+    def drop_duplicates(self, ignore_index=False, split_out=True):
         return new_collection(
             DropDuplicates(self.expr, ignore_index=ignore_index, split_out=split_out)
         )
@@ -1262,6 +1316,33 @@ def concat(
     )
 
 
+def merge(
+    left,
+    right,
+    how="inner",
+    on=None,
+    left_on=None,
+    right_on=None,
+    left_index=False,
+    right_index=False,
+    suffixes=("_x", "_y"),
+    indicator=False,
+    shuffle_backend=None,
+):
+    return left.merge(
+        right,
+        how,
+        on,
+        left_on,
+        right_on,
+        left_index,
+        right_index,
+        suffixes,
+        indicator,
+        shuffle_backend,
+    )
+
+
 def from_map(
     func,
     *iterables,
@@ -1330,3 +1411,14 @@ def from_map(
                 label,
             )
         )
+
+
+def repartition(df, divisions, force=False):
+    if isinstance(df, FrameBase):
+        return df.repartition(divisions=divisions, force=force)
+    elif is_dataframe_like(df) or is_series_like(df):
+        return new_collection(
+            FromPandasDivisions(_BackendData(df), divisions=divisions)
+        )
+    else:
+        raise NotImplementedError(f"repartition is not implemented for {type(df)}.")
