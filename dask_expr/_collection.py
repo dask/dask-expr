@@ -1317,7 +1317,7 @@ def merge(
         right = from_pandas(right, npartitions=1)
 
     left = left.expr
-    right = right.expr if isinstance(right, FrameBase) else from_pandas(right, 1).expr
+    right = right.expr
     assert is_dataframe_like(right._meta)
 
     return new_collection(
