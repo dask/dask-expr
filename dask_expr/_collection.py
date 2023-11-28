@@ -739,7 +739,7 @@ class DataFrame(FrameBase):
             suffixes,
             indicator,
             shuffle_backend,
-            _npartitions=npartitions,
+            npartitions=npartitions,
         )
 
     def join(
@@ -1279,6 +1279,7 @@ def merge(
     suffixes=("_x", "_y"),
     indicator=False,
     shuffle_backend=None,
+    npartitions=None,
 ):
     for o in [on, left_on, right_on]:
         if isinstance(o, FrameBase):
@@ -1329,6 +1330,7 @@ def merge(
             suffixes=suffixes,
             indicator=indicator,
             shuffle_backend=shuffle_backend,
+            _npartitions=npartitions,
         )
     )
 
