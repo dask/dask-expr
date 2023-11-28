@@ -4,6 +4,7 @@ import functools
 import math
 import operator
 
+import numpy as np
 from dask.dataframe import methods
 from dask.dataframe.core import apply_and_enforce, is_dataframe_like, make_meta
 from dask.dataframe.io.io import sorted_division_locations
@@ -448,7 +449,7 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
     def _filtered_task(self, index: int):
         start, stop = self._locations()[index : index + 2]
         part = self.frame.iloc[start:stop]
-        if self.columns:
+        if self.operand("columns") is not None:
             return part[self.columns[0]] if self._series else part[self.columns]
         return part
 
@@ -474,7 +475,11 @@ class FromPandasDivisions(FromPandas):
         _division_info_cache = self.frame._division_info
         if key not in _division_info_cache:
             data = self.frame._data
-            indexer = data.index.get_indexer(key, method="bfill")
+            if data.index.is_unique:
+                indexer = data.index.get_indexer(key, method="bfill")
+            else:
+                # get_indexer for doesn't support method
+                indexer = np.searchsorted(data.index.values, key, side="left")
             indexer[-1] = len(data)
             _division_info_cache[key] = key, indexer
         return _division_info_cache[key]

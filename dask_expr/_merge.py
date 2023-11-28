@@ -133,6 +133,18 @@ class Merge(Expr):
             self.right_index or _contains_index_name(self.right, self.right_on)
         ) and self.right.known_divisions
 
+    @functools.cached_property
+    def merge_indexed_left(self):
+        return (
+            self.left_index or _contains_index_name(self.left, self.left_on)
+        ) and self.left.known_divisions
+
+    @functools.cached_property
+    def merge_indexed_right(self):
+        return (
+            self.right_index or _contains_index_name(self.right, self.right_on)
+        ) and self.right.known_divisions
+
     def _lower(self):
         # Lower from an abstract expression
         left = self.left
