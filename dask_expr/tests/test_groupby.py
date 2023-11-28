@@ -170,7 +170,7 @@ def test_split_out_automatically():
     expected = pdf.groupby(["a", "b"]).sum()
     assert_eq(q, expected)
 
-    
+
 def test_groupby_apply(df, pdf):
     def test(x):
         x["new"] = x.sum().sum()
