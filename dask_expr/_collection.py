@@ -599,6 +599,18 @@ class FrameBase(DaskMethodsMixin):
     def nunique_approx(self):
         return new_collection(self.expr.nunique_approx())
 
+    def cumsum(self, skipna=True):
+        return new_collection(self.expr.cumsum(skipna=skipna))
+
+    def cumprod(self, skipna=True):
+        return new_collection(self.expr.cumprod(skipna=skipna))
+
+    def cummax(self, skipna=True):
+        return new_collection(self.expr.cummax(skipna=skipna))
+
+    def cummin(self, skipna=True):
+        return new_collection(self.expr.cummin(skipna=skipna))
+
 
 # Add operator attributes
 for op in [

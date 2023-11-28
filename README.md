@@ -77,6 +77,10 @@ API Coverage
 - `combine_first`
 - `copy`
 - `count`
+- `cummax`
+- `cummin`
+- `cumprod`
+- `cumsum`
 - `dask`
 - `drop`
 - `drop_duplicates`
@@ -139,6 +143,10 @@ API Coverage
 - `combine_first`
 - `copy`
 - `count`
+- `cummax`
+- `cummin`
+- `cumprod`
+- `cumsum`
 - `dask`
 - `drop_duplicates`
 - `dropna`
@@ -163,6 +171,7 @@ API Coverage
 - `nunique_approx`
 - `partitions`
 - `prod`
+- `product`
 - `rename_axis`
 - `repartition`
 - `replace`
@@ -236,6 +245,7 @@ API Coverage
 - `max`
 - `mean`
 - `min`
+- `nunique`
 - `prod`
 - `shift`
 - `size`
