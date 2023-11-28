@@ -85,6 +85,7 @@ def test_groupby_nunique(df, pdf):
         df.groupby("x").nunique()
 
     assert_eq(df.groupby("x").y.nunique(), pdf.groupby("x").y.nunique())
+    assert_eq(df.groupby("x").y.nunique(split_out=True), pdf.groupby("x").y.nunique())
 
 
 def test_groupby_series(pdf, df):
