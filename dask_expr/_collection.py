@@ -43,6 +43,7 @@ from dask_expr._reductions import (
     NLargest,
     NSmallest,
     PivotTable,
+    Prod,
     Unique,
     ValueCounts,
 )
@@ -121,6 +122,10 @@ class FrameBase(DaskMethodsMixin):
     @functools.cached_property
     def _meta_nonempty(self):
         return meta_nonempty(self._meta)
+
+    @property
+    def dtypes(self):
+        return self.expr._meta.dtypes
 
     @property
     def size(self):
@@ -681,6 +686,7 @@ class DataFrame(FrameBase):
         suffixes=("_x", "_y"),
         indicator=False,
         shuffle_backend=None,
+        npartitions=None,
     ):
         """Merge the DataFrame with another DataFrame
 
@@ -718,6 +724,8 @@ class DataFrame(FrameBase):
             Passed through to the backend DataFrame library.
         shuffle_backend: optional
             Shuffle backend to use if shuffling is necessary.
+        npartitions : int, optional
+            The number of output partitions
         """
         return merge(
             self,
@@ -731,6 +739,7 @@ class DataFrame(FrameBase):
             suffixes,
             indicator,
             shuffle_backend,
+            _npartitions=npartitions,
         )
 
     def join(
@@ -741,6 +750,7 @@ class DataFrame(FrameBase):
         lsuffix="",
         rsuffix="",
         shuffle_backend=None,
+        npartitions=None,
     ):
         if (
             not isinstance(other, list)
@@ -769,6 +779,7 @@ class DataFrame(FrameBase):
             how=how,
             suffixes=(lsuffix, rsuffix),
             shuffle_backend=shuffle_backend,
+            npartitions=npartitions,
         )
 
     def __setitem__(self, key, value):
@@ -1000,28 +1011,7 @@ class DataFrame(FrameBase):
         return new_collection(expr.AddSuffix(self.expr, suffix))
 
     def pivot_table(self, index, columns, values, aggfunc="mean"):
-        if not is_scalar(index) or index not in self._meta.columns:
-            raise ValueError("'index' must be the name of an existing column")
-        if not is_scalar(columns) or columns not in self._meta.columns:
-            raise ValueError("'columns' must be the name of an existing column")
-        if not methods.is_categorical_dtype(self._meta[columns]):
-            raise ValueError("'columns' must be category dtype")
-        if not has_known_categories(self._meta[columns]):
-            raise ValueError("'columns' categories must be known")
-
-        if not (
-            is_scalar(values)
-            and values in self._meta.columns
-            or not is_scalar(values)
-            and all(is_scalar(x) and x in self._meta.columns for x in values)
-        ):
-            raise ValueError("'values' must refer to an existing column or columns")
-
-        return new_collection(
-            PivotTable(
-                self.expr, index=index, columns=columns, values=values, aggfunc=aggfunc
-            )
-        )
+        return pivot_table(self, index, columns, values, aggfunc)
 
 
 class Series(FrameBase):
@@ -1040,6 +1030,10 @@ class Series(FrameBase):
     @property
     def name(self):
         return self.expr._meta.name
+
+    @property
+    def dtype(self):
+        return self.expr._meta.dtype
 
     @property
     def nbytes(self):
@@ -1067,6 +1061,9 @@ class Series(FrameBase):
 
     def memory_usage(self, deep=False, index=True):
         return new_collection(MemoryUsageFrame(self.expr, deep=deep, _index=index))
+
+    def product(self):
+        return new_collection(Prod(self.expr))
 
     def unique(self):
         return new_collection(Unique(self.expr))
@@ -1415,3 +1412,28 @@ def repartition(df, divisions, force=False):
         )
     else:
         raise NotImplementedError(f"repartition is not implemented for {type(df)}.")
+
+
+def pivot_table(df, index, columns, values, aggfunc="mean"):
+    if not is_scalar(index) or index not in df._meta.columns:
+        raise ValueError("'index' must be the name of an existing column")
+    if not is_scalar(columns) or columns not in df._meta.columns:
+        raise ValueError("'columns' must be the name of an existing column")
+    if not methods.is_categorical_dtype(df._meta[columns]):
+        raise ValueError("'columns' must be category dtype")
+    if not has_known_categories(df._meta[columns]):
+        raise ValueError("'columns' categories must be known")
+
+    if not (
+        is_scalar(values)
+        and values in df._meta.columns
+        or not is_scalar(values)
+        and all(is_scalar(x) and x in df._meta.columns for x in values)
+    ):
+        raise ValueError("'values' must refer to an existing column or columns")
+
+    return new_collection(
+        PivotTable(
+            df.expr, index=index, columns=columns, values=values, aggfunc=aggfunc
+        )
+    )

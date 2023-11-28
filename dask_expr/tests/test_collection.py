@@ -52,6 +52,11 @@ def test_setitem(pdf, df):
     assert_eq(df, pdf)
 
 
+def test_series_product(pdf, df):
+    assert_eq(pdf.x.product(), df.x.product())
+    assert_eq(pdf.y.product(), df.y.product())
+
+
 @xfail_gpu("https://github.com/rapidsai/cudf/issues/10271")
 def test_explode():
     pdf = lib.DataFrame({"a": [[1, 2], [3, 4]]})
@@ -136,6 +141,12 @@ def test_reductions(func, pdf, df):
     # check_dtype False because sub-selection of columns that is pushed through
     # is not reflected in the meta calculation
     assert_eq(func(df)["x"], func(pdf)["x"], check_dtype=False)
+
+
+def test_reduction_on_empty_df():
+    pdf = lib.DataFrame()
+    df = from_pandas(pdf)
+    assert_eq(df.sum(), pdf.sum())
 
 
 @pytest.mark.parametrize("axis", [0, 1])
@@ -1359,3 +1370,9 @@ def test_map_overlap_raises():
 
     with pytest.raises(ValueError, match="positive"):
         df.map_overlap(func, before=1, after=-5).compute()
+
+
+def test_dtype(df, pdf):
+    assert df.x.dtype == pdf.x.dtype
+    assert df.index.dtype == pdf.index.dtype
+    assert_eq(df.dtypes, pdf.dtypes)
