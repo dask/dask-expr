@@ -494,6 +494,7 @@ class GroupByApply(Expr):
         "dropna",
         "_slice",
         "func",
+        "meta",
         "args",
         "kwargs",
     ]
@@ -505,8 +506,8 @@ class GroupByApply(Expr):
 
     @functools.cached_property
     def _meta(self):
-        if "meta" in self.operand("kwargs"):
-            return self.operand("kwargs")["meta"]
+        if self.operand("meta") is not no_default:
+            return self.operand("meta")
         return _meta_apply_transform(self, self.grp_func)
 
     def _divisions(self):
@@ -546,6 +547,7 @@ class GroupByApply(Expr):
             self.operand("args"),
             self.operand("kwargs"),
             dask_func=grp_func,
+            meta=self._meta,
         )
 
 
@@ -576,12 +578,17 @@ class GroupByUDFBlockwise(Blockwise):
         "args",
         "kwargs",
         "dask_func",
+        "meta",
     ]
     _defaults = {"observed": None, "dropna": None}
 
+    @property
+    def _args(self) -> list:
+        return self.operands[:-1]
+
     @functools.cached_property
     def _meta(self):
-        return _meta_apply_transform(self, self.dask_func)
+        return self.operand("meta")
 
     @staticmethod
     def operation(
@@ -624,8 +631,6 @@ def _contains_index_name(index_name, by):
 
 def _meta_apply_transform(obj, grp_func):
     kwargs = obj.operand("kwargs")
-    if "meta" in kwargs and kwargs["meta"] is not no_default:
-        return kwargs["meta"]
     by_meta = obj.by if not isinstance(obj.by, Expr) else meta_nonempty(obj.by._meta)
     meta_args, meta_kwargs = _extract_meta((obj.operand("args"), kwargs), nonempty=True)
     return make_meta(
@@ -873,7 +878,7 @@ class GroupBy:
     def agg(self, *args, **kwargs):
         return self.aggregate(*args, **kwargs)
 
-    def apply(self, func, *args, **kwargs):
+    def apply(self, func, meta=no_default, *args, **kwargs):
         return new_collection(
             GroupByApply(
                 self.obj.expr,
@@ -882,12 +887,13 @@ class GroupBy:
                 self.dropna,
                 _slice=self._slice,
                 func=func,
+                meta=meta,
                 args=args,
                 kwargs=kwargs,
             )
         )
 
-    def transform(self, func, *args, **kwargs):
+    def transform(self, func, meta=no_default, *args, **kwargs):
         return new_collection(
             GroupByTransform(
                 self.obj.expr,
@@ -896,12 +902,13 @@ class GroupBy:
                 self.dropna,
                 _slice=self._slice,
                 func=func,
+                meta=meta,
                 args=args,
                 kwargs=kwargs,
             )
         )
 
-    def shift(self, periods=1, *args, **kwargs):
+    def shift(self, periods=1, meta=no_default, *args, **kwargs):
         kwargs = {"periods": periods, **kwargs}
         return new_collection(
             GroupByShift(
@@ -910,6 +917,7 @@ class GroupBy:
                 self.observed,
                 self.dropna,
                 _slice=self._slice,
+                meta=meta,
                 args=args,
                 kwargs=kwargs,
             )
