@@ -1066,6 +1066,12 @@ class DataFrame(FrameBase):
             )
         )
 
+    @property
+    def iloc(self):
+        from dask_expr._indexing import ILocIndexer
+
+        return ILocIndexer(self)
+
 
 class Series(FrameBase):
     """Series-like Expr Collection"""
