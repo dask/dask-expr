@@ -86,7 +86,7 @@ async def test_merge_index_precedence(c, s, a, b, shuffle):
 
     result = df.join(df2, shuffle_backend=shuffle)
     x = await c.compute(result)
-    # assert result.npartitions == 6
+    assert result.npartitions == 3
     lib.testing.assert_frame_equal(x.sort_index(ascending=False), pdf.join(pdf2))
 
 

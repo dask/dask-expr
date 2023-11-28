@@ -73,6 +73,8 @@ class Shuffle(Expr):
         to its necessary components.
     options: dict
         Algorithm-specific options.
+    index_shuffle : bool
+        Whether to perform the shuffle on the index.
     """
 
     _parameters = [
@@ -617,6 +619,8 @@ class AssignPartitioningIndex(Blockwise):
         New column name to assign.
     npartitions_out: int
         Number of partitions after repartitioning is finished.
+    assign_index : bool
+        Whether to use the index as partitioning column.
     """
 
     _parameters = [
@@ -631,6 +635,8 @@ class AssignPartitioningIndex(Blockwise):
     def operation(df, index, name: str, npartitions: int, assign_index):
         """Construct a hash-based partitioning index"""
         if assign_index:
+            # columns take precedence over index in _select_columns_or_index, so
+            # circumvent that, to_frame doesn't work because it loses the index
             index = df[[]]
             index["_index"] = df.index
         else:
