@@ -284,5 +284,4 @@ def test_groupby_var_dropna_observed(dropna, observed, func):
     ddf = from_pandas(df, npartitions=3)
     dd_result = getattr(ddf.groupby("b", observed=observed, dropna=dropna), func)()
     pdf_result = getattr(df.groupby("b", observed=observed, dropna=dropna), func)()
-    print(dd_result.compute())
     assert_eq(dd_result, pdf_result)
