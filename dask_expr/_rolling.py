@@ -166,6 +166,14 @@ class RollingAgg(RollingReduction):
         return
 
 
+class RollingApply(RollingReduction):
+    how = "apply"
+
+    def _simplify_up(self, parent):
+        # Disable optimization in `func`; function may access other columns
+        return
+
+
 class Rolling:
     """Aggregate using one or more operations
 
@@ -195,6 +203,9 @@ class Rolling:
                 how_kwargs=how_kwargs,
             )
         )
+
+    def apply(self, func, *args, **kwargs):
+        return self._single_agg(RollingApply, how_args=(func, *args), how_kwargs=kwargs)
 
     def count(self):
         return self._single_agg(RollingCount)
