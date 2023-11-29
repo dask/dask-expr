@@ -107,4 +107,4 @@ def test_rolling_apply(df, pdf, window, raw, foo, bar):
     # simplify up disabled for `apply`, function may access other columns
     q = df.rolling(window).apply(my_sum, **kwargs)["foo"].simplify()
     eq = df["foo"].rolling(window).apply(my_sum, **kwargs).simplify()
-    assert q._name != eq._name
+    assert q._name == eq._name

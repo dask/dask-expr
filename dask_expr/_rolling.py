@@ -169,10 +169,6 @@ class RollingAgg(RollingReduction):
 class RollingApply(RollingReduction):
     how = "apply"
 
-    def _simplify_up(self, parent):
-        # Disable optimization in `func`; function may access other columns
-        return
-
 
 class Rolling:
     """Aggregate using one or more operations
