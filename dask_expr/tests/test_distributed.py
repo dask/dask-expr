@@ -114,8 +114,10 @@ async def test_merge_broadcast(c, s, a, b, shuffle, broadcast, how):
     x = await c.compute(result)
     assert result.npartitions == 15
     lib.testing.assert_frame_equal(
-        x.sort_values(by="a").reset_index(drop=True),
-        pdf.merge(pdf2, left_on="a", right_on="b", how=how),
+        x.sort_values(by="a", ignore_index=True),
+        pdf.merge(pdf2, left_on="a", right_on="b", how=how).sort_values(
+            by="a", ignore_index=True
+        ),
     )
 
 
