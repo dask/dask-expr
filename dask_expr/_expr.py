@@ -1822,9 +1822,7 @@ class Drop(Elemwise):
 
     def _simplify_down(self):
         columns = [
-            col
-            for col in self.frame.columns
-            if col not in (self.operand("columns") or ())
+            col for col in self.frame.columns if col not in self.operand("columns")
         ]
         return Projection(self.frame, columns)
 
