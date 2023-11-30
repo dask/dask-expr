@@ -884,11 +884,13 @@ class DataFrame(FrameBase):
 
         axis = _validate_axis(axis)
 
-        return new_collection(
-            expr.Drop(
-                self.expr, labels=labels, axis=axis, columns=columns, errors=errors
+        if axis == 1:
+            columns = labels or columns
+        elif axis == 0 and columns is None:
+            raise NotImplementedError(
+                "Drop currently only works for axis=1 or when columns is not None"
             )
-        )
+        return new_collection(expr.Drop(self.expr, columns=columns, errors=errors))
 
     def to_parquet(self, path, **kwargs):
         from dask_expr.io.parquet import to_parquet

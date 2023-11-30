@@ -1815,27 +1815,16 @@ class ExplodeFrame(ExplodeSeries):
             )
 
 
-def _drop_by_shallow_copy(df, labels=None, axis=0, columns=None, errors="raise"):
-    if axis == 0 and columns is not None:
-        return drop_by_shallow_copy(df, columns, errors=errors)
-    elif axis == 1:
-        return drop_by_shallow_copy(df, labels, errors=errors)
-    raise NotImplementedError(
-        "Drop currently only works for axis=1 or when columns is not None"
-    )
-
-
 class Drop(Elemwise):
-    _parameters = ["frame", "labels", "axis", "columns", "errors"]
-    _defaults = {"errors": "raise", "axis": 0, "labels": None, "columns": None}
-    operation = staticmethod(_drop_by_shallow_copy)
+    _parameters = ["frame", "columns", "errors"]
+    _defaults = {"errors": "raise"}
+    operation = staticmethod(drop_by_shallow_copy)
 
     def _simplify_down(self):
         columns = [
             col
             for col in self.frame.columns
             if col not in (self.operand("columns") or ())
-            and col not in (self.operand("labels") or ())
         ]
         return Projection(self.frame, columns)
 
