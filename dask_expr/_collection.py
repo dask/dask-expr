@@ -50,7 +50,7 @@ from dask_expr._reductions import (
 from dask_expr._repartition import Repartition
 from dask_expr._shuffle import SetIndex, SetIndexBlockwise, SortValues
 from dask_expr._str_accessor import StringAccessor
-from dask_expr._util import _BackendData, _convert_to_list, is_scalar
+from dask_expr._util import _BackendData, _convert_to_list, _validate_axis, is_scalar
 from dask_expr.io import FromPandasDivisions
 
 #
@@ -882,13 +882,7 @@ class DataFrame(FrameBase):
         if columns is None and labels is None:
             raise TypeError("must either specify 'columns' or 'labels'")
 
-        if isinstance(axis, str):
-            if axis == "index":
-                axis = 0
-            elif axis == "columns":
-                axis = 1
-        if axis not in (0, 1):
-            raise ValueError(f"Invalid {axis=}, must be 0 or 'index', 1 or 'columns'.")
+        axis = _validate_axis(axis)
 
         return new_collection(
             expr.Drop(
