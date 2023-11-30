@@ -785,9 +785,12 @@ class GroupBy:
         else:
             self.by = [by] if np.isscalar(by) else list(by)
             for key in self.by:
-                if not (np.isscalar(key) and key in self.obj.columns):
+                if (
+                    not (np.isscalar(key) and key in self.obj.columns)
+                    and not key == self.obj._meta.index.name
+                ):
                     raise NotImplementedError(
-                        "Can only group on column names (for now)."
+                        f"Key={key} neither in columns nor in the index."
                     )
 
     def _numeric_only_kwargs(self, numeric_only):
