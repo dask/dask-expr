@@ -687,6 +687,7 @@ class DataFrame(FrameBase):
         indicator=False,
         shuffle_backend=None,
         npartitions=None,
+        broadcast=None,
     ):
         """Merge the DataFrame with another DataFrame
 
@@ -726,6 +727,9 @@ class DataFrame(FrameBase):
             Shuffle backend to use if shuffling is necessary.
         npartitions : int, optional
             The number of output partitions
+        broadcast : float, bool, optional
+            Whether to perform a broadcast merge if bool, or the broadcast bias if
+            it is a float.
         """
         return merge(
             self,
@@ -740,6 +744,7 @@ class DataFrame(FrameBase):
             indicator,
             shuffle_backend,
             npartitions=npartitions,
+            broadcast=broadcast,
         )
 
     def join(
@@ -1283,6 +1288,7 @@ def merge(
     indicator=False,
     shuffle_backend=None,
     npartitions=None,
+    broadcast=None,
 ):
     for o in [on, left_on, right_on]:
         if isinstance(o, FrameBase):
@@ -1334,6 +1340,7 @@ def merge(
             indicator=indicator,
             shuffle_backend=shuffle_backend,
             _npartitions=npartitions,
+            broadcast=broadcast,
         )
     )
 
