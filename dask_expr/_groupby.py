@@ -1,4 +1,5 @@
 import functools
+import math
 
 import numpy as np
 from dask import is_dask_collection
@@ -43,8 +44,8 @@ def _as_dict(key, value):
     return {} if value is None else {key: value}
 
 
-def _adjust_split_out_for_group_keys(npartitions):
-    return 1 if npartitions < 100 else True
+def _adjust_split_out_for_group_keys(npartitions, by):
+    return math.ceil(npartitions / (100 / (len(by) - 1)))
 
 
 ###
@@ -87,7 +88,11 @@ class GroupByApplyConcatApply(ApplyConcatApply):
             and self.operand("split_out") is None
         ):
             return self.substitute_parameters(
-                {"split_out": _adjust_split_out_for_group_keys}
+                {
+                    "split_out": functools.partial(
+                        _adjust_split_out_for_group_keys, by=self.by
+                    )
+                }
             )
 
 
