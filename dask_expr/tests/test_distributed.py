@@ -94,14 +94,20 @@ async def test_merge_index_precedence(c, s, a, b, shuffle):
 @gen_cluster(client=True)
 @pytest.mark.parametrize("shuffle", ["tasks", "p2p"])
 @pytest.mark.parametrize("broadcast", [True, 0.6])
-async def test_merge_broadcast(c, s, a, b, shuffle, broadcast):
+@pytest.mark.parametrize("how", ["left", "inner"])
+async def test_merge_broadcast(c, s, a, b, shuffle, broadcast, how):
     pdf = lib.DataFrame({"a": [1, 2, 3, 4, 5, 6] * 5, "c": 1})
     pdf2 = lib.DataFrame({"b": [1, 2, 3, 4, 5, 6]})
     df = from_pandas(pdf, npartitions=15)
     df2 = from_pandas(pdf2, npartitions=2)
 
     result = df.merge(
-        df2, left_on="a", right_on="b", shuffle_backend=shuffle, broadcast=broadcast
+        df2,
+        left_on="a",
+        right_on="b",
+        shuffle_backend=shuffle,
+        broadcast=broadcast,
+        how=how,
     )
     q = result.optimize()
     assert len(list(q.find_operations(BroadcastJoin))) > 0
@@ -109,7 +115,7 @@ async def test_merge_broadcast(c, s, a, b, shuffle, broadcast):
     assert result.npartitions == 15
     lib.testing.assert_frame_equal(
         x.sort_values(by="a").reset_index(drop=True),
-        pdf.merge(pdf2, left_on="a", right_on="b"),
+        pdf.merge(pdf2, left_on="a", right_on="b", how=how),
     )
 
 

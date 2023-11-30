@@ -237,9 +237,19 @@ class Merge(Expr):
 
                 if self.how != "inner":
                     if self.broadcast_side == "left":
-                        left = Shuffle(left, shuffle_left_on, backend="tasks")
+                        left = Shuffle(
+                            left,
+                            shuffle_left_on,
+                            backend="tasks",
+                            npartitions_out=right.npartitions,
+                        )
                     else:
-                        right = Shuffle(right, shuffle_right_on, backend="tasks")
+                        right = Shuffle(
+                            right,
+                            shuffle_right_on,
+                            backend="tasks",
+                            npartitions_out=right.npartitions,
+                        )
 
                 return BroadcastJoin(
                     left,
