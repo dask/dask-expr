@@ -547,7 +547,7 @@ class GroupByApply(Expr):
             self.operand("args"),
             self.operand("kwargs"),
             dask_func=grp_func,
-            meta=self._meta,
+            meta=self.operand("meta"),
         )
 
 
@@ -588,7 +588,9 @@ class GroupByUDFBlockwise(Blockwise):
 
     @functools.cached_property
     def _meta(self):
-        return self.operand("meta")
+        if self.operand("meta") is not no_default:
+            return self.operand("meta")
+        return _meta_apply_transform(self, self.dask_func)
 
     @staticmethod
     def operation(
