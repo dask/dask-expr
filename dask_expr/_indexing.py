@@ -1,7 +1,5 @@
-from dask.dataframe import methods
-
 from dask_expr import new_collection
-from dask_expr._expr import Blockwise, Projection
+from dask_expr._expr import Projection
 
 
 class Indexer:
@@ -30,8 +28,4 @@ class ILocIndexer(Indexer):
             col_names = self.obj.columns[cindexer]
             return new_collection(Projection(self.obj.expr, col_names))
         else:
-            return new_collection(ILoc(self.obj.expr, key))
-
-
-class ILoc(Blockwise):
-    operation = staticmethod(methods.iloc)
+            raise NotImplementedError("duplicated columns aren't implemented")
