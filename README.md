@@ -89,6 +89,7 @@ API Coverage
 - `head`
 - `idxmax`
 - `idxmin`
+- `ìloc`
 - `index`
 - `isin`
 - `isna`
@@ -97,6 +98,7 @@ API Coverage
 - `map_overlap`
 - `map_partitions`
 - `max`
+- `mean`
 - `memory_usage`
 - `merge`
 - `min`
@@ -108,6 +110,7 @@ API Coverage
 - `partitions`
 - `pivot_table`
 - `prod`
+- `query`
 - `rename`
 - `rename_axis`
 - `repartition`
@@ -157,6 +160,7 @@ API Coverage
 - `map`
 - `map_partitions`
 - `max`
+- `mean`
 - `memory_usage`
 - `min`
 - `min`
@@ -275,6 +279,7 @@ Support for ``SeriesGroupBy`` and ``DataFrameGroupBy``.
 **`dask_expr._rolling.Rolling`**
 
 - `agg`
+- `apply`
 - `count`
 - `max`
 - `mean`
@@ -333,6 +338,7 @@ Support for ``SeriesGroupBy`` and ``DataFrameGroupBy``.
 - `concat`
 - `from_pandas`
 - `merge`
+- `pivot_table`
 - `read_csv`
 - `read_parquet`
 - `repartition`

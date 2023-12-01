@@ -389,4 +389,79 @@ def test_recursive_join():
 
     ddf_pairwise = ddf_pairwise.join(dfs_to_merge, how="left")
 
-    assert_eq(ddf_pairwise, ddf_loop)
+    # TODO: divisions is None for recursive join for now
+    assert_eq(ddf_pairwise, ddf_loop, check_divisions=False)
+
+
+def test_merge_repartition():
+    pdf = lib.DataFrame({"a": [1, 2, 3]})
+    pdf2 = lib.DataFrame({"b": [1, 2, 3]}, index=[1, 2, 3])
+
+    df = from_pandas(pdf, npartitions=2)
+    df2 = from_pandas(pdf2, npartitions=3)
+    assert_eq(df.join(df2), pdf.join(pdf2))
+
+
+def test_merge_reparititon_divisions():
+    pdf = lib.DataFrame({"a": [1, 2, 3, 4, 5, 6]})
+    pdf2 = lib.DataFrame({"b": [1, 2, 3, 4, 5, 6]}, index=[1, 2, 3, 4, 5, 6])
+    pdf3 = lib.DataFrame({"c": [1, 2, 3, 4, 5, 6]}, index=[1, 2, 3, 4, 5, 6])
+
+    df = from_pandas(pdf, npartitions=2)
+    df2 = from_pandas(pdf2, npartitions=3)
+    df3 = from_pandas(pdf3, npartitions=3)
+
+    assert_eq(df.join(df2).join(df3), pdf.join(pdf2).join(pdf3))
+
+
+def test_merge_npartitions():
+    pdf = lib.DataFrame({"a": [1, 2, 3, 4, 5, 6]})
+    pdf2 = lib.DataFrame({"b": [1, 2, 3, 4, 5, 6]}, index=[1, 2, 3, 4, 5, 6])
+    df = from_pandas(pdf, npartitions=1)
+    df2 = from_pandas(pdf2, npartitions=3)
+
+    result = df.join(df2, npartitions=6)
+    # Ignore npartitions when broadcasting
+    assert result.npartitions == 4
+    assert_eq(result, pdf.join(pdf2))
+
+    df = from_pandas(pdf, npartitions=2)
+    result = df.join(df2, npartitions=6)
+    # Ignore npartitions for repartition-join
+    assert result.npartitions == 4
+    assert_eq(result, pdf.join(pdf2))
+
+    pdf = lib.DataFrame(
+        {"a": [1, 2, 3, 4, 5, 6]}, index=lib.Index([6, 5, 4, 3, 2, 1], name="a")
+    )
+    pdf2 = lib.DataFrame(
+        {"b": [1, 2, 3, 4, 5, 6]}, index=lib.Index([1, 2, 7, 4, 5, 6], name="a")
+    )
+    df = from_pandas(pdf, npartitions=2, sort=False)
+    df2 = from_pandas(pdf2, npartitions=3, sort=False)
+
+    result = df.join(df2, npartitions=6)
+    assert result.npartitions == 6
+    assert_eq(result, pdf.join(pdf2))
+
+
+def test_merge_pandas_object():
+    pdf1 = lib.DataFrame({"x": range(20), "y": range(20)})
+    df1 = from_pandas(pdf1, 4)
+    pdf2 = lib.DataFrame({"x": range(20), "z": range(20)})
+
+    assert_eq(merge(df1, pdf2, on="x"), pdf1.merge(pdf2, on="x"), check_index=False)
+    assert_eq(merge(pdf2, df1, on="x"), pdf2.merge(pdf1, on="x"), check_index=False)
+
+    pdf1 = lib.DataFrame({"x": range(20), "y": range(20)}).set_index("x")
+    df1 = from_pandas(pdf1, 4)
+    assert_eq(
+        merge(df1, pdf2, left_index=True, right_on="x"),
+        pdf1.merge(pdf2, left_index=True, right_on="x"),
+        check_index=False,
+    )
+    assert_eq(
+        merge(pdf2, df1, left_on="x", right_index=True),
+        pdf2.merge(pdf1, left_on="x", right_index=True),
+        check_index=False,
+    )
