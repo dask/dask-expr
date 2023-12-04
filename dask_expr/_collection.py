@@ -1109,6 +1109,10 @@ class Series(FrameBase):
             RepartitionQuantiles(self.expr, npartitions, upsample, random_state)
         )
 
+    def rename(self, index):
+        if is_scalar(index) or isinstance(index, tuple):
+            return new_collection(expr.RenameSeries(self.expr, index))
+
 
 class Index(Series):
     """Index-like Expr Collection"""
