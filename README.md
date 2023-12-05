@@ -152,6 +152,8 @@ API Coverage
 - `dtype`
 - `explode`
 - `fillna`
+- `ffill`
+- `bfill`
 - `groupby`
 - `head`
 - `idxmax`
