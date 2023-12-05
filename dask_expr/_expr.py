@@ -2713,9 +2713,17 @@ class BFill(FFill):
     func = M.bfill
 
     def _simplify_down(self):
-        mapoverlap = super()._simplify_down()
-        mapoverlap.before, mapoverlap.after = mapoverlap.after, mapoverlap.before
-        return mapoverlap
+        self.after, self.before = 1 if self.limit is None else self.limit, 0
+
+        return MapOverlap(
+            frame=self.frame,
+            func=self.func,
+            before=self.before,
+            after=self.after,
+            meta=self._meta,
+            enforce_metadata=self.enforce_metadata,
+            kwargs=self.kwargs,
+        )
 
 
 class Fused(Blockwise):
