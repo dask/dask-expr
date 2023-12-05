@@ -32,11 +32,13 @@ from dask_expr._align import AlignPartitions
 from dask_expr._categorical import CategoricalAccessor
 from dask_expr._concat import Concat
 from dask_expr._datetime import DatetimeAccessor
-from dask_expr._expr import Eval, Query, Shift, no_default
+from dask_expr._expr import Eval, Query, Shift, ToNumeric, no_default
 from dask_expr._merge import JoinRecursive, Merge
 from dask_expr._quantiles import RepartitionQuantiles
 from dask_expr._reductions import (
     DropDuplicates,
+    IsMonotonicDecreasing,
+    IsMonotonicIncreasing,
     Len,
     MemoryUsageFrame,
     MemoryUsageIndex,
@@ -591,8 +593,18 @@ class FrameBase(DaskMethodsMixin):
     def isnull(self):
         return new_collection(self.expr.isnull())
 
+    def mask(self, cond, other=np.nan):
+        cond = cond.expr if isinstance(cond, FrameBase) else cond
+        other = other.expr if isinstance(other, FrameBase) else other
+        return new_collection(self.expr.mask(cond, other))
+
     def round(self, decimals=0):
         return new_collection(self.expr.round(decimals))
+
+    def where(self, cond, other=np.nan):
+        cond = cond.expr if isinstance(cond, FrameBase) else cond
+        other = other.expr if isinstance(other, FrameBase) else other
+        return new_collection(self.expr.where(cond, other))
 
     def apply(self, function, *args, **kwargs):
         return new_collection(self.expr.apply(function, *args, **kwargs))
@@ -623,6 +635,21 @@ class FrameBase(DaskMethodsMixin):
 
     def nunique_approx(self):
         return new_collection(self.expr.nunique_approx())
+
+    def memory_usage_per_partition(self, index=True, deep=False):
+        return new_collection(self.expr.memory_usage_per_partition(index, deep))
+
+    @property
+    def loc(self):
+        from dask_expr._indexing import LocIndexer
+
+        return LocIndexer(self)
+
+    def notnull(self):
+        return new_collection(expr.NotNull(self.expr))
+
+    def isnull(self):
+        return ~self.notnull()
 
 
 # Add operator attributes
@@ -1134,6 +1161,14 @@ class Series(FrameBase):
             return new_collection(expr.RenameSeries(self.expr, index))
         raise NotImplementedError(f"passing index={type(index)} is not supported")
 
+    @property
+    def is_monotonic_increasing(self):
+        return new_collection(IsMonotonicIncreasing(self.expr))
+
+    @property
+    def is_monotonic_decreasing(self):
+        return new_collection(IsMonotonicDecreasing(self.expr))
+
 
 class Index(Series):
     """Index-like Expr Collection"""
@@ -1480,3 +1515,7 @@ def pivot_table(df, index, columns, values, aggfunc="mean"):
             df.expr, index=index, columns=columns, values=values, aggfunc=aggfunc
         )
     )
+
+
+def to_numeric(arg, errors="raise", downcast=None):
+    return new_collection(ToNumeric(frame=arg.expr, errors=errors, downcast=downcast))
