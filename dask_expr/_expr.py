@@ -1733,6 +1733,12 @@ class ToNumeric(Elemwise):
         )
 
 
+class ToTimedelta(Elemwise):
+    _parameters = ["frame", "unit", "errors"]
+    _defaults = {"unit": None, "errors": "raise"}
+    operation = staticmethod(pd.to_timedelta)
+
+
 class AsType(Elemwise):
     """A good example of writing a trivial blockwise operation"""
 

@@ -32,7 +32,7 @@ from dask_expr._align import AlignPartitions
 from dask_expr._categorical import CategoricalAccessor
 from dask_expr._concat import Concat
 from dask_expr._datetime import DatetimeAccessor
-from dask_expr._expr import Eval, Query, Shift, ToNumeric, no_default
+from dask_expr._expr import Eval, Query, Shift, ToNumeric, ToTimedelta, no_default
 from dask_expr._merge import JoinRecursive, Merge
 from dask_expr._quantiles import RepartitionQuantiles
 from dask_expr._reductions import (
@@ -1521,3 +1521,9 @@ def to_numeric(arg, errors="raise", downcast=None):
     if not isinstance(arg, Series):
         raise TypeError("arg must be a Series")
     return new_collection(ToNumeric(frame=arg.expr, errors=errors, downcast=downcast))
+
+
+def to_timedelta(arg, unit=None, errors="raise"):
+    if not isinstance(arg, Series):
+        raise TypeError("arg must be a Series")
+    return new_collection(ToTimedelta(frame=arg.expr, unit=unit, errors=errors))
