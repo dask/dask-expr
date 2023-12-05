@@ -31,7 +31,12 @@ from dask.typing import no_default
 from dask.utils import M, apply, funcname, import_required, is_arraylike
 from tlz import merge_sorted, unique
 
-from dask_expr._util import _BackendData, _tokenize_deterministic, _tokenize_partial
+from dask_expr._util import (
+    _BackendData,
+    _maybe_shift_divisions,
+    _tokenize_deterministic,
+    _tokenize_partial,
+)
 
 replacement_rules = []
 
@@ -2760,7 +2765,10 @@ class Shift(MapOverlap):
     after = 0
 
     def _divisions(self):
-        return self.frame.divisions
+        return (
+            _maybe_shift_divisions(self.frame, self.periods, self.freq)
+            or self.frame.divisions
+        )
 
     @functools.cached_property
     def _meta(self):
@@ -2778,17 +2786,20 @@ class Shift(MapOverlap):
         return None
 
     def _simplify_down(self):
-        if self.axis == 1:
+        if self.axis == 1 or self.freq:
+            clear_divisions = (
+                _maybe_shift_divisions(self.frame, self.periods, self.freq) is None
+            )
             return MapPartitions(
                 frame=self.frame,
                 func=self.func,
                 meta=self._meta,
                 enforce_metadata=False,
                 transform_divisions=False,
-                clear_divisions=False,
+                clear_divisions=clear_divisions,
                 kwargs=self.kwargs,
             )
-        elif self.freq is None:
+        else:
             self.before, self.after = (
                 (self.periods, 0) if self.periods > 0 else (0, -self.periods)
             )
@@ -2801,8 +2812,6 @@ class Shift(MapOverlap):
                 enforce_metadata=self.enforce_metadata,
                 kwargs=self.kwargs,
             )
-        else:
-            raise NotImplementedError()
 
 
 class Fused(Blockwise):
