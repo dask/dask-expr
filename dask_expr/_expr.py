@@ -2609,14 +2609,10 @@ class FFill(MapOverlap):
         "limit",
     ]
     _defaults = {"limit": None}
-    how = "ffill"
+    func = M.ffill
     before = 1
     after = 0
     enforce_metadata = True
-
-    @staticmethod
-    def func(frame, how, **kwargs):
-        return getattr(frame, how)(**kwargs)
 
     def _divisions(self):
         return self.frame.divisions
@@ -2631,7 +2627,7 @@ class FFill(MapOverlap):
 
     @functools.cached_property
     def kwargs(self):
-        return dict(how=self.how, limit=self.limit)
+        return dict(limit=self.limit)
 
     def _lower(self):
         return None
@@ -2651,7 +2647,7 @@ class FFill(MapOverlap):
 
 
 class BFill(FFill):
-    how = "bfill"
+    func = M.bfill
 
     def _simplify_down(self):
         mapoverlap = super()._simplify_down()
