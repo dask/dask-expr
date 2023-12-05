@@ -614,6 +614,9 @@ class FrameBase(DaskMethodsMixin):
     def nunique_approx(self):
         return new_collection(self.expr.nunique_approx())
 
+    def memory_usage_per_partition(self, index=True, deep=False):
+        return new_collection(self.expr.memory_usage_per_partition(index, deep))
+
 
 # Add operator attributes
 for op in [
