@@ -360,6 +360,7 @@ def test_blockwise(func, pdf, df):
 def test_to_numeric(pdf, df):
     pdf.x = pdf.x.astype("str")
     expected = lib.to_numeric(pdf.x)
+    df.x = df.x.astype("str")
     result = to_numeric(df.x, downcast=None)
     assert_eq(result, expected)
 
