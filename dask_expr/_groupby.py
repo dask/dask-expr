@@ -542,6 +542,18 @@ class NUnique(SingleAggregation):
         return {"levels": self.levels}
 
 
+class Median(Expr):
+    _parameters = ["frame", "by", "observed", "dropna", "_slice", "shuffle_backend"]
+    _defaults = {"observed": None, "dropna": None, "_slice": None}
+
+    def _lower(self):
+        return Shuffle(self.frame, self.by[0], self.frame.npartitions)
+
+
+class BlockwiseMedian(Blockwise):
+    _parameters = ["frame", "by", "observed", "dropna", "shuffle_backend"]
+
+
 class GroupByApply(Expr):
     _parameters = [
         "frame",
