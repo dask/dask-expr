@@ -240,14 +240,12 @@ class Merge(Expr):
                         left = Shuffle(
                             left,
                             shuffle_left_on,
-                            backend="tasks",
                             npartitions_out=right.npartitions,
                         )
                     else:
                         right = Shuffle(
                             right,
                             shuffle_right_on,
-                            backend="tasks",
                             npartitions_out=right.npartitions,
                         )
 

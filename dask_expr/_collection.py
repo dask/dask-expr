@@ -728,8 +728,12 @@ class DataFrame(FrameBase):
         npartitions : int, optional
             The number of output partitions
         broadcast : float, bool, optional
-            Whether to perform a broadcast merge if bool, or the broadcast bias if
-            it is a float.
+            Whether to use a broadcast-based join in lieu of a shuffle-based join for
+            supported cases. By default, a simple heuristic will be used to select
+            the underlying algorithm. If a floating-point value is specified, that
+            number will be used as the broadcast_bias within the simple heuristic
+            (a large number makes Dask more likely to choose the broacast_join code
+            path). See broadcast_join for more information.
         """
         return merge(
             self,
