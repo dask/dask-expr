@@ -340,3 +340,4 @@ def test_groupby_median(df, pdf):
     assert q.optimize().npartitions == 2
     assert_eq(q, pdf.groupby("x").median())
     assert_eq(df.groupby("x")["y"].median(), pdf.groupby("x")["y"].median())
+    assert_eq(df.groupby("x").median()["y"], pdf.groupby("x").median()["y"])
