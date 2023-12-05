@@ -20,8 +20,14 @@ def test_monotonic():
 
     for c in df.columns:
         assert assert_eq(
-            df[c].is_monotonic_increasing(), pdf[c].is_monotonic_increasing
+            df[c].is_monotonic_increasing,
+            pdf[c].is_monotonic_increasing,
+            # https://github.com/dask/dask/pull/10671
+            check_dtype=False,
         )
         assert assert_eq(
-            df[c].is_monotonic_decreasing(), pdf[c].is_monotonic_decreasing
+            df[c].is_monotonic_decreasing,
+            pdf[c].is_monotonic_decreasing,
+            # https://github.com/dask/dask/pull/10671
+            check_dtype=False,
         )

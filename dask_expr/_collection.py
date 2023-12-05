@@ -1126,9 +1126,11 @@ class Series(FrameBase):
             return new_collection(expr.RenameSeries(self.expr, index))
         raise NotImplementedError(f"passing index={type(index)} is not supported")
 
+    @property
     def is_monotonic_increasing(self):
         return new_collection(IsMonotonicIncreasing(self.expr))
 
+    @property
     def is_monotonic_decreasing(self):
         return new_collection(IsMonotonicDecreasing(self.expr))
 
