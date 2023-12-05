@@ -85,6 +85,8 @@ API Coverage
 - `eval`
 - `explode`
 - `fillna`
+- `ffill`
+- `bfill`
 - `groupby`
 - `head`
 - `idxmax`
