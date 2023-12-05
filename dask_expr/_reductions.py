@@ -491,6 +491,10 @@ class DropDuplicates(Unique):
     chunk = M.drop_duplicates
     aggregate_func = M.drop_duplicates
 
+    @property
+    def split_by(self):
+        return self.subset
+
     @functools.cached_property
     def _meta(self):
         return self.chunk(meta_nonempty(self.frame._meta), **self.chunk_kwargs)
@@ -1131,3 +1135,15 @@ class TotalMemoryUsageFrame(MemoryUsageFrame):
     @staticmethod
     def reduction_combine(x, is_dataframe):
         return x
+
+
+class IsMonotonicIncreasing(Reduction):
+    reduction_chunk = methods.monotonic_increasing_chunk
+    reduction_combine = methods.monotonic_increasing_combine
+    reduction_aggregate = methods.monotonic_increasing_aggregate
+
+
+class IsMonotonicDecreasing(Reduction):
+    reduction_chunk = methods.monotonic_decreasing_chunk
+    reduction_combine = methods.monotonic_decreasing_combine
+    reduction_aggregate = methods.monotonic_decreasing_aggregate

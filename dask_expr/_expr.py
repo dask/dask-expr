@@ -22,6 +22,7 @@ from dask.dataframe.core import (
     is_index_like,
     is_series_like,
     make_meta,
+    total_mem_usage,
 )
 from dask.dataframe.dispatch import meta_nonempty
 from dask.dataframe.rolling import CombinedOutput, _head_timedelta, overlap_chunk
@@ -713,8 +714,14 @@ class Expr:
         # These are the same anyway
         return IsNa(self)
 
+    def mask(self, cond, other=np.nan):
+        return Mask(self, cond=cond, other=other)
+
     def round(self, decimals=0):
         return Round(self, decimals=decimals)
+
+    def where(self, cond, other=np.nan):
+        return Where(self, cond=cond, other=other)
 
     def apply(self, function, *args, **kwargs):
         return Apply(self, function, args, kwargs)
@@ -760,6 +767,9 @@ class Expr:
 
     def nunique_approx(self):
         return NuniqueApprox(self, b=16)
+
+    def memory_usage_per_partition(self, index=True, deep=False):
+        return MemoryUsagePerPartition(self, index, deep)
 
     @functools.cached_property
     def divisions(self):
@@ -1592,6 +1602,22 @@ class Query(Blockwise):
         return {**self.expr_kwargs}
 
 
+class MemoryUsagePerPartition(Blockwise):
+    _parameters = ["frame", "index", "deep"]
+    _defaults = {"index": True, "deep": False}
+    operation = staticmethod(total_mem_usage)
+
+    @functools.cached_property
+    def _meta(self):
+        meta = self.frame._meta
+        if is_series_like(meta):
+            return meta._constructor([super()._meta])
+        return meta._constructor_sliced([super()._meta])
+
+    def _divisions(self):
+        return (None,) * (self.frame.npartitions + 1)
+
+
 class Elemwise(Blockwise):
     """
     This doesn't really do anything, but we anticipate that future
@@ -1628,6 +1654,12 @@ class RenameFrame(Elemwise):
                     for col in parent.columns
                 ]
             return type(self)(self.frame[columns], *self.operands[1:])
+
+
+class RenameSeries(Elemwise):
+    _parameters = ["frame", "index"]
+    _keyword_only = ["index"]
+    operation = M.rename
 
 
 class Fillna(Elemwise):
@@ -1684,6 +1716,23 @@ class ToTimestamp(Elemwise):
         )
 
 
+class ToNumeric(Elemwise):
+    _parameters = ["frame", "errors", "downcast"]
+    _defaults = {"errors": "raise", "downcast": None}
+    operation = staticmethod(pd.to_numeric)
+
+    def _divisions(self):
+        return tuple(
+            pd.Index(
+                pd.to_numeric(
+                    self.frame.divisions,
+                    errors=self.errors,
+                    downcast=self.downcast,
+                )
+            )
+        )
+
+
 class AsType(Elemwise):
     """A good example of writing a trivial blockwise operation"""
 
@@ -1728,10 +1777,24 @@ class IsNa(Elemwise):
     operation = M.isna
 
 
+class Mask(Elemwise):
+    _projection_passthrough = True
+    _parameters = ["frame", "cond", "other"]
+    _defaults = {"other": np.nan}
+    operation = M.mask
+
+
 class Round(Elemwise):
     _projection_passthrough = True
     _parameters = ["frame", "decimals"]
     operation = M.round
+
+
+class Where(Elemwise):
+    _projection_passthrough = True
+    _parameters = ["frame", "cond", "other"]
+    _defaults = {"other": np.nan}
+    operation = M.where
 
 
 class Abs(Elemwise):
@@ -1751,6 +1814,12 @@ class RenameAxis(Elemwise):
     }
     _keyword_only = ["mapper", "index", "columns", "axis"]
     operation = M.rename_axis
+
+
+class NotNull(Elemwise):
+    _parameters = ["frame"]
+    operation = M.notnull
+    _projection_passthrough = True
 
 
 class ToFrame(Elemwise):

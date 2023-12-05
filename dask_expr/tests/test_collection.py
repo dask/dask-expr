@@ -10,7 +10,7 @@ from dask.dataframe._compat import PANDAS_GE_200, PANDAS_GE_210
 from dask.dataframe.utils import UNKNOWN_CATEGORIES
 from dask.utils import M
 
-from dask_expr import expr, from_pandas, is_scalar, optimize
+from dask_expr import expr, from_pandas, is_scalar, optimize, to_numeric
 from dask_expr._expr import are_co_aligned
 from dask_expr._reductions import Len
 from dask_expr._shuffle import Shuffle
@@ -323,11 +323,25 @@ def test_to_timestamp(pdf, how):
         lambda df: df.x.isna(),
         lambda df: df.isnull(),
         lambda df: df.x.isnull(),
+        lambda df: df.mask(df.x == 10, 42),
+        lambda df: df.mask(df.x == 10),
+        lambda df: df.mask(lambda df: df.x % 2 == 0, 42),
+        lambda df: df.mask(df.x == 10, df + 2),
+        lambda df: df.mask(df.x == 10, lambda df: df + 2),
+        lambda df: df.x.mask(df.x == 10, 42),
         lambda df: df.abs(),
         lambda df: df.x.abs(),
+        lambda df: df.where(df.x == 10, 42),
+        lambda df: df.where(df.x == 10),
+        lambda df: df.where(lambda df: df.x % 2 == 0, 42),
+        lambda df: df.where(df.x == 10, df + 2),
+        lambda df: df.where(df.x == 10, lambda df: df + 2),
+        lambda df: df.x.where(df.x == 10, 42),
         lambda df: df.rename(columns={"x": "xx"}),
         lambda df: df.rename(columns={"x": "xx"}).xx,
         lambda df: df.rename(columns={"x": "xx"})[["xx"]],
+        lambda df: df.x.rename(index="hello"),
+        lambda df: df.x.rename(index=("hello",)),
         lambda df: df.x.to_frame(),
         lambda df: df.drop(columns="x"),
         lambda df: df.drop(axis=1, labels=["x"]),
@@ -341,6 +355,14 @@ def test_to_timestamp(pdf, how):
 )
 def test_blockwise(func, pdf, df):
     assert_eq(func(pdf), func(df))
+
+
+def test_to_numeric(pdf, df):
+    pdf.x = pdf.x.astype("str")
+    expected = lib.to_numeric(pdf.x)
+    df.x = df.x.astype("str")
+    result = to_numeric(df.x, downcast=None)
+    assert_eq(result, expected)
 
 
 def test_drop_not_implemented(pdf, df):
@@ -919,6 +941,10 @@ def test_drop_duplicates(df, pdf, split_out):
         pdf.drop_duplicates(subset=["x"]),
     )
     assert_eq(
+        df.drop_duplicates(subset=["y"], split_out=split_out),
+        pdf.drop_duplicates(subset=["y"]),
+    )
+    assert_eq(
         df.x.drop_duplicates(split_out=split_out),
         pdf.x.drop_duplicates(),
     )
@@ -1091,6 +1117,16 @@ def test_unknown_partitions_different_root():
 def test_nunique_approx(df):
     result = df.nunique_approx().compute()
     assert 99 < result < 101
+
+
+def test_memory_usage_per_partition(df):
+    expected = lib.Series(part.compute().memory_usage().sum() for part in df.partitions)
+    result = df.memory_usage_per_partition()
+    assert_eq(expected, result)
+
+    expected = lib.Series(part.x.compute().memory_usage() for part in df.partitions)
+    result = df.x.memory_usage_per_partition()
+    assert_eq(expected, result)
 
 
 def test_assign_simplify(pdf):
@@ -1384,3 +1420,18 @@ def test_dtype(df, pdf):
     assert df.x.dtype == pdf.x.dtype
     assert df.index.dtype == pdf.index.dtype
     assert_eq(df.dtypes, pdf.dtypes)
+
+
+def test_isnull():
+    pdf = lib.DataFrame(
+        {
+            "A": range(10),
+            "B": [None] * 10,
+            "C": [1] * 4 + [None] * 4 + [2] * 2,
+        }
+    )
+    df = from_pandas(pdf, npartitions=2)
+    assert_eq(df.notnull(), pdf.notnull())
+    assert_eq(df.isnull(), pdf.isnull())
+    for c in pdf.columns:
+        assert_eq(df[c].isnull(), pdf[c].isnull())
