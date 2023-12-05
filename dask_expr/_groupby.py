@@ -15,7 +15,6 @@ from dask.dataframe.groupby import (
     _groupby_slice_apply,
     _groupby_slice_shift,
     _groupby_slice_transform,
-    _median_aggregate,
     _normalize_spec,
     _nunique_df_chunk,
     _nunique_df_combine,
@@ -592,38 +591,31 @@ class Median(Expr):
 def _median_groupby_aggregate(
     df,
     by=None,
-    aggfunc=None,
     dropna=None,
     sort=False,
     observed=None,
-    levels=None,
     _slice=None,
     **kwargs,
 ):
-    if is_series_like(df):
-        result = df.to_frame().set_index(by[0] if len(by) == 1 else list(by))[df.name]
-    else:
-        result = df.set_index(list(by))
-        if _slice is not None:
-            result = result[_slice]
-    return _groupby_aggregate(
-        result, aggfunc, levels, dropna=dropna, observed=observed, **kwargs
-    )
+    dropna = {"dropna": dropna} if dropna is not None else {}
+    observed = {"observed": observed} if observed is not None else {}
+
+    g = df.groupby(by=by, sort=sort, **observed, **dropna)
+    if _slice is not None:
+        g = g[_slice]
+    return g.median()
 
 
 class BlockwiseMedian(Blockwise):
     _parameters = ["frame", "by", "observed", "dropna", "_slice"]
     operation = staticmethod(_median_groupby_aggregate)
-    groupby_agg = staticmethod(_median_aggregate)
     _keyword_only = ["observed", "dropna", "_slice"]
 
     @property
     def _kwargs(self) -> dict:
         return {
-            "aggfunc": _median_aggregate,
             **_as_dict("observed", self.observed),
             **_as_dict("dropna", self.dropna),
-            "levels": _determine_levels(self.by),
             "_slice": self._slice,
         }
 
