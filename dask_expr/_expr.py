@@ -1517,8 +1517,9 @@ class DropnaFrame(Blockwise):
                 # Don't add unnecessary Projections
                 return
 
+            columns = [col for col in self.frame.columns if col in columns]
             return type(parent)(
-                type(self)(self.frame[sorted(columns)], *self.operands[1:]),
+                type(self)(self.frame[columns], *self.operands[1:]),
                 *parent.operands[1:],
             )
 
@@ -1546,6 +1547,9 @@ class CombineFirst(Blockwise):
                 and self.other.columns == other_columns
             ):
                 return
+
+            frame_columns = [col for col in self.frame.columns if col in columns]
+            other_columns = [col for col in self.other.columns if col in columns]
             return type(parent)(
                 type(self)(self.frame[frame_columns], self.other[other_columns]),
                 *parent.operands[1:],
@@ -1889,8 +1893,9 @@ class ExplodeFrame(ExplodeSeries):
                 # Don't add unnecessary Projections, protects against loops
                 return
 
+            columns = [col for col in self.frame.columns if col in columns]
             return type(parent)(
-                type(self)(self.frame[sorted(columns)], *self.operands[1:]),
+                type(self)(self.frame[columns], *self.operands[1:]),
                 *parent.operands[1:],
             )
 
@@ -1933,8 +1938,9 @@ class Assign(Elemwise):
                 # Protect against pushing the same projection twice
                 return
 
+            columns = [col for col in self.frame.columns if col in columns]
             return type(parent)(
-                type(self)(self.frame[sorted(columns)], *self.operands[1:]),
+                type(self)(self.frame[columns], *self.operands[1:]),
                 *parent.operands[1:],
             )
 
@@ -2724,6 +2730,51 @@ class BFill(FFill):
             enforce_metadata=self.enforce_metadata,
             kwargs=self.kwargs,
         )
+
+
+class Shift(MapOverlap):
+    _parameters = ["frame", "periods", "freq"]
+    _defaults = {"periods": 1, "freq": None}
+
+    func = M.shift
+    enforce_metadata = True
+    before = 0
+    after = 0
+
+    def _divisions(self):
+        return self.frame.divisions
+
+    @functools.cached_property
+    def _meta(self):
+        return meta_nonempty(self.frame._meta).shift(**self.kwargs)
+
+    @functools.cached_property
+    def kwargs(self):
+        return dict(periods=self.periods, freq=self.freq)
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+
+    def _lower(self):
+        return None
+
+    def _simplify_down(self):
+        if self.freq is None:
+            self.before, self.after = (
+                (self.periods, 0) if self.periods > 0 else (0, -self.periods)
+            )
+            return MapOverlap(
+                frame=self.frame,
+                func=self.func,
+                before=self.before,
+                after=self.after,
+                meta=self._meta,
+                enforce_metadata=self.enforce_metadata,
+                kwargs=self.kwargs,
+            )
+        else:
+            raise NotImplementedError()
 
 
 class Fused(Blockwise):

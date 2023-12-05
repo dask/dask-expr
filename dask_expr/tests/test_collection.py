@@ -24,7 +24,7 @@ lib = _backend_library()
 @pytest.fixture
 def pdf():
     pdf = lib.DataFrame({"x": range(100)})
-    pdf["y"] = pdf.x * 10.0
+    pdf["y"] = pdf.x // 7  # Not unique; duplicates span different partitions
     yield pdf
 
 
@@ -221,6 +221,19 @@ def test_ffill_and_bfill(limit, axis, how):
     df = from_pandas(pdf, npartitions=2)
     actual = getattr(df, how)(axis=axis, limit=limit)
     expected = getattr(pdf, how)(axis=axis, limit=limit)
+    assert_eq(actual, expected)
+
+
+@pytest.mark.parametrize("periods", (1, 2))
+@pytest.mark.parametrize("freq", (None, "1h"))
+@pytest.mark.parametrize("axis", ("index", 0, "columns", 1))
+def test_shift(pdf, df, periods, freq, axis):
+    if axis in (1, "columns"):
+        pytest.xfail("shift(axis=1) not yet supported")
+    if freq is not None:
+        pytest.xfail("shift w/ freq set not yet supported")
+    actual = df.shift(periods=1)
+    expected = pdf.shift(periods=1)
     assert_eq(actual, expected)
 
 
@@ -952,16 +965,20 @@ def test_drop_duplicates(df, pdf, split_out):
         check_index=split_out is not True,
     )
     assert_eq(
-        df.drop_duplicates(subset=["x"], split_out=split_out),
-        pdf.drop_duplicates(subset=["x"]),
-    )
-    assert_eq(
         df.drop_duplicates(subset=["y"], split_out=split_out),
         pdf.drop_duplicates(subset=["y"]),
     )
     assert_eq(
-        df.x.drop_duplicates(split_out=split_out),
-        pdf.x.drop_duplicates(),
+        df.y.drop_duplicates(split_out=split_out),
+        pdf.y.drop_duplicates(),
+    )
+
+    actual = df.set_index("y").index.drop_duplicates(split_out=split_out)
+    if split_out is True:
+        actual = actual.compute().sort_values()  # shuffle is unordered
+    assert_eq(
+        actual,
+        pdf.set_index("y").index.drop_duplicates(),
     )
 
     with pytest.raises(KeyError, match="'a'"):
