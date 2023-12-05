@@ -15,6 +15,7 @@ from dask.dataframe.groupby import (
     _groupby_slice_apply,
     _groupby_slice_shift,
     _groupby_slice_transform,
+    _median_aggregate,
     _normalize_spec,
     _nunique_df_chunk,
     _nunique_df_combine,
@@ -25,6 +26,7 @@ from dask.dataframe.groupby import (
 )
 from dask.utils import M, is_index_like
 
+from dask_expr import Repartition
 from dask_expr._collection import DataFrame, Index, Series, new_collection
 from dask_expr._expr import (
     Assign,
@@ -543,15 +545,87 @@ class NUnique(SingleAggregation):
 
 
 class Median(Expr):
-    _parameters = ["frame", "by", "observed", "dropna", "_slice", "shuffle_backend"]
-    _defaults = {"observed": None, "dropna": None, "_slice": None}
+    _parameters = [
+        "frame",
+        "by",
+        "observed",
+        "dropna",
+        "_slice",
+        "shuffle_backend",
+        "split_out",
+    ]
+    _defaults = {"observed": None, "dropna": None, "_slice": None, "split_out": True}
+
+    def _divisions(self):
+        npartitions = (
+            self.frame.npartitions if self.split_out is True else self.split_out
+        )
+        return (None,) * (npartitions + 1)
+
+    @functools.cached_property
+    def _meta(self):
+        by = self.by if not isinstance(self.by, Expr) else self.by._meta
+        result = self.frame._meta.groupby(by).median()
+        if self._slice is not None:
+            return result[self._slice]
+        return result
 
     def _lower(self):
-        return Shuffle(self.frame, self.by[0], self.frame.npartitions)
+        frame = Shuffle(self.frame, self.by[0], self.frame.npartitions)
+        frame = BlockwiseMedian(frame, self.by, self.observed, self.dropna, self._slice)
+        if self.split_out is not True:
+            frame = Repartition(frame, new_partitions=self.split_out)
+        return frame
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            by_columns = self.by if not isinstance(self.by, Expr) else []
+            columns = sorted(set(parent.columns + by_columns))
+            if columns == self.frame.columns:
+                return
+            return type(parent)(
+                type(self)(self.frame[columns], *self.operands[1:]),
+                *parent.operands[1:],
+            )
+
+
+def _median_groupby_aggregate(
+    df,
+    by=None,
+    aggfunc=None,
+    dropna=None,
+    sort=False,
+    observed=None,
+    levels=None,
+    _slice=None,
+    **kwargs,
+):
+    if is_series_like(df):
+        result = df.to_frame().set_index(by[0] if len(by) == 1 else list(by))[df.name]
+    else:
+        result = df.set_index(list(by))
+        if _slice is not None:
+            result = result[_slice]
+    return _groupby_aggregate(
+        result, aggfunc, levels, dropna=dropna, observed=observed, **kwargs
+    )
 
 
 class BlockwiseMedian(Blockwise):
-    _parameters = ["frame", "by", "observed", "dropna", "shuffle_backend"]
+    _parameters = ["frame", "by", "observed", "dropna", "_slice"]
+    operation = staticmethod(_median_groupby_aggregate)
+    groupby_agg = staticmethod(_median_aggregate)
+    _keyword_only = ["observed", "dropna", "_slice"]
+
+    @property
+    def _kwargs(self) -> dict:
+        return {
+            "aggfunc": _median_aggregate,
+            **_as_dict("observed", self.observed),
+            **_as_dict("dropna", self.dropna),
+            "levels": _determine_levels(self.by),
+            "_slice": self._slice,
+        }
 
 
 class GroupByApply(Expr):
@@ -993,4 +1067,17 @@ class GroupBy:
         assert self._slice is not None and is_scalar(self._slice)
         return self._aca_agg(
             NUnique, split_every=split_every, split_out=split_out, _slice=self._slice
+        )
+
+    def median(self, split_every=None, split_out=True, shuffle_backend=None):
+        return new_collection(
+            Median(
+                self.obj.expr,
+                self.by,
+                self.observed,
+                self.dropna,
+                self._slice,
+                shuffle_backend,
+                split_out,
+            )
         )
