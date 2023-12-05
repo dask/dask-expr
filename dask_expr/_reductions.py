@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import toolz
 from dask.dataframe import hyperloglog, methods
+from dask.dataframe._compat import PANDAS_GE_200
 from dask.dataframe.core import (
     _concat,
     idxmaxmin_agg,
@@ -502,13 +503,12 @@ class DropDuplicates(Unique):
 
     @property
     def chunk_kwargs(self):
-        if is_index_like(self.frame._meta):
-            return {}
-        if is_series_like(self.frame._meta):
-            return {"ignore_index": self.ignore_index}
+        out = {}
         if is_dataframe_like(self.frame._meta):
-            return {"ignore_index": self.ignore_index, "subset": self.subset}
-        raise AssertionError("unreachable")  # pragma: nocover
+            out["subset"] = self.subset
+        if PANDAS_GE_200 and not is_index_like(self.frame._meta):
+            out["ignore_index"] = self.ignore_index
+        return out
 
     def _simplify_up(self, parent):
         if self.subset is not None and isinstance(parent, Projection):
