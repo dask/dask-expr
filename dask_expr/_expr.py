@@ -2606,10 +2606,9 @@ def optimize_blockwise_fusion(expr):
 class FFill(MapOverlap):
     _parameters = [
         "frame",
-        "axis",
         "limit",
     ]
-    _defaults = {"axis": 0, "limit": None}
+    _defaults = {"limit": None}
     how = "ffill"
     before = 1
     after = 0
@@ -2632,7 +2631,7 @@ class FFill(MapOverlap):
 
     @functools.cached_property
     def kwargs(self):
-        return dict(how=self.how, axis=self.axis, limit=self.limit)
+        return dict(how=self.how, limit=self.limit)
 
     def _lower(self):
         return None
