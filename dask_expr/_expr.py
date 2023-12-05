@@ -2603,14 +2603,14 @@ def optimize_blockwise_fusion(expr):
     return expr
 
 
-class Fill(MapOverlap):
+class FFill(MapOverlap):
     _parameters = [
         "frame",
-        "how",
         "axis",
         "limit",
     ]
     _defaults = {"axis": 0, "limit": None}
+    how = "ffill"
     before = 1
     after = 0
     enforce_metadata = True
@@ -2639,8 +2639,6 @@ class Fill(MapOverlap):
 
     def _simplify_down(self):
         self.before, self.after = 1 if self.limit is None else self.limit, 0
-        if self.how == "bfill":
-            self.after, self.before = self.before, self.after
 
         return MapOverlap(
             frame=self.frame,
@@ -2651,6 +2649,15 @@ class Fill(MapOverlap):
             enforce_metadata=self.enforce_metadata,
             kwargs=self.kwargs,
         )
+
+
+class BFill(FFill):
+    how = "bfill"
+
+    def _simplify_down(self):
+        mapoverlap = super()._simplify_down()
+        mapoverlap.before, mapoverlap.after = mapoverlap.after, mapoverlap.before
+        return mapoverlap
 
 
 class Fused(Blockwise):
