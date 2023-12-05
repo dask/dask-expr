@@ -25,7 +25,6 @@ from dask.dataframe.groupby import (
 )
 from dask.utils import M, is_index_like
 
-from dask_expr import Repartition
 from dask_expr._collection import DataFrame, Index, Series, new_collection
 from dask_expr._expr import (
     Assign,
@@ -553,7 +552,13 @@ class Median(Expr):
         "shuffle_backend",
         "split_out",
     ]
-    _defaults = {"observed": None, "dropna": None, "_slice": None, "split_out": True}
+    _defaults = {
+        "observed": None,
+        "dropna": None,
+        "_slice": None,
+        "split_out": True,
+        "shuffle_backend": None,
+    }
 
     def _divisions(self):
         npartitions = (
@@ -570,11 +575,11 @@ class Median(Expr):
         return result
 
     def _lower(self):
-        frame = Shuffle(self.frame, self.by[0], self.frame.npartitions)
-        frame = BlockwiseMedian(frame, self.by, self.observed, self.dropna, self._slice)
-        if self.split_out is not True:
-            frame = Repartition(frame, new_partitions=self.split_out)
-        return frame
+        npartitions = (
+            self.frame.npartitions if self.split_out is True else self.split_out
+        )
+        frame = Shuffle(self.frame, self.by[0], npartitions)
+        return BlockwiseMedian(frame, self.by, self.observed, self.dropna, self._slice)
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
@@ -1062,6 +1067,7 @@ class GroupBy:
         )
 
     def median(self, split_every=None, split_out=True, shuffle_backend=None):
+        # Ignore split_every for now
         return new_collection(
             Median(
                 self.obj.expr,
