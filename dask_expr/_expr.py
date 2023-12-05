@@ -713,7 +713,7 @@ class Expr:
         # These are the same anyway
         return IsNa(self)
 
-    def mask(self, cond, other):
+    def mask(self, cond, other=np.nan):
         return Mask(self, cond=cond, other=other)
 
     def round(self, decimals=0):
@@ -1736,6 +1736,7 @@ class IsNa(Elemwise):
 class Mask(Elemwise):
     _projection_passthrough = True
     _parameters = ["frame", "cond", "other"]
+    _defaults = {"other": np.nan}
     operation = M.mask
 
 

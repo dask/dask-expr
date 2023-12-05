@@ -324,6 +324,7 @@ def test_to_timestamp(pdf, how):
         lambda df: df.isnull(),
         lambda df: df.x.isnull(),
         lambda df: df.mask(df.x == 10, 42),
+        lambda df: df.mask(df.x == 10),
         lambda df: df.mask(lambda df: df.x % 2 == 0, 42),
         lambda df: df.mask(df.x == 10, df + 2),
         lambda df: df.mask(df.x == 10, lambda df: df + 2),
