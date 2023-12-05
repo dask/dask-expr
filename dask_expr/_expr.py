@@ -1735,7 +1735,6 @@ class IsNa(Elemwise):
 
 class Mask(Elemwise):
     _projection_passthrough = True
-    # TODO: Note that other are not supported?
     _parameters = ["frame", "cond", "other"]
     operation = M.mask
 
