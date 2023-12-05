@@ -2680,7 +2680,7 @@ class Shift(MapOverlap):
 
     @functools.cached_property
     def _meta(self):
-        return self.frame._meta
+        return meta_nonempty(self.frame._meta).shift(**self.kwargs)
 
     @functools.cached_property
     def kwargs(self):
