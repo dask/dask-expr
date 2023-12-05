@@ -604,6 +604,10 @@ class FrameBase(DaskMethodsMixin):
         axis = _validate_axis(axis)
         return new_collection(Fill(self.expr, "ffill", axis, limit))
 
+    def bfill(self, axis=0, _inplace=False, limit=None, _downcast=None):
+        axis = _validate_axis(axis)
+        return new_collection(Fill(self.expr, "bfill", axis, limit))
+
     def fillna(self, value=None):
         return new_collection(self.expr.fillna(value))
 

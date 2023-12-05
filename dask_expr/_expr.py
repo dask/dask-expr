@@ -2639,6 +2639,9 @@ class Fill(MapOverlap):
 
     def _simplify_down(self):
         self.before, self.after = 1 if self.limit is None else self.limit, 0
+        if self.how == "bfill":
+            self.after, self.before = self.before, self.after
+
         return MapOverlap(
             frame=self.frame,
             func=self.func,

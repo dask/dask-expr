@@ -210,13 +210,14 @@ def test_fillna():
 
 
 @pytest.mark.parametrize("limit", (None, 1, 2))
-def test_ffill(limit):
+@pytest.mark.parametrize("how", ("ffill", "bfill"))
+def test_ffill_and_bfill(limit, how):
     if limit is None:
         pytest.xfail("Need to determine partition size for Fill.before <= frame size")
     pdf = lib.DataFrame({"x": [1, 2, None, None, 5, 6]})
     df = from_pandas(pdf, npartitions=2)
-    actual = df.ffill(limit=limit)
-    expected = pdf.ffill(limit=limit)
+    actual = getattr(df, how)(limit=limit)
+    expected = getattr(pdf, how)(limit=limit)
     assert_eq(actual, expected)
 
 
