@@ -209,6 +209,12 @@ def test_fillna():
     assert_eq(actual, expected)
 
 
+def test_shift(pdf, df):
+    actual = df.shift(periods=1)
+    expected = pdf.shift(periods=1)
+    assert_eq(actual, expected)
+
+
 def test_memory_usage(pdf):
     # Results are not equal with RangeIndex because pandas has one RangeIndex while
     # we have one RangeIndex per partition

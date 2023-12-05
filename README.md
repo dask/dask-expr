@@ -118,6 +118,7 @@ API Coverage
 - `reset_index`
 - `round`
 - `sample`
+- `shift`
 - `sort_values`
 - `select_dtypes`
 - `set_index`
@@ -176,6 +177,7 @@ API Coverage
 - `replace`
 - `reset_index`
 - `round`
+- `shift`
 - `shuffle`
 - `std`
 - `sum`
