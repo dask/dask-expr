@@ -209,6 +209,17 @@ def test_fillna():
     assert_eq(actual, expected)
 
 
+@pytest.mark.parametrize("limit", (None, 1, 2))
+def test_ffill(limit):
+    if limit is None:
+        pytest.xfail("Need to determine partition size for Fill.before <= frame size")
+    pdf = lib.DataFrame({"x": [1, 2, None, None, 5, 6]})
+    df = from_pandas(pdf, npartitions=2)
+    actual = df.ffill(limit=limit)
+    expected = pdf.ffill(limit=limit)
+    assert_eq(actual, expected)
+
+
 def test_memory_usage(pdf):
     # Results are not equal with RangeIndex because pandas has one RangeIndex while
     # we have one RangeIndex per partition

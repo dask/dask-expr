@@ -32,7 +32,7 @@ from dask_expr._align import AlignPartitions
 from dask_expr._categorical import CategoricalAccessor
 from dask_expr._concat import Concat
 from dask_expr._datetime import DatetimeAccessor
-from dask_expr._expr import Eval, Query, no_default
+from dask_expr._expr import Eval, Fill, Query, no_default
 from dask_expr._merge import JoinRecursive, Merge
 from dask_expr._quantiles import RepartitionQuantiles
 from dask_expr._reductions import (
@@ -599,6 +599,10 @@ class FrameBase(DaskMethodsMixin):
 
     def replace(self, to_replace=None, value=no_default, regex=False):
         return new_collection(self.expr.replace(to_replace, value, regex))
+
+    def ffill(self, axis=0, _inplace=False, limit=None, _downcast=None):
+        axis = _validate_axis(axis)
+        return new_collection(Fill(self.expr, "ffill", axis, limit))
 
     def fillna(self, value=None):
         return new_collection(self.expr.fillna(value))

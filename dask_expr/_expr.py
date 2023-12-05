@@ -2603,6 +2603,53 @@ def optimize_blockwise_fusion(expr):
     return expr
 
 
+class Fill(MapOverlap):
+    _parameters = [
+        "frame",
+        "how",
+        "axis",
+        "limit",
+    ]
+    _defaults = {"axis": 0, "limit": None}
+    before = 1
+    after = 0
+    enforce_metadata = True
+
+    @staticmethod
+    def func(frame, how, **kwargs):
+        return getattr(frame, how)(**kwargs)
+
+    def _divisions(self):
+        return self.frame.divisions
+
+    @functools.cached_property
+    def _meta(self):
+        return self.frame._meta
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+
+    @functools.cached_property
+    def kwargs(self):
+        return dict(how=self.how, axis=self.axis, limit=self.limit)
+
+    def _lower(self):
+        return None
+
+    def _simplify_down(self):
+        self.before, self.after = 1 if self.limit is None else self.limit, 0
+        return MapOverlap(
+            frame=self.frame,
+            func=self.func,
+            before=self.before,
+            after=self.after,
+            meta=self._meta,
+            enforce_metadata=self.enforce_metadata,
+            kwargs=self.kwargs,
+        )
+
+
 class Fused(Blockwise):
     """Fused ``Blockwise`` expression
 
