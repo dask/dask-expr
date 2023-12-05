@@ -37,6 +37,8 @@ from dask_expr._merge import JoinRecursive, Merge
 from dask_expr._quantiles import RepartitionQuantiles
 from dask_expr._reductions import (
     DropDuplicates,
+    IsMonotonicDecreasing,
+    IsMonotonicIncreasing,
     Len,
     MemoryUsageFrame,
     MemoryUsageIndex,
@@ -591,6 +593,11 @@ class FrameBase(DaskMethodsMixin):
     def isnull(self):
         return new_collection(self.expr.isnull())
 
+    def mask(self, cond, other=np.nan):
+        cond = cond.expr if isinstance(cond, FrameBase) else cond
+        other = other.expr if isinstance(other, FrameBase) else other
+        return new_collection(self.expr.mask(cond, other))
+
     def round(self, decimals=0):
         return new_collection(self.expr.round(decimals))
 
@@ -616,6 +623,12 @@ class FrameBase(DaskMethodsMixin):
 
     def memory_usage_per_partition(self, index=True, deep=False):
         return new_collection(self.expr.memory_usage_per_partition(index, deep))
+
+    @property
+    def loc(self):
+        from dask_expr._indexing import LocIndexer
+
+        return LocIndexer(self)
 
 
 # Add operator attributes
@@ -1126,6 +1139,14 @@ class Series(FrameBase):
         if is_scalar(index) or isinstance(index, tuple):
             return new_collection(expr.RenameSeries(self.expr, index))
         raise NotImplementedError(f"passing index={type(index)} is not supported")
+
+    @property
+    def is_monotonic_increasing(self):
+        return new_collection(IsMonotonicIncreasing(self.expr))
+
+    @property
+    def is_monotonic_decreasing(self):
+        return new_collection(IsMonotonicDecreasing(self.expr))
 
 
 class Index(Series):
