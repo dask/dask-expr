@@ -1,4 +1,5 @@
 import functools
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -353,7 +354,10 @@ class ApplyConcatApply(Expr):
     @property
     def split_out(self):
         if "split_out" in self._parameters:
-            return self.operand("split_out")
+            split_out = self.operand("split_out")
+            if isinstance(split_out, Callable):
+                split_out = split_out(self.frame.npartitions)
+            return split_out
         else:
             return 1
 
@@ -486,6 +490,10 @@ class DropDuplicates(Unique):
     _defaults = {"subset": None, "ignore_index": False, "split_out": 1}
     chunk = M.drop_duplicates
     aggregate_func = M.drop_duplicates
+
+    @property
+    def split_by(self):
+        return self.subset
 
     @functools.cached_property
     def _meta(self):
@@ -670,7 +678,7 @@ class Reduction(ApplyConcatApply):
         return toolz.first, ()
 
     def _divisions(self):
-        if self.ndim == 0:
+        if self.ndim == 0 or len(self.frame.columns) == 0:
             return (None, None)
         return (min(self.frame.columns), max(self.frame.columns))
 
@@ -1126,3 +1134,15 @@ class TotalMemoryUsageFrame(MemoryUsageFrame):
     @staticmethod
     def reduction_combine(x, is_dataframe):
         return x
+
+
+class IsMonotonicIncreasing(Reduction):
+    reduction_chunk = methods.monotonic_increasing_chunk
+    reduction_combine = methods.monotonic_increasing_combine
+    reduction_aggregate = methods.monotonic_increasing_aggregate
+
+
+class IsMonotonicDecreasing(Reduction):
+    reduction_chunk = methods.monotonic_decreasing_chunk
+    reduction_combine = methods.monotonic_decreasing_combine
+    reduction_aggregate = methods.monotonic_decreasing_aggregate

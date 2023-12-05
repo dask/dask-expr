@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 from dask_expr import from_pandas
@@ -51,6 +52,18 @@ def test_groupby_numeric(pdf, df, api, numeric_only):
     expect = getattr(pdf.groupby("x"), api)(numeric_only=numeric_only)["y"]
     assert_eq(agg, expect)
 
+    pdf = pdf.set_index("x")
+    df = from_pandas(pdf, npartitions=10, sort=False)
+    g = df.groupby("x")
+    agg = getattr(g, api)()
+    expect = getattr(pdf.groupby("x"), api)(numeric_only=numeric_only)
+    assert_eq(agg, expect)
+
+    g = df.groupby(["x", "z"])
+    agg = getattr(g, api)()
+    expect = getattr(pdf.groupby(["x", "z"]), api)(numeric_only=numeric_only)
+    assert_eq(agg, expect)
+
 
 @pytest.mark.parametrize(
     "func",
@@ -80,6 +93,15 @@ def test_groupby_mean_slice(pdf, df):
     assert_eq(agg, expect)
 
 
+def test_groupby_nunique(df, pdf):
+    with pytest.raises(AssertionError):
+        df.groupby("x").nunique()
+
+    assert_eq(df.groupby("x").y.nunique(split_out=1), pdf.groupby("x").y.nunique())
+    assert_eq(df.groupby("x").y.nunique(split_out=True), pdf.groupby("x").y.nunique())
+    assert df.groupby("x").y.nunique().npartitions == df.npartitions
+
+
 def test_groupby_series(pdf, df):
     pdf_result = pdf.groupby(pdf.x).sum()
     result = df.groupby(df.x).sum()
@@ -87,7 +109,7 @@ def test_groupby_series(pdf, df):
     result = df.groupby("x").sum()
     assert_eq(result, pdf_result)
 
-    df2 = from_pandas(lib.DataFrame({"a": [1, 2, 3]}))
+    df2 = from_pandas(lib.DataFrame({"a": [1, 2, 3]}), npartitions=2)
 
     with pytest.raises(ValueError, match="DataFrames columns"):
         df.groupby(df2.a)
@@ -157,13 +179,40 @@ def test_groupby_index(pdf):
     assert_eq(result, expected)
 
 
+def test_split_out_automatically():
+    pdf = lib.DataFrame({"a": [1, 2, 3] * 1_000, "b": 1, "c": 1, "d": 1})
+    df = from_pandas(pdf, npartitions=500)
+    q = df.groupby("a").sum()
+    assert q.optimize().npartitions == 1
+    expected = pdf.groupby("a").sum()
+    assert_eq(q, expected)
+
+    q = df.groupby(["a", "b"]).sum()
+    assert q.optimize().npartitions == 5
+    expected = pdf.groupby(["a", "b"]).sum()
+    assert_eq(q, expected)
+
+    q = df.groupby(["a", "b", "c"]).sum()
+    assert q.optimize().npartitions == 10
+    expected = pdf.groupby(["a", "b", "c"]).sum()
+    assert_eq(q, expected)
+
+
 def test_groupby_apply(df, pdf):
     def test(x):
         x["new"] = x.sum().sum()
         return x
 
     assert_eq(df.groupby(df.x).apply(test), pdf.groupby(pdf.x).apply(test))
+    assert_eq(
+        df.groupby(df.x, group_keys=False).apply(test),
+        pdf.groupby(pdf.x, group_keys=False).apply(test),
+    )
     assert_eq(df.groupby("x").apply(test), pdf.groupby("x").apply(test))
+    assert_eq(
+        df.groupby("x").apply(test, meta=pdf.groupby("x").apply(test).head(0)),
+        pdf.groupby("x").apply(test),
+    )
 
     query = df.groupby("x").apply(test).optimize(fuse=False)
     assert query.expr.find_operations(Shuffle)
@@ -181,6 +230,10 @@ def test_groupby_transform(df, pdf):
 
     assert_eq(df.groupby(df.x).transform(test), pdf.groupby(pdf.x).transform(test))
     assert_eq(df.groupby("x").transform(test), pdf.groupby("x").transform(test))
+    assert_eq(
+        df.groupby("x").transform(test, meta=pdf.groupby("x").transform(test).head(0)),
+        pdf.groupby("x").transform(test),
+    )
 
     query = df.groupby("x").transform(test).optimize(fuse=False)
     assert query.expr.find_operations(Shuffle)
@@ -195,6 +248,12 @@ def test_groupby_transform(df, pdf):
 def test_groupby_shift(df, pdf):
     assert_eq(df.groupby(df.x).shift(periods=1), pdf.groupby(pdf.x).shift(periods=1))
     assert_eq(df.groupby("x").shift(periods=1), pdf.groupby("x").shift(periods=1))
+    assert_eq(
+        df.groupby("x").shift(
+            periods=1, meta=pdf.groupby("x").shift(periods=1).head(0)
+        ),
+        pdf.groupby("x").shift(periods=1),
+    )
 
     query = df.groupby("x").shift(periods=1).optimize(fuse=False)
     assert query.expr.find_operations(Shuffle)
@@ -254,3 +313,26 @@ def test_groupby_projection_split_out(df, pdf):
     df = from_pandas(pdf, npartitions=50)
     result = df.groupby("y")["x"].sum(split_out=2)
     assert_eq(result, pdf_result)
+
+
+def test_groupby_co_aligned_grouper(df, pdf):
+    assert_eq(
+        df[["y"]].groupby(df["x"]).sum(),
+        pdf[["y"]].groupby(pdf["x"]).sum(),
+    )
+
+
+@pytest.mark.parametrize("func", ["var", "std"])
+@pytest.mark.parametrize("observed", [True, False])
+@pytest.mark.parametrize("dropna", [True, False])
+def test_groupby_var_dropna_observed(dropna, observed, func):
+    df = lib.DataFrame(
+        {
+            "a": [11, 12, 31, 1, 2, 3, 4, 5, 6, 10],
+            "b": lib.Categorical(values=[1] * 9 + [np.nan], categories=[1, 2]),
+        }
+    )
+    ddf = from_pandas(df, npartitions=3)
+    dd_result = getattr(ddf.groupby("b", observed=observed, dropna=dropna), func)()
+    pdf_result = getattr(df.groupby("b", observed=observed, dropna=dropna), func)()
+    assert_eq(dd_result, pdf_result)

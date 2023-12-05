@@ -4,6 +4,7 @@ from dask.core import flatten
 from dask.dataframe.dispatch import make_meta, meta_nonempty
 from dask.dataframe.shuffle import partitioning_index
 from dask.utils import M, apply, get_default_shuffle_method
+from toolz import merge_sorted, unique
 
 from dask_expr._expr import (
     Blockwise,
@@ -50,6 +51,7 @@ class Merge(Expr):
         "suffixes",
         "indicator",
         "shuffle_backend",
+        "_npartitions",
     ]
     _defaults = {
         "how": "inner",
@@ -60,6 +62,7 @@ class Merge(Expr):
         "suffixes": ("_x", "_y"),
         "indicator": False,
         "shuffle_backend": None,
+        "_npartitions": None,
     }
 
     # combine similar variables
@@ -90,17 +93,62 @@ class Merge(Expr):
         right = meta_nonempty(self.right._meta)
         return make_meta(left.merge(right, **self.kwargs))
 
+    @functools.cached_property
+    def _npartitions(self):
+        if self.operand("_npartitions") is not None:
+            return self.operand("_npartitions")
+        return max(self.left.npartitions, self.right.npartitions)
+
     def _divisions(self):
-        npartitions_left = self.left.npartitions
-        npartitions_right = self.right.npartitions
-        npartitions = max(npartitions_left, npartitions_right)
-        return (None,) * (npartitions + 1)
+        if self.merge_indexed_left and self.merge_indexed_right:
+            return list(unique(merge_sorted(self.left.divisions, self.right.divisions)))
+
+        if self._is_single_partition_broadcast:
+            _npartitions = max(self.left.npartitions, self.right.npartitions)
+        else:
+            _npartitions = self._npartitions
+
+        return (None,) * (_npartitions + 1)
+
+    @functools.cached_property
+    def _is_single_partition_broadcast(self):
+        _npartitions = max(self.left.npartitions, self.right.npartitions)
+        return (
+            _npartitions == 1
+            or self.left.npartitions == 1
+            and self.how in ("right", "inner")
+            or self.right.npartitions == 1
+            and self.how in ("left", "inner")
+        )
+
+    @functools.cached_property
+    def merge_indexed_left(self):
+        return (
+            self.left_index or _contains_index_name(self.left, self.left_on)
+        ) and self.left.known_divisions
+
+    @functools.cached_property
+    def merge_indexed_right(self):
+        return (
+            self.right_index or _contains_index_name(self.right, self.right_on)
+        ) and self.right.known_divisions
+
+    @functools.cached_property
+    def merge_indexed_left(self):
+        return (
+            self.left_index or _contains_index_name(self.left, self.left_on)
+        ) and self.left.known_divisions
+
+    @functools.cached_property
+    def merge_indexed_right(self):
+        return (
+            self.right_index or _contains_index_name(self.right, self.right_on)
+        ) and self.right.known_divisions
 
     def _lower(self):
         # Lower from an abstract expression
         left = self.left
         right = self.right
-        how = self.how
         left_on = self.left_on
         right_on = self.right_on
         left_index = self.left_index
@@ -113,23 +161,8 @@ class Merge(Expr):
         #  3. Add/leverage partition statistics
 
         # Check for "trivial" broadcast (single partition)
-        npartitions = max(left.npartitions, right.npartitions)
-        if (
-            npartitions == 1
-            or left.npartitions == 1
-            and how in ("right", "inner")
-            or right.npartitions == 1
-            and how in ("left", "inner")
-        ):
+        if self._is_single_partition_broadcast:
             return BlockwiseMerge(left, right, **self.kwargs)
-
-        # Check if we are merging on indices with known divisions
-        merge_indexed_left = (
-            left_index or _contains_index_name(left, left_on)
-        ) and left.known_divisions
-        merge_indexed_right = (
-            right_index or _contains_index_name(right, right_on)
-        ) and right.known_divisions
 
         # NOTE: Merging on an index is fragile. Pandas behavior
         # depends on the actual data, and so we cannot use `meta`
@@ -139,12 +172,11 @@ class Merge(Expr):
 
         shuffle_left_on = left_on
         shuffle_right_on = right_on
-        if merge_indexed_left and merge_indexed_right:
+        if self.merge_indexed_left and self.merge_indexed_right:
             # fully-indexed merge
-            if left.npartitions >= right.npartitions:
-                right = Repartition(right, new_divisions=left.divisions, force=True)
-            else:
-                left = Repartition(left, new_divisions=right.divisions, force=True)
+            divisions = list(unique(merge_sorted(left.divisions, right.divisions)))
+            right = Repartition(right, new_divisions=divisions, force=True)
+            left = Repartition(left, new_divisions=divisions, force=True)
             shuffle_left_on = shuffle_right_on = None
 
         # TODO:
@@ -170,6 +202,7 @@ class Merge(Expr):
             return HashJoinP2P(
                 left,
                 right,
+                how=self.how,
                 left_on=left_on,
                 right_on=right_on,
                 suffixes=self.suffixes,
@@ -178,6 +211,7 @@ class Merge(Expr):
                 right_index=right_index,
                 shuffle_left_on=shuffle_left_on,
                 shuffle_right_on=shuffle_right_on,
+                _npartitions=self.operand("_npartitions"),
             )
 
         if shuffle_left_on:
@@ -185,8 +219,9 @@ class Merge(Expr):
             left = Shuffle(
                 left,
                 shuffle_left_on,
-                npartitions_out=npartitions,
+                npartitions_out=self._npartitions,
                 backend=shuffle_backend,
+                index_shuffle=left_index,
             )
 
         if shuffle_right_on:
@@ -194,8 +229,9 @@ class Merge(Expr):
             right = Shuffle(
                 right,
                 shuffle_right_on,
-                npartitions_out=npartitions,
+                npartitions_out=self._npartitions,
                 backend=shuffle_backend,
+                index_shuffle=right_index,
             )
 
         # Blockwise merge
@@ -405,6 +441,7 @@ class HashJoinP2P(Merge, PartitionsFiltered):
         "_partitions",
         "shuffle_left_on",
         "shuffle_right_on",
+        "_npartitions",
     ]
     _defaults = {
         "how": "inner",
@@ -417,6 +454,7 @@ class HashJoinP2P(Merge, PartitionsFiltered):
         "_partitions": None,
         "shuffle_left_on": None,
         "shuffle_right_on": None,
+        "_npartitions": None,
     }
 
     def _lower(self):
@@ -462,6 +500,7 @@ class HashJoinP2P(Merge, PartitionsFiltered):
                 i,
                 self.left._meta,
                 self._partitions,
+                self.left_index,
             )
         for i in range(self.right.npartitions):
             transfer_keys_right.append((transfer_name_right, i))
@@ -475,6 +514,7 @@ class HashJoinP2P(Merge, PartitionsFiltered):
                 i,
                 self.right._meta,
                 self._partitions,
+                self.right_index,
             )
 
         dsk[_barrier_key_left] = (shuffle_barrier, token_left, transfer_keys_left)
@@ -520,8 +560,13 @@ def create_assign_index_merge_transfer():
         input_partition: int,
         meta: pd.DataFrame,
         parts_out: set[int],
+        index_merge,
     ):
-        index = _select_columns_or_index(df, index)
+        if index_merge:
+            index = df[[]]
+            index["_index"] = df.index
+        else:
+            index = _select_columns_or_index(df, index)
         if isinstance(index, (str, list, tuple)):
             # Assume column selection from df
             index = [index] if isinstance(index, str) else list(index)

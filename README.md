@@ -85,6 +85,7 @@ API Coverage
 - `drop`
 - `drop_duplicates`
 - `dropna`
+- `dtypes`
 - `eval`
 - `explode`
 - `fillna`
@@ -92,14 +93,19 @@ API Coverage
 - `head`
 - `idxmax`
 - `idxmin`
+- `ìloc`
 - `index`
 - `isin`
 - `isna`
 - `join`
 - `map`
+- `map_overlap`
 - `map_partitions`
+- `mask`
 - `max`
+- `mean`
 - `memory_usage`
+- `memory_usage_per_partition`
 - `merge`
 - `min`
 - `min`
@@ -110,6 +116,7 @@ API Coverage
 - `partitions`
 - `pivot_table`
 - `prod`
+- `query`
 - `rename`
 - `rename_axis`
 - `repartition`
@@ -128,6 +135,7 @@ API Coverage
 - `to_timestamp`
 - `var`
 - `visualize`
+- `where`
 
 
 **`dask_expr.Series`**
@@ -150,6 +158,7 @@ API Coverage
 - `dask`
 - `drop_duplicates`
 - `dropna`
+- `dtype`
 - `explode`
 - `fillna`
 - `groupby`
@@ -161,8 +170,11 @@ API Coverage
 - `isna`
 - `map`
 - `map_partitions`
+- `mask`
 - `max`
+- `mean`
 - `memory_usage`
+- `memory_usage_per_partition`
 - `min`
 - `min`
 - `mode`
@@ -172,6 +184,7 @@ API Coverage
 - `partitions`
 - `prod`
 - `product`
+- `rename`
 - `rename_axis`
 - `repartition`
 - `replace`
@@ -187,6 +200,7 @@ API Coverage
 - `value_counts`
 - `var`
 - `visualize`
+- `where`
 
 
 **`dask_expr.Index`**
@@ -202,6 +216,7 @@ API Coverage
 - `copy`
 - `count`
 - `dask`
+- `dtype`
 - `fillna`
 - `groupby`
 - `head`
@@ -219,6 +234,7 @@ API Coverage
 - `nunique_approx`
 - `partitions`
 - `prod`
+- `rename`
 - `rename_axis`
 - `repartition`
 - `replace`
@@ -280,6 +296,7 @@ API Coverage
 **`dask_expr._rolling.Rolling`**
 
 - `agg`
+- `apply`
 - `count`
 - `max`
 - `mean`
@@ -332,3 +349,14 @@ API Coverage
 - `CategoricalAccessor`
 - `DatetimeAccessor`
 - `StringAccessor`
+
+**Function**
+
+- `concat`
+- `from_pandas`
+- `merge`
+- `pivot_table`
+- `read_csv`
+- `read_parquet`
+- `repartition`
+- `to_parquet`
