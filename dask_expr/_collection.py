@@ -620,6 +620,12 @@ class FrameBase(DaskMethodsMixin):
 
         return LocIndexer(self)
 
+    def notnull(self):
+        return new_collection(expr.NotNull(self.expr))
+
+    def isnull(self):
+        return ~self.notnull()
+
 
 # Add operator attributes
 for op in [
