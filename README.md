@@ -97,6 +97,7 @@ API Coverage
 - `map`
 - `map_overlap`
 - `map_partitions`
+- `mask`
 - `max`
 - `mean`
 - `memory_usage`
@@ -129,6 +130,7 @@ API Coverage
 - `to_timestamp`
 - `var`
 - `visualize`
+- `where`
 
 
 **`dask_expr.Series`**
@@ -159,6 +161,7 @@ API Coverage
 - `isna`
 - `map`
 - `map_partitions`
+- `mask`
 - `max`
 - `mean`
 - `memory_usage`
@@ -186,6 +189,7 @@ API Coverage
 - `value_counts`
 - `var`
 - `visualize`
+- `where`
 
 
 **`dask_expr.Index`**
