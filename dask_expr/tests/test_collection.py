@@ -236,12 +236,10 @@ def test_ffill_and_bfill(limit, axis, how):
 @pytest.mark.parametrize("freq", (None, "1h"))
 @pytest.mark.parametrize("axis", ("index", 0, "columns", 1))
 def test_shift(pdf, df, periods, freq, axis):
-    if axis in (1, "columns"):
-        pytest.xfail("shift(axis=1) not yet supported")
     if freq is not None:
         pytest.xfail("shift w/ freq set not yet supported")
-    actual = df.shift(periods=1)
-    expected = pdf.shift(periods=1)
+    actual = df.shift(periods=periods, axis=axis, freq=freq)
+    expected = pdf.shift(periods=periods, axis=axis, freq=freq)
     assert_eq(actual, expected)
 
 

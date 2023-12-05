@@ -2751,8 +2751,8 @@ class BFill(FFill):
 
 
 class Shift(MapOverlap):
-    _parameters = ["frame", "periods", "freq"]
-    _defaults = {"periods": 1, "freq": None}
+    _parameters = ["frame", "periods", "freq", "axis"]
+    _defaults = {"periods": 1, "freq": None, "axis": 0}
 
     func = M.shift
     enforce_metadata = True
@@ -2768,7 +2768,7 @@ class Shift(MapOverlap):
 
     @functools.cached_property
     def kwargs(self):
-        return dict(periods=self.periods, freq=self.freq)
+        return dict(periods=self.periods, freq=self.freq, axis=self.axis)
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
@@ -2778,7 +2778,17 @@ class Shift(MapOverlap):
         return None
 
     def _simplify_down(self):
-        if self.freq is None:
+        if self.axis == 1:
+            return MapPartitions(
+                frame=self.frame,
+                func=self.func,
+                meta=self._meta,
+                enforce_metadata=False,
+                transform_divisions=False,
+                clear_divisions=False,
+                kwargs=self.kwargs,
+            )
+        elif self.freq is None:
             self.before, self.after = (
                 (self.periods, 0) if self.periods > 0 else (0, -self.periods)
             )
