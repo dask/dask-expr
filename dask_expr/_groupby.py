@@ -3,6 +3,7 @@ import math
 
 import numpy as np
 from dask import is_dask_collection
+from dask.core import flatten
 from dask.dataframe.core import _concat, is_dataframe_like, is_series_like
 from dask.dataframe.dispatch import concat, make_meta, meta_nonempty
 from dask.dataframe.groupby import (
@@ -95,6 +96,18 @@ class GroupByApplyConcatApply(ApplyConcatApply):
         else:
             return [x for x in self.by if not isinstance(x, Expr)]
 
+    @property
+    def split_by(self):
+        if isinstance(self.by, Expr):
+            return self.by.columns
+        else:
+            return list(
+                flatten(
+                    [[x] if not isinstance(x, Expr) else x.columns for x in self.by],
+                    container=list,
+                )
+            )
+
     @functools.cached_property
     def _meta_chunk(self):
         meta = meta_nonempty(self.frame._meta)
@@ -177,10 +190,6 @@ class SingleAggregation(GroupByApplyConcatApply):
 
     groupby_chunk = None
     groupby_aggregate = None
-
-    @property
-    def split_by(self):
-        return self._by_columns
 
     @classmethod
     def chunk(cls, df, *by, **kwargs):
@@ -270,10 +279,6 @@ class GroupbyAggregation(GroupByApplyConcatApply):
         "split_out": None,
         "sort": None,
     }
-
-    @property
-    def split_by(self):
-        return self._by_columns
 
     @functools.cached_property
     def spec(self):
@@ -461,7 +466,15 @@ class Var(GroupByReduction):
 
     @property
     def split_by(self):
-        return self._by_columns
+        if isinstance(self.by, Expr):
+            return self.by.columns
+        else:
+            return list(
+                flatten(
+                    [[x] if not isinstance(x, Expr) else x.columns for x in self.by],
+                    container=list,
+                )
+            )
 
     @staticmethod
     def chunk(frame, *by, **kwargs):
@@ -654,7 +667,8 @@ class Median(Expr):
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
-            columns = sorted(set(parent.columns + self._by_columns))
+            by_columns = self.by if not isinstance(self.by, Expr) else []
+            columns = sorted(set(parent.columns + by_columns))
             if columns == self.frame.columns:
                 return
             return type(parent)(

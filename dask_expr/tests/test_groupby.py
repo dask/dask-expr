@@ -58,6 +58,22 @@ def test_groupby_numeric(pdf, df, api, numeric_only):
     expect = getattr(pdf.groupby("x"), api)(numeric_only=numeric_only)["y"]
     assert_eq(agg, expect)
 
+    g = df.groupby([df.x])
+    agg = getattr(g, api)(numeric_only=numeric_only)["y"]
+
+    expect = getattr(pdf.groupby([pdf.x]), api)(numeric_only=numeric_only)["y"]
+    assert_eq(agg, expect)
+
+    g = df.groupby([df.x, df.z])
+    agg = getattr(g, api)()
+    expect = getattr(pdf.groupby([pdf.x, pdf.z]), api)(numeric_only=numeric_only)
+    assert_eq(agg, expect)
+
+    g = df.groupby([df.x, "z"])
+    agg = getattr(g, api)()
+    expect = getattr(pdf.groupby([pdf.x, "z"]), api)(numeric_only=numeric_only)
+    assert_eq(agg, expect)
+
     pdf = pdf.set_index("x")
     df = from_pandas(pdf, npartitions=10, sort=False)
     g = df.groupby("x")
@@ -298,15 +314,20 @@ def test_groupby_shift(df, pdf):
 @pytest.mark.parametrize("sort", [True, False])
 @pytest.mark.parametrize("split_out", [1, 2])
 def test_groupby_single_agg_split_out(pdf, df, api, sort, split_out):
-    # g = df.groupby("x", sort=sort)
-    # agg = getattr(g, api)(split_out=split_out)
-    #
-    # expect = getattr(pdf.groupby("x", sort=sort), api)()
-    # assert_eq(agg, expect, sort_results=not sort)
+    g = df.groupby("x", sort=sort)
+    agg = getattr(g, api)(split_out=split_out)
+
+    expect = getattr(pdf.groupby("x", sort=sort), api)()
+    assert_eq(agg, expect, sort_results=not sort)
 
     g = df.y.groupby(df.x, sort=sort)
     agg = getattr(g, api)(split_out=split_out)
     expect = getattr(pdf.y.groupby(pdf.x, sort=sort), api)()
+    assert_eq(agg, expect, sort_results=not sort)
+
+    g = df.y.groupby([df.x, df.z], sort=sort)
+    agg = getattr(g, api)(split_out=split_out)
+    expect = getattr(pdf.y.groupby([pdf.x, pdf.z], sort=sort), api)()
     assert_eq(agg, expect, sort_results=not sort)
 
 
