@@ -2775,10 +2775,10 @@ class ShiftAxis0(MapOverlap):
     axis = 0
 
     def _divisions(self):
-        return (
-            _calc_maybe_new_divisions(self.frame, self.periods, self.freq)
-            or self.frame.divisions
-        )
+        divisions = _calc_maybe_new_divisions(self.frame, self.periods, self.freq)
+        if divisions is None:
+            divisions = (None,) * (self.frame.npartitions + 1)
+        return divisions
 
     @functools.cached_property
     def _meta(self):
