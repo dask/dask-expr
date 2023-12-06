@@ -2726,10 +2726,14 @@ class BFill(FFill):
 
     @property
     def before(self):
+        # bfill is the opposite direction of ffill, so
+        # we swap before with after of ffill.
         return super().after
 
     @property
     def after(self):
+        # bfill is the opposite direction of ffill, so
+        # we swap after with before of ffill.
         return super().before
 
 
