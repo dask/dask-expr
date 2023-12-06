@@ -18,6 +18,7 @@ from dask.dataframe.groupby import (
     _normalize_spec,
     _nunique_df_chunk,
     _nunique_df_combine,
+    _nunique_series_chunk,
     _value_counts,
     _value_counts_aggregate,
     _var_agg,
@@ -559,6 +560,19 @@ class NUnique(SingleAggregation):
     @functools.cached_property
     def combine_kwargs(self):
         return {"levels": self.levels}
+
+
+def nunique_series_chunk(df, by, **kwargs):
+    if not is_series_like(by):
+        return _nunique_series_chunk(df, *by, **kwargs)
+    else:
+        return _nunique_series_chunk(df, by, **kwargs)
+
+
+class NUniqueSeries(NUnique):
+    chunk = staticmethod(nunique_series_chunk)
+    combine = staticmethod(nunique_df_combine)
+    aggregate = staticmethod(nunique_df_aggregate)
 
 
 class Median(Expr):
@@ -1158,3 +1172,9 @@ class SeriesGroupBy(GroupBy):
             result = result[result.columns[0]]
 
         return result
+
+    def nunique(self, split_every=None, split_out=True):
+        slice = self._slice or self.obj.name
+        return self._aca_agg(
+            NUniqueSeries, split_every=split_every, split_out=split_out, _slice=slice
+        )
