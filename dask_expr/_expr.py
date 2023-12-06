@@ -50,6 +50,9 @@ class Expr(core.Expr):
         except AttributeError:
             return 0
 
+    def __dask_keys__(self):
+        return [(self._name, i) for i in range(self.npartitions)]
+
     def optimize(self, **kwargs):
         return optimize(self, **kwargs)
 
