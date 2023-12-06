@@ -1499,6 +1499,15 @@ class AlignGetitem(Blockwise):
         return self.frame._divisions()
 
 
+class ScalarToSeries(Blockwise):
+    _parameters = ["frame", "index"]
+    _defaults = {"index": 0}
+
+    @staticmethod
+    def operation(value, index=0):
+        return pd.Series(value, index=[index])
+
+
 class DropnaSeries(Blockwise):
     _parameters = ["frame"]
     operation = M.dropna
@@ -1735,6 +1744,12 @@ class ToDatetime(Elemwise):
         return kwargs
 
 
+class ToTimedelta(Elemwise):
+    _parameters = ["frame", "unit", "errors"]
+    _defaults = {"unit": None, "errors": "raise"}
+    operation = staticmethod(pd.to_timedelta)
+
+
 class AsType(Elemwise):
     """A good example of writing a trivial blockwise operation"""
 
@@ -1836,6 +1851,13 @@ class ToFrameIndex(Elemwise):
     _defaults = {"name": no_default, "index": True}
     _keyword_only = ["name", "index"]
     operation = M.to_frame
+
+
+class ToSeriesIndex(Elemwise):
+    _parameters = ["frame", "index", "name"]
+    _defaults = {"name": no_default, "index": None}
+    _keyword_only = ["name", "index"]
+    operation = M.to_series
 
 
 class Apply(Elemwise):
@@ -2672,6 +2694,69 @@ def optimize_blockwise_fusion(expr):
             break
 
     return expr
+
+
+class FFill(MapOverlap):
+    _parameters = [
+        "frame",
+        "limit",
+    ]
+    _defaults = {"limit": None}
+    func = M.ffill
+    enforce_metadata = True
+
+    def _divisions(self):
+        return self.frame.divisions
+
+    @functools.cached_property
+    def _meta(self):
+        return self.frame._meta
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+
+    @functools.cached_property
+    def kwargs(self):
+        return dict(limit=self.limit)
+
+    @property
+    def before(self):
+        return 1 if self.limit is None else self.limit
+
+    @property
+    def after(self):
+        return 0
+
+    def _lower(self):
+        return None
+
+    def _simplify_down(self):
+        return MapOverlap(
+            frame=self.frame,
+            func=self.func,
+            before=self.before,
+            after=self.after,
+            meta=self._meta,
+            enforce_metadata=self.enforce_metadata,
+            kwargs=self.kwargs,
+        )
+
+
+class BFill(FFill):
+    func = M.bfill
+
+    @property
+    def before(self):
+        # bfill is the opposite direction of ffill, so
+        # we swap before with after of ffill.
+        return super().after
+
+    @property
+    def after(self):
+        # bfill is the opposite direction of ffill, so
+        # we swap after with before of ffill.
+        return super().before
 
 
 class Shift(MapOverlap):
