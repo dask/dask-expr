@@ -2679,8 +2679,6 @@ class FFill(MapOverlap):
     ]
     _defaults = {"limit": None}
     func = M.ffill
-    before = 1
-    after = 0
     enforce_metadata = True
 
     def _divisions(self):
@@ -2698,12 +2696,18 @@ class FFill(MapOverlap):
     def kwargs(self):
         return dict(limit=self.limit)
 
+    @property
+    def before(self):
+        return 1 if self.limit is None else self.limit
+
+    @property
+    def after(self):
+        return 0
+
     def _lower(self):
         return None
 
     def _simplify_down(self):
-        self.before, self.after = 1 if self.limit is None else self.limit, 0
-
         return MapOverlap(
             frame=self.frame,
             func=self.func,
@@ -2718,18 +2722,13 @@ class FFill(MapOverlap):
 class BFill(FFill):
     func = M.bfill
 
-    def _simplify_down(self):
-        self.after, self.before = 1 if self.limit is None else self.limit, 0
+    @property
+    def before(self):
+        return super().after
 
-        return MapOverlap(
-            frame=self.frame,
-            func=self.func,
-            before=self.before,
-            after=self.after,
-            meta=self._meta,
-            enforce_metadata=self.enforce_metadata,
-            kwargs=self.kwargs,
-        )
+    @property
+    def after(self):
+        return super().before
 
 
 class Shift(MapOverlap):
