@@ -37,8 +37,7 @@ from dask_expr._expr import (
     Eval,
     FFill,
     Query,
-    ShiftAxis0,
-    ShiftAxis1,
+    Shift,
     ToDatetime,
     ToNumeric,
     ToTimedelta,
@@ -663,10 +662,7 @@ class FrameBase(DaskMethodsMixin):
             raise TypeError("periods must be an integer")
 
         axis = _validate_axis(axis)
-        if axis == 0:
-            return new_collection(ShiftAxis0(self.expr, periods, freq))
-        else:
-            return new_collection(ShiftAxis1(self.expr, periods, freq))
+        return new_collection(Shift(self.expr, periods, freq, axis))
 
     def rename_axis(
         self, mapper=no_default, index=no_default, columns=no_default, axis=0
