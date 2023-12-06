@@ -32,7 +32,17 @@ from dask_expr._align import AlignPartitions
 from dask_expr._categorical import CategoricalAccessor
 from dask_expr._concat import Concat
 from dask_expr._datetime import DatetimeAccessor
-from dask_expr._expr import Eval, Query, Shift, ToDatetime, ToNumeric, no_default
+from dask_expr._expr import (
+    BFill,
+    Eval,
+    FFill,
+    Query,
+    Shift,
+    ToDatetime,
+    ToNumeric,
+    ToTimedelta,
+    no_default,
+)
 from dask_expr._merge import JoinRecursive, Merge
 from dask_expr._quantiles import RepartitionQuantiles
 from dask_expr._reductions import (
@@ -252,6 +262,24 @@ class FrameBase(DaskMethodsMixin):
     def copy(self):
         """Return a copy of this object"""
         return new_collection(self.expr)
+
+    def eq(self, other):
+        return self.__eq__(other)
+
+    def ne(self, other):
+        return self.__ne__(other)
+
+    def gt(self, other):
+        return self.__gt__(other)
+
+    def ge(self, other):
+        return self.__ge__(other)
+
+    def lt(self, other):
+        return self.__lt__(other)
+
+    def le(self, other):
+        return self.__le__(other)
 
     def isin(self, values):
         if isinstance(self, DataFrame):
@@ -593,6 +621,18 @@ class FrameBase(DaskMethodsMixin):
 
     def replace(self, to_replace=None, value=no_default, regex=False):
         return new_collection(self.expr.replace(to_replace, value, regex))
+
+    def ffill(self, axis=0, _inplace=False, limit=None, _downcast=None):
+        axis = _validate_axis(axis)
+        if axis == 1:
+            raise NotImplementedError("ffill on axis 1 not implemented")
+        return new_collection(FFill(self.expr, limit))
+
+    def bfill(self, axis=0, _inplace=False, limit=None, _downcast=None):
+        axis = _validate_axis(axis)
+        if axis == 1:
+            raise NotImplementedError("bfill on axis 1 not implemented")
+        return new_collection(BFill(self.expr, limit))
 
     def fillna(self, value=None):
         return new_collection(self.expr.fillna(value))
@@ -1192,6 +1232,11 @@ class Index(Series):
     def __repr__(self):
         return f"<dask_expr.expr.Index: expr={self.expr}>"
 
+    def to_series(self, index=None, name=no_default):
+        if index is not None:
+            raise NotImplementedError
+        return new_collection(expr.ToSeriesIndex(self.expr, index=index, name=name))
+
     def to_frame(self, index=True, name=no_default):
         if not index:
             raise NotImplementedError
@@ -1215,6 +1260,9 @@ class Scalar(FrameBase):
 
     def __dask_postcompute__(self):
         return first, ()
+
+    def to_series(self, index=0) -> Series:
+        return new_collection(expr.ScalarToSeries(self.expr, index=index))
 
 
 def new_collection(expr):
@@ -1545,3 +1593,9 @@ def to_datetime(arg, **kwargs):
     if not isinstance(arg, FrameBase):
         raise TypeError("arg must be a Series or a DataFrame")
     return new_collection(ToDatetime(frame=arg.expr, kwargs=kwargs))
+
+
+def to_timedelta(arg, unit=None, errors="raise"):
+    if not isinstance(arg, Series):
+        raise TypeError("arg must be a Series")
+    return new_collection(ToTimedelta(frame=arg.expr, unit=unit, errors=errors))
