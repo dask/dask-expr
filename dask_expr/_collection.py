@@ -263,6 +263,24 @@ class FrameBase(DaskMethodsMixin):
         """Return a copy of this object"""
         return new_collection(self.expr)
 
+    def eq(self, other):
+        return self.__eq__(other)
+
+    def ne(self, other):
+        return self.__ne__(other)
+
+    def gt(self, other):
+        return self.__gt__(other)
+
+    def ge(self, other):
+        return self.__ge__(other)
+
+    def lt(self, other):
+        return self.__lt__(other)
+
+    def le(self, other):
+        return self.__le__(other)
+
     def isin(self, values):
         if isinstance(self, DataFrame):
             # DataFrame.isin does weird alignment stuff
@@ -1234,6 +1252,9 @@ class Scalar(FrameBase):
 
     def __dask_postcompute__(self):
         return first, ()
+
+    def to_series(self, index=0) -> Series:
+        return new_collection(expr.ScalarToSeries(self.expr, index=index))
 
 
 def new_collection(expr):

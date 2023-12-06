@@ -276,14 +276,26 @@ def test_nlargest_nsmallest(df, pdf, func):
     "func",
     [
         lambda df: df.x > 10,
+        lambda df: df.x.gt(10),
         lambda df: df.x + 20 > df.y,
         lambda df: 10 < df.x,
+        lambda df: df.x.lt(10),
         lambda df: 10 <= df.x,
+        lambda df: df.x.le(10),
         lambda df: 10 == df.x,
+        lambda df: df.x.eq(10),
         lambda df: df.x < df.y,
+        lambda df: df.lt(df),
+        lambda df: df.x.lt(df.y),
         lambda df: df.x > df.y,
+        lambda df: df.gt(df),
+        lambda df: df.x.gt(df.y),
         lambda df: df.x == df.y,
+        lambda df: df.eq(df),
+        lambda df: df.x.eq(df.y),
         lambda df: df.x != df.y,
+        lambda df: df.ne(df),
+        lambda df: df.x.ne(df.y),
     ],
 )
 def test_conditionals(func, pdf, df):
@@ -1525,3 +1537,11 @@ def test_isnull():
     assert_eq(df.isnull(), pdf.isnull())
     for c in pdf.columns:
         assert_eq(df[c].isnull(), pdf[c].isnull())
+
+
+def test_scalar_to_series():
+    sc = from_pandas(lib.Series([1])).sum()
+    ss1 = sc.to_series()
+    ss2 = sc.to_series("xxx")
+    assert_eq(ss1, lib.Series([1]))
+    assert_eq(ss2, lib.Series([1], index=["xxx"]))
