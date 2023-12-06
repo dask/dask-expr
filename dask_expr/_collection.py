@@ -351,26 +351,6 @@ class FrameBase(DaskMethodsMixin):
             )
         )
 
-    def groupby(
-        self, by, group_keys=None, sort=None, observed=None, dropna=None, **kwargs
-    ):
-        from dask_expr._groupby import GroupBy
-
-        if isinstance(by, FrameBase) and not isinstance(by, Series):
-            raise ValueError(
-                f"`by` must be a column name or list of columns, got {by}."
-            )
-
-        return GroupBy(
-            self,
-            by,
-            group_keys=group_keys,
-            sort=sort,
-            observed=observed,
-            dropna=dropna,
-            **kwargs,
-        )
-
     def resample(self, rule, **kwargs):
         from dask_expr._resample import Resampler
 
@@ -838,6 +818,26 @@ class DataFrame(FrameBase):
             suffixes=(lsuffix, rsuffix),
             shuffle_backend=shuffle_backend,
             npartitions=npartitions,
+        )
+
+    def groupby(
+        self, by, group_keys=None, sort=None, observed=None, dropna=None, **kwargs
+    ):
+        from dask_expr._groupby import GroupBy
+
+        if isinstance(by, FrameBase) and not isinstance(by, Series):
+            raise ValueError(
+                f"`by` must be a column name or list of columns, got {by}."
+            )
+
+        return GroupBy(
+            self,
+            by,
+            group_keys=group_keys,
+            sort=sort,
+            observed=observed,
+            dropna=dropna,
+            **kwargs,
         )
 
     def __setitem__(self, key, value):
