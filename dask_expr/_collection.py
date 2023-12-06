@@ -33,7 +33,9 @@ from dask_expr._categorical import CategoricalAccessor
 from dask_expr._concat import Concat
 from dask_expr._datetime import DatetimeAccessor
 from dask_expr._expr import (
+    BFill,
     Eval,
+    FFill,
     Query,
     Shift,
     ToDatetime,
@@ -621,6 +623,18 @@ class FrameBase(DaskMethodsMixin):
 
     def replace(self, to_replace=None, value=no_default, regex=False):
         return new_collection(self.expr.replace(to_replace, value, regex))
+
+    def ffill(self, axis=0, _inplace=False, limit=None, _downcast=None):
+        axis = _validate_axis(axis)
+        if axis == 1:
+            raise NotImplementedError("ffill on axis 1 not implemented")
+        return new_collection(FFill(self.expr, limit))
+
+    def bfill(self, axis=0, _inplace=False, limit=None, _downcast=None):
+        axis = _validate_axis(axis)
+        if axis == 1:
+            raise NotImplementedError("bfill on axis 1 not implemented")
+        return new_collection(BFill(self.expr, limit))
 
     def fillna(self, value=None):
         return new_collection(self.expr.fillna(value))
