@@ -154,6 +154,8 @@ class SingleAggregation(GroupByApplyConcatApply):
 
     @property
     def split_by(self):
+        if isinstance(self.by, Expr):
+            return self.by.columns
         return self.by
 
     @classmethod
@@ -420,6 +422,8 @@ class Var(GroupByReduction):
 
     @property
     def split_by(self):
+        if isinstance(self.by, Expr):
+            return self.by.columns
         return self.by
 
     @staticmethod

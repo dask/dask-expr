@@ -304,6 +304,11 @@ def test_groupby_single_agg_split_out(pdf, df, api, sort, split_out):
     expect = getattr(pdf.groupby("x", sort=sort), api)()
     assert_eq(agg, expect, sort_results=not sort)
 
+    g = df.y.groupby(df.x, sort=sort)
+    agg = getattr(g, api)(split_out=split_out)
+    expect = getattr(pdf.y.groupby(pdf.x, sort=sort), api)()
+    assert_eq(agg, expect, sort_results=not sort)
+
 
 @pytest.mark.parametrize(
     "spec",
