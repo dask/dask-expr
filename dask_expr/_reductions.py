@@ -389,6 +389,8 @@ class ApplyConcatApply(Expr):
 
         meta = combine([meta], **combine_kwargs)
         meta = aggregate([meta], **self.aggregate_kwargs)
+        if is_scalar(meta):
+            return make_meta(type(meta))
         return make_meta(meta)
 
     def _divisions(self):

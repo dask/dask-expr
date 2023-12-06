@@ -22,12 +22,8 @@ def test_monotonic():
         assert assert_eq(
             df[c].is_monotonic_increasing,
             pdf[c].is_monotonic_increasing,
-            # https://github.com/dask/dask/pull/10671
-            check_dtype=False,
         )
         assert assert_eq(
             df[c].is_monotonic_decreasing,
             pdf[c].is_monotonic_decreasing,
-            # https://github.com/dask/dask/pull/10671
-            check_dtype=False,
         )
