@@ -802,6 +802,7 @@ def test_get_partition(pdf, df):
     assert_eq(df.get_partition(0), pdf.iloc[:10])
     assert_eq(df.get_partition(1), pdf.iloc[10:20])
     assert_eq(df.get_partition(-1), pdf.iloc[90:])
+    assert_eq(df.x.get_partition(0), pdf.x.iloc[:10])
 
 
 def test_column_getattr(df):
