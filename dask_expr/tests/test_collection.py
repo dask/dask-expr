@@ -798,6 +798,12 @@ def test_partitions(pdf, df):
     assert_eq(out, pdf.iloc[10:20])
 
 
+def test_get_partition(pdf, df):
+    assert_eq(df.get_partition(0), pdf.iloc[:10])
+    assert_eq(df.get_partition(1), pdf.iloc[10:20])
+    assert_eq(df.get_partition(-1), pdf.iloc[90:])
+
+
 def test_column_getattr(df):
     df = df.expr
     assert df.x._name == df["x"]._name
