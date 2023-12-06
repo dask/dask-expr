@@ -10,7 +10,7 @@ from dask.dataframe._compat import PANDAS_GE_200, PANDAS_GE_210
 from dask.dataframe.utils import UNKNOWN_CATEGORIES
 from dask.utils import M
 
-from dask_expr import expr, from_pandas, is_scalar, optimize
+from dask_expr import expr, from_pandas, is_scalar, optimize, to_datetime, to_numeric
 from dask_expr._expr import are_co_aligned
 from dask_expr._reductions import Len
 from dask_expr._shuffle import Shuffle
@@ -24,7 +24,7 @@ lib = _backend_library()
 @pytest.fixture
 def pdf():
     pdf = lib.DataFrame({"x": range(100)})
-    pdf["y"] = pdf.x * 10.0
+    pdf["y"] = pdf.x // 7  # Not unique; duplicates span different partitions
     yield pdf
 
 
@@ -209,6 +209,19 @@ def test_fillna():
     assert_eq(actual, expected)
 
 
+@pytest.mark.parametrize("periods", (1, 2))
+@pytest.mark.parametrize("freq", (None, "1h"))
+@pytest.mark.parametrize("axis", ("index", 0, "columns", 1))
+def test_shift(pdf, df, periods, freq, axis):
+    if axis in (1, "columns"):
+        pytest.xfail("shift(axis=1) not yet supported")
+    if freq is not None:
+        pytest.xfail("shift w/ freq set not yet supported")
+    actual = df.shift(periods=1)
+    expected = pdf.shift(periods=1)
+    assert_eq(actual, expected)
+
+
 def test_memory_usage(pdf):
     # Results are not equal with RangeIndex because pandas has one RangeIndex while
     # we have one RangeIndex per partition
@@ -323,11 +336,25 @@ def test_to_timestamp(pdf, how):
         lambda df: df.x.isna(),
         lambda df: df.isnull(),
         lambda df: df.x.isnull(),
+        lambda df: df.mask(df.x == 10, 42),
+        lambda df: df.mask(df.x == 10),
+        lambda df: df.mask(lambda df: df.x % 2 == 0, 42),
+        lambda df: df.mask(df.x == 10, df + 2),
+        lambda df: df.mask(df.x == 10, lambda df: df + 2),
+        lambda df: df.x.mask(df.x == 10, 42),
         lambda df: df.abs(),
         lambda df: df.x.abs(),
+        lambda df: df.where(df.x == 10, 42),
+        lambda df: df.where(df.x == 10),
+        lambda df: df.where(lambda df: df.x % 2 == 0, 42),
+        lambda df: df.where(df.x == 10, df + 2),
+        lambda df: df.where(df.x == 10, lambda df: df + 2),
+        lambda df: df.x.where(df.x == 10, 42),
         lambda df: df.rename(columns={"x": "xx"}),
         lambda df: df.rename(columns={"x": "xx"}).xx,
         lambda df: df.rename(columns={"x": "xx"})[["xx"]],
+        lambda df: df.x.rename(index="hello"),
+        lambda df: df.x.rename(index=("hello",)),
         lambda df: df.x.to_frame(),
         lambda df: df.drop(columns="x"),
         lambda df: df.drop(axis=1, labels=["x"]),
@@ -341,6 +368,34 @@ def test_to_timestamp(pdf, how):
 )
 def test_blockwise(func, pdf, df):
     assert_eq(func(pdf), func(df))
+
+
+def test_to_datetime():
+    pdf = lib.DataFrame({"year": [2015, 2016], "month": [2, 3], "day": [4, 5]})
+    df = from_pandas(pdf, npartitions=2)
+    expected = lib.to_datetime(pdf)
+    result = to_datetime(df)
+    assert_eq(result, expected)
+
+    ps = lib.Series(["2018-10-26 12:00:00", "2018-10-26 13:00:15"])
+    ds = from_pandas(ps, npartitions=2)
+    expected = lib.to_datetime(ps)
+    result = to_datetime(ds)
+    assert_eq(result, expected)
+
+    with pytest.raises(TypeError, match="arg must be a Series or a DataFrame"):
+        to_datetime(1490195805)
+
+
+def test_to_numeric(pdf, df):
+    pdf.x = pdf.x.astype("str")
+    expected = lib.to_numeric(pdf.x)
+    df.x = df.x.astype("str")
+    result = to_numeric(df.x)
+    assert_eq(result, expected)
+
+    with pytest.raises(TypeError, match="arg must be a Series"):
+        to_numeric("1.0")
 
 
 def test_drop_not_implemented(pdf, df):
@@ -915,12 +970,20 @@ def test_drop_duplicates(df, pdf, split_out):
         check_index=split_out is not True,
     )
     assert_eq(
-        df.drop_duplicates(subset=["x"], split_out=split_out),
-        pdf.drop_duplicates(subset=["x"]),
+        df.drop_duplicates(subset=["y"], split_out=split_out),
+        pdf.drop_duplicates(subset=["y"]),
     )
     assert_eq(
-        df.x.drop_duplicates(split_out=split_out),
-        pdf.x.drop_duplicates(),
+        df.y.drop_duplicates(split_out=split_out),
+        pdf.y.drop_duplicates(),
+    )
+
+    actual = df.set_index("y").index.drop_duplicates(split_out=split_out)
+    if split_out is True:
+        actual = actual.compute().sort_values()  # shuffle is unordered
+    assert_eq(
+        actual,
+        pdf.set_index("y").index.drop_duplicates(),
     )
 
     with pytest.raises(KeyError, match="'a'"):
@@ -987,6 +1050,11 @@ def test_dropna_simplify(pdf, subset):
     expected = df[["x", "y"]].simplify().dropna(subset=subset)["y"]
     assert result._name == expected._name
     assert_eq(q, pdf.dropna(subset=subset)["y"])
+
+
+def test_series_slice_getitem(df, pdf):
+    with pytest.raises(NotImplementedError):
+        df.x[:4]
 
 
 def test_dir(df):
@@ -1088,9 +1156,27 @@ def test_unknown_partitions_different_root():
 
 
 @xfail_gpu("compute_hll_array doesn't work for cudf")
-def test_nunique_approx(df):
-    result = df.nunique_approx().compute()
-    assert 99 < result < 101
+def test_nunique_approx(df, pdf):
+    actual = df.nunique_approx().compute()
+    assert 99 < actual < 101
+
+    actual = df.y.nunique_approx().compute()
+    expect = pdf.y.nunique()
+    assert expect * 0.99 < actual < expect * 1.01
+
+    actual = df.set_index("y").index.nunique_approx().compute()
+    expect = pdf.set_index("y").index.nunique()
+    assert expect * 0.99 < actual < expect * 1.01
+
+
+def test_memory_usage_per_partition(df):
+    expected = lib.Series(part.compute().memory_usage().sum() for part in df.partitions)
+    result = df.memory_usage_per_partition()
+    assert_eq(expected, result)
+
+    expected = lib.Series(part.x.compute().memory_usage() for part in df.partitions)
+    result = df.x.memory_usage_per_partition()
+    assert_eq(expected, result)
 
 
 def test_assign_simplify(pdf):
@@ -1384,3 +1470,18 @@ def test_dtype(df, pdf):
     assert df.x.dtype == pdf.x.dtype
     assert df.index.dtype == pdf.index.dtype
     assert_eq(df.dtypes, pdf.dtypes)
+
+
+def test_isnull():
+    pdf = lib.DataFrame(
+        {
+            "A": range(10),
+            "B": [None] * 10,
+            "C": [1] * 4 + [None] * 4 + [2] * 2,
+        }
+    )
+    df = from_pandas(pdf, npartitions=2)
+    assert_eq(df.notnull(), pdf.notnull())
+    assert_eq(df.isnull(), pdf.isnull())
+    for c in pdf.columns:
+        assert_eq(df[c].isnull(), pdf[c].isnull())

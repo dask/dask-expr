@@ -232,6 +232,10 @@ def test_groupby_apply(df, pdf):
         return x
 
     assert_eq(df.groupby(df.x).apply(test), pdf.groupby(pdf.x).apply(test))
+    assert_eq(
+        df.groupby(df.x, group_keys=False).apply(test),
+        pdf.groupby(pdf.x, group_keys=False).apply(test),
+    )
     assert_eq(df.groupby("x").apply(test), pdf.groupby("x").apply(test))
     assert_eq(
         df.groupby("x").apply(test, meta=pdf.groupby("x").apply(test).head(0)),
@@ -360,3 +364,12 @@ def test_groupby_var_dropna_observed(dropna, observed, func):
     dd_result = getattr(ddf.groupby("b", observed=observed, dropna=dropna), func)()
     pdf_result = getattr(df.groupby("b", observed=observed, dropna=dropna), func)()
     assert_eq(dd_result, pdf_result)
+
+
+def test_groupby_median(df, pdf):
+    assert_eq(df.groupby("x").median(), pdf.groupby("x").median())
+    q = df.groupby("x").median(split_out=2)
+    assert q.optimize().npartitions == 2
+    assert_eq(q, pdf.groupby("x").median())
+    assert_eq(df.groupby("x")["y"].median(), pdf.groupby("x")["y"].median())
+    assert_eq(df.groupby("x").median()["y"], pdf.groupby("x").median()["y"])

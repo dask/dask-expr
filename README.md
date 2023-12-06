@@ -97,9 +97,11 @@ API Coverage
 - `map`
 - `map_overlap`
 - `map_partitions`
+- `mask`
 - `max`
 - `mean`
 - `memory_usage`
+- `memory_usage_per_partition`
 - `merge`
 - `min`
 - `min`
@@ -118,6 +120,7 @@ API Coverage
 - `reset_index`
 - `round`
 - `sample`
+- `shift`
 - `sort_values`
 - `select_dtypes`
 - `set_index`
@@ -129,6 +132,7 @@ API Coverage
 - `to_timestamp`
 - `var`
 - `visualize`
+- `where`
 
 
 **`dask_expr.Series`**
@@ -159,9 +163,11 @@ API Coverage
 - `isna`
 - `map`
 - `map_partitions`
+- `mask`
 - `max`
 - `mean`
 - `memory_usage`
+- `memory_usage_per_partition`
 - `min`
 - `min`
 - `mode`
@@ -170,11 +176,13 @@ API Coverage
 - `nunique_approx`
 - `partitions`
 - `prod`
+- `rename`
 - `rename_axis`
 - `repartition`
 - `replace`
 - `reset_index`
 - `round`
+- `shift`
 - `shuffle`
 - `std`
 - `sum`
@@ -185,6 +193,7 @@ API Coverage
 - `value_counts`
 - `var`
 - `visualize`
+- `where`
 
 
 **`dask_expr.Index`**
@@ -218,6 +227,7 @@ API Coverage
 - `nunique_approx`
 - `partitions`
 - `prod`
+- `rename`
 - `rename_axis`
 - `repartition`
 - `replace`
@@ -243,6 +253,7 @@ API Coverage
 - `last`
 - `max`
 - `mean`
+- `median`
 - `min`
 - `prod`
 - `shift`
