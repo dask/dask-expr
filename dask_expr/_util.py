@@ -20,12 +20,14 @@ DASK_VERSION = Version(dask.__version__)
 DASK_GT_20231000 = DASK_VERSION > Version("2023.10.0")
 
 
-def _maybe_shift_divisions(df, periods, freq):
-    """Maybe shift divisions by periods of size freq
+def _calc_maybe_new_divisions(df, periods, freq):
+    """Maybe calculate new divisions by periods of size freq
 
     Used to shift the divisions for the `shift` method. If freq isn't a fixed
     size (not anchored or relative), then the divisions are shifted
-    appropriately. Otherwise the divisions are cleared.
+    appropriately.
+
+    Returning None, indicates divisions ought to be cleared.
 
     Parameters
     ----------
@@ -44,15 +46,12 @@ def _maybe_shift_divisions(df, periods, freq):
             # Can't infer divisions on relative or anchored offsets, as
             # divisions may now split identical index value.
             # (e.g. index_partitions = [[1, 2, 3], [3, 4, 5]])
-            # return df.clear_divisions()
-            return None
+            return None  # Would need to clear divisions
     if df.known_divisions:
         divs = pd.Series(range(len(df.divisions)), index=df.divisions)
         divisions = divs.shift(periods, freq=freq).index
         return tuple(divisions)
-        # return df.__class__(df.dask, df._name, df._meta, divisions)
-    # return df
-    return None
+    return df.divisions
 
 
 def _validate_axis(axis=0, none_is_zero: bool = True) -> None | Literal[0, 1]:

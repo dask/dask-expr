@@ -33,7 +33,7 @@ from tlz import merge_sorted, unique
 
 from dask_expr._util import (
     _BackendData,
-    _maybe_shift_divisions,
+    _calc_maybe_new_divisions,
     _tokenize_deterministic,
     _tokenize_partial,
 )
@@ -2764,18 +2764,19 @@ class BFill(FFill):
         return super().before
 
 
-class Shift(MapOverlap):
-    _parameters = ["frame", "periods", "freq", "axis"]
-    _defaults = {"periods": 1, "freq": None, "axis": 0}
+class ShiftAxis0(MapOverlap):
+    _parameters = ["frame", "periods", "freq"]
+    _defaults = {"periods": 1, "freq": None}
 
     func = M.shift
     enforce_metadata = True
     before = 0
     after = 0
+    axis = 0
 
     def _divisions(self):
         return (
-            _maybe_shift_divisions(self.frame, self.periods, self.freq)
+            _calc_maybe_new_divisions(self.frame, self.periods, self.freq)
             or self.frame.divisions
         )
 
@@ -2795,9 +2796,9 @@ class Shift(MapOverlap):
         return None
 
     def _simplify_down(self):
-        if self.axis == 1 or self.freq:
+        if self.freq:
             clear_divisions = (
-                _maybe_shift_divisions(self.frame, self.periods, self.freq) is None
+                _calc_maybe_new_divisions(self.frame, self.periods, self.freq) is None
             )
             return MapPartitions(
                 frame=self.frame,
@@ -2821,6 +2822,21 @@ class Shift(MapOverlap):
                 enforce_metadata=self.enforce_metadata,
                 kwargs=self.kwargs,
             )
+
+
+class ShiftAxis1(ShiftAxis0):
+    axis = 1
+
+    def _simplify_down(self):
+        return MapPartitions(
+            frame=self.frame,
+            func=self.func,
+            meta=self._meta,
+            enforce_metadata=False,
+            transform_divisions=False,
+            clear_divisions=False,
+            kwargs=self.kwargs,
+        )
 
 
 class Fused(Blockwise):
