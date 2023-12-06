@@ -10,7 +10,7 @@ from dask.dataframe._compat import PANDAS_GE_200, PANDAS_GE_210
 from dask.dataframe.utils import UNKNOWN_CATEGORIES
 from dask.utils import M
 
-from dask_expr import expr, from_pandas, is_scalar, optimize, to_numeric
+from dask_expr import expr, from_pandas, is_scalar, optimize, to_datetime, to_numeric
 from dask_expr._expr import are_co_aligned
 from dask_expr._reductions import Len
 from dask_expr._shuffle import Shuffle
@@ -385,12 +385,32 @@ def test_blockwise(func, pdf, df):
     assert_eq(func(pdf), func(df))
 
 
+def test_to_datetime():
+    pdf = lib.DataFrame({"year": [2015, 2016], "month": [2, 3], "day": [4, 5]})
+    df = from_pandas(pdf, npartitions=2)
+    expected = lib.to_datetime(pdf)
+    result = to_datetime(df)
+    assert_eq(result, expected)
+
+    ps = lib.Series(["2018-10-26 12:00:00", "2018-10-26 13:00:15"])
+    ds = from_pandas(ps, npartitions=2)
+    expected = lib.to_datetime(ps)
+    result = to_datetime(ds)
+    assert_eq(result, expected)
+
+    with pytest.raises(TypeError, match="arg must be a Series or a DataFrame"):
+        to_datetime(1490195805)
+
+
 def test_to_numeric(pdf, df):
     pdf.x = pdf.x.astype("str")
     expected = lib.to_numeric(pdf.x)
     df.x = df.x.astype("str")
-    result = to_numeric(df.x, downcast=None)
+    result = to_numeric(df.x)
     assert_eq(result, expected)
+
+    with pytest.raises(TypeError, match="arg must be a Series"):
+        to_numeric("1.0")
 
 
 def test_drop_not_implemented(pdf, df):
@@ -1047,6 +1067,11 @@ def test_dropna_simplify(pdf, subset):
     assert_eq(q, pdf.dropna(subset=subset)["y"])
 
 
+def test_series_slice_getitem(df, pdf):
+    with pytest.raises(NotImplementedError):
+        df.x[:4]
+
+
 def test_dir(df):
     assert all(c in dir(df) for c in df.columns)
     assert "sum" in dir(df)
@@ -1146,9 +1171,17 @@ def test_unknown_partitions_different_root():
 
 
 @xfail_gpu("compute_hll_array doesn't work for cudf")
-def test_nunique_approx(df):
-    result = df.nunique_approx().compute()
-    assert 99 < result < 101
+def test_nunique_approx(df, pdf):
+    actual = df.nunique_approx().compute()
+    assert 99 < actual < 101
+
+    actual = df.y.nunique_approx().compute()
+    expect = pdf.y.nunique()
+    assert expect * 0.99 < actual < expect * 1.01
+
+    actual = df.set_index("y").index.nunique_approx().compute()
+    expect = pdf.set_index("y").index.nunique()
+    assert expect * 0.99 < actual < expect * 1.01
 
 
 def test_memory_usage_per_partition(df):

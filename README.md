@@ -257,6 +257,7 @@ API Coverage
 - `last`
 - `max`
 - `mean`
+- `median`
 - `min`
 - `prod`
 - `shift`

@@ -1721,16 +1721,18 @@ class ToNumeric(Elemwise):
     _defaults = {"errors": "raise", "downcast": None}
     operation = staticmethod(pd.to_numeric)
 
-    def _divisions(self):
-        return tuple(
-            pd.Index(
-                pd.to_numeric(
-                    self.frame.divisions,
-                    errors=self.errors,
-                    downcast=self.downcast,
-                )
-            )
-        )
+
+class ToDatetime(Elemwise):
+    _parameters = ["frame", "kwargs"]
+    _defaults = {"kwargs": None}
+    _keyword_only = ["kwargs"]
+    operation = staticmethod(pd.to_datetime)
+
+    @functools.cached_property
+    def _kwargs(self):
+        if (kwargs := self.operand("kwargs")) is None:
+            return {}
+        return kwargs
 
 
 class AsType(Elemwise):
@@ -1989,7 +1991,7 @@ class Projection(Elemwise):
         if is_dataframe_like(self.frame._meta):
             return super()._meta
         # if we are not a DataFrame and have a scalar, we reduce to a scalar
-        if not isinstance(self.operand("columns"), list) and not hasattr(
+        if not isinstance(self.operand("columns"), (list, slice)) and not hasattr(
             self.operand("columns"), "dtype"
         ):
             return meta_nonempty(self.frame._meta).iloc[0]
