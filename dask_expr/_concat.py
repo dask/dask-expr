@@ -138,7 +138,7 @@ class Concat(Expr):
 
     def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            columns = determine_column_projection(self, parent, dependents, False)
+            columns = determine_column_projection(self, parent, dependents)
             columns_frame = [
                 [col for col in frame.columns if col in columns]
                 for frame in self._frames

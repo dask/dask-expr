@@ -298,7 +298,7 @@ class Merge(Expr):
         if isinstance(parent, (Projection, Index)):
             # Reorder the column projection to
             # occur before the Merge
-            columns = determine_column_projection(self, parent, dependents, False)
+            columns = determine_column_projection(self, parent, dependents)
             columns = _convert_to_list(columns)
             if isinstance(parent, Index):
                 # Index creates an empty column projection

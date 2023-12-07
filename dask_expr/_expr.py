@@ -1428,6 +1428,7 @@ class DropnaFrame(Blockwise):
             columns = determine_column_projection(
                 self, parent, dependents, additional_columns=self.subset
             )
+            columns = [col for col in self.frame.columns if col in columns]
 
             if columns == self.frame.columns:
                 # Don't add unnecessary Projections
@@ -1549,6 +1550,7 @@ class RenameFrame(Elemwise):
                 reverse_mapping[col] if col in reverse_mapping else col
                 for col in columns
             ]
+            columns = [col for col in self.frame.columns if col in columns]
             if columns == self.frame.columns:
                 return
 
@@ -1675,6 +1677,8 @@ class AsType(Elemwise):
                 dtypes = {key: val for key, val in dtypes.items() if key in columns}
                 if not dtypes:
                     return type(parent)(self.frame, *parent.operands[1:])
+            if isinstance(columns, list):
+                columns = [col for col in self.frame.columns if col in columns]
             if self.frame.columns == columns:
                 return
             result = type(self)(self.frame[columns], dtypes)
@@ -2039,7 +2043,7 @@ class AddPrefix(Elemwise):
 
     def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            columns = determine_column_projection(self, parent, dependents, order=False)
+            columns = determine_column_projection(self, parent, dependents)
             columns = self._convert_columns(_convert_to_list(columns))
             if set(columns) == set(self.frame.columns):
                 return
@@ -2178,6 +2182,7 @@ class Binop(Elemwise):
             changed = False
             columns = determine_column_projection(self, parent, dependents)
             columns = _convert_to_list(columns)
+            columns = [col for col in self.columns if col in columns]
             if (
                 isinstance(self.left, Expr)
                 and self.left.ndim > 1
@@ -2849,9 +2854,7 @@ def collect_depdendents(expr) -> defaultdict:
     return dependents
 
 
-def determine_column_projection(
-    expr, parent, dependents, order=True, additional_columns=None
-):
+def determine_column_projection(expr, parent, dependents, additional_columns=None):
     column_union = parent.columns.copy()
     parents = [x() for x in dependents[expr._name] if x() is not None]
 
@@ -2874,14 +2877,12 @@ def determine_column_projection(
         and all(p.ndim == 1 for p in parents)
     ):
         return column_union[0]
-    if order and expr.ndim > 1:
-        return [col for col in expr.columns if col in column_union]
     return column_union
 
 
 def plain_column_projection(expr, parent, dependents, additional_columns=None):
     column_union = determine_column_projection(
-        expr, parent, dependents, False, additional_columns=additional_columns
+        expr, parent, dependents, additional_columns=additional_columns
     )
     if column_union == expr.frame.columns:
         return

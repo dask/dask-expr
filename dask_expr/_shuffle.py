@@ -812,14 +812,11 @@ class SetIndex(BaseSetIndexSortValues):
             return SetIndex(tail, _other=self._other)
 
         if isinstance(parent, Projection):
+            addition_columns = (
+                [self._other] if not isinstance(self._other, Expr) else []
+            )
             columns = determine_column_projection(
-                self,
-                parent,
-                dependents,
-                False,
-                additional_columns=[self._other]
-                if not isinstance(self._other, Expr)
-                else [],
+                self, parent, dependents, additional_columns=addition_columns
             )
             columns = _convert_to_list(columns)
             if self.frame.columns == columns:
@@ -973,7 +970,7 @@ class SortValues(BaseSetIndexSortValues):
             )
         if isinstance(parent, Projection):
             columns = determine_column_projection(
-                self, parent, dependents, False, additional_columns=self.by
+                self, parent, dependents, additional_columns=self.by
             )
             if self.frame.columns == columns:
                 return
@@ -1102,7 +1099,6 @@ class SetIndexBlockwise(Blockwise):
                 self,
                 parent,
                 dependents,
-                False,
                 additional_columns=_convert_to_list(self.other),
             )
             if self.frame.columns == columns:

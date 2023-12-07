@@ -69,10 +69,12 @@ class BlockwiseIO(Blockwise, IO):
             # Column projection
             parent_columns = parent.operand("columns")
             proposed_columns = determine_column_projection(self, parent, dependents)
+            proposed_columns = _convert_to_list(proposed_columns)
+            proposed_columns = [col for col in self.columns if col in proposed_columns]
             if set(proposed_columns) == set(self.columns):
                 # Already projected or nothing to do
                 return
-            substitutions = {"columns": _convert_to_list(proposed_columns)}
+            substitutions = {"columns": proposed_columns}
             result = self.substitute_parameters(substitutions)
             if result.columns != parent_columns:
                 result = result[parent_columns]

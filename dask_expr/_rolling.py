@@ -83,9 +83,7 @@ class RollingReduction(Expr):
         if isinstance(parent, Projection):
             by = self.groupby_kwargs.get("by", []) if self.groupby_kwargs else []
             by_columns = by if not isinstance(by, Expr) else []
-            columns = determine_column_projection(
-                self, parent, dependents, False, by_columns
-            )
+            columns = determine_column_projection(self, parent, dependents, by_columns)
             columns = [col for col in self.frame.columns if col in columns]
             if columns == self.frame.columns:
                 return
