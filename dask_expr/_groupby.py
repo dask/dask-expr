@@ -34,6 +34,7 @@ from dask_expr._expr import (
     MapPartitions,
     Projection,
     are_co_aligned,
+    determine_column_projection,
     no_default,
 )
 from dask_expr._reductions import ApplyConcatApply, Chunk, Reduction
@@ -193,17 +194,8 @@ class SingleAggregation(GroupByApplyConcatApply):
             **aggregate_kwargs,
         }
 
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
-            by_columns = self.by if not isinstance(self.by, Expr) else []
-            columns = sorted(set(parent.columns + by_columns))
-            if columns == self.frame.columns:
-                return
-            columns = [col for col in self.frame.columns if col in columns]
-            return type(parent)(
-                type(self)(self.frame[columns], *self.operands[1:]),
-                *parent.operands[1:],
-            )
+    def _simplify_up(self, parent, dependents):
+        return groupby_projection(self, parent, dependents)
 
 
 class GroupbyAggregation(GroupByApplyConcatApply):
@@ -462,17 +454,8 @@ class Var(GroupByReduction):
     def _divisions(self):
         return (None,) * (self.split_out + 1)
 
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
-            by_columns = self.by if not isinstance(self.by, Expr) else []
-            columns = sorted(set(parent.columns + by_columns))
-            if columns == self.frame.columns:
-                return
-            columns = [col for col in self.frame.columns if col in columns]
-            return type(parent)(
-                type(self)(self.frame[columns], *self.operands[1:]),
-                *parent.operands[1:],
-            )
+    def _simplify_up(self, parent, dependents):
+        return groupby_projection(self, parent, dependents)
 
 
 class Std(SingleAggregation):
@@ -618,16 +601,8 @@ class Median(Expr):
         frame = Shuffle(self.frame, self.by[0], npartitions)
         return BlockwiseMedian(frame, self.by, self.observed, self.dropna, self._slice)
 
-    def _simplify_up(self, parent):
-        if isinstance(parent, Projection):
-            by_columns = self.by if not isinstance(self.by, Expr) else []
-            columns = sorted(set(parent.columns + by_columns))
-            if columns == self.frame.columns:
-                return
-            return type(parent)(
-                type(self)(self.frame[columns], *self.operands[1:]),
-                *parent.operands[1:],
-            )
+    def _simplify_up(self, parent, dependents):
+        return groupby_projection(self, parent, dependents)
 
 
 def _median_groupby_aggregate(
@@ -853,6 +828,22 @@ def _extract_meta(x, nonempty=False):
         return res
     else:
         return x
+
+
+def groupby_projection(expr, parent, dependents):
+    if isinstance(parent, Projection):
+        by_columns = expr.by if not isinstance(expr.by, Expr) else []
+        columns = determine_column_projection(
+            expr, parent, dependents, False, additional_columns=by_columns
+        )
+        if columns == expr.frame.columns:
+            return
+        columns = [col for col in expr.frame.columns if col in columns]
+        return type(parent)(
+            type(expr)(expr.frame[columns], *expr.operands[1:]),
+            *parent.operands[1:],
+        )
+    return
 
 
 ###

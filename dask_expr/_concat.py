@@ -8,7 +8,14 @@ from dask.dataframe.multi import concat_and_check
 from dask.dataframe.utils import check_meta, strip_unknown_categories
 from dask.utils import apply, is_dataframe_like, is_series_like
 
-from dask_expr._expr import AsType, Blockwise, Expr, Projection, are_co_aligned
+from dask_expr._expr import (
+    AsType,
+    Blockwise,
+    Expr,
+    Projection,
+    are_co_aligned,
+    determine_column_projection,
+)
 
 
 class Concat(Expr):
@@ -129,9 +136,9 @@ class Concat(Expr):
             *cast_dfs,
         )
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            columns = parent.columns
+            columns = determine_column_projection(self, parent, dependents, False)
             columns_frame = [
                 [col for col in frame.columns if col in columns]
                 for frame in self._frames

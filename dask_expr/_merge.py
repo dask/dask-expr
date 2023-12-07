@@ -16,6 +16,7 @@ from dask_expr._expr import (
     Index,
     PartitionsFiltered,
     Projection,
+    determine_column_projection,
 )
 from dask_expr._repartition import Repartition
 from dask_expr._shuffle import (
@@ -304,17 +305,17 @@ class Merge(Expr):
         # Blockwise merge
         return BlockwiseMerge(left, right, **self.kwargs)
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, (Projection, Index)):
             # Reorder the column projection to
             # occur before the Merge
+            columns = determine_column_projection(self, parent, dependents, False)
+            columns = _convert_to_list(columns)
             if isinstance(parent, Index):
                 # Index creates an empty column projection
-                projection, parent_columns = [], None
+                projection, parent_columns = columns, None
             else:
-                projection, parent_columns = parent.operand("columns"), parent.operand(
-                    "columns"
-                )
+                projection, parent_columns = columns, parent.operand("columns")
                 if isinstance(projection, (str, int)):
                     projection = [projection]
 
@@ -610,7 +611,7 @@ class HashJoinP2P(Merge, PartitionsFiltered):
             )
         return dsk
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         return
 
 
@@ -643,7 +644,7 @@ class BroadcastJoin(Merge, PartitionsFiltered):
             return self.right._divisions()
         return self.left._divisions()
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         return
 
     def _lower(self):

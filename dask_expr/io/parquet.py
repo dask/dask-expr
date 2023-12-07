@@ -450,13 +450,13 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         else:
             return _convert_to_list(columns_operand)
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Index):
             # Column projection
             return self.substitute_parameters({"columns": [], "_series": False})
 
         if isinstance(parent, Projection):
-            return super()._simplify_up(parent)
+            return super()._simplify_up(parent, dependents)
 
         if isinstance(parent, Lengths):
             _lengths = self._get_lengths()

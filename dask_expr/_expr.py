@@ -32,7 +32,12 @@ from dask.typing import no_default
 from dask.utils import M, apply, funcname, import_required, is_arraylike
 from tlz import merge_sorted, unique
 
-from dask_expr._util import _BackendData, _tokenize_deterministic, _tokenize_partial
+from dask_expr._util import (
+    _BackendData,
+    _convert_to_list,
+    _tokenize_deterministic,
+    _tokenize_partial,
+)
 
 replacement_rules = []
 
@@ -68,10 +73,7 @@ class Expr:
     def _clear_dependents(self):
         self._dependents = []
 
-    def _register_dependents(self):
-        for node in self.walk():
-            node._clear_dependents()
-
+    def _construct_dependents(self, dependents: defaultdict) -> defaultdict:
         stack = [self]
         seen = set()
         while stack:
@@ -82,16 +84,8 @@ class Expr:
 
             for dep in node.dependencies():
                 stack.append(dep)
-                dep._add_dependents(node)
-
-    def _add_dependents(self, expr: Expr):
-        self._dependents.append(weakref.ref(expr))
-
-    @property
-    def dependents(self):
-        # Clear out dead references
-        self._dependents = [ref for ref in self._dependents if ref() is not None]
-        return [ref() for ref in self._dependents]
+                dependents[dep._name].append(weakref.ref(node))
+        return dependents
 
     @property
     def _required_attribute(self) -> str:
@@ -275,7 +269,7 @@ class Expr:
 
         return {(self._name, i): self._task(i) for i in range(self.npartitions)}
 
-    def rewrite(self, kind: str):
+    def rewrite(self, kind: str) -> Expr:
         """Rewrite an expression
 
         This leverages the ``._{kind}_down`` and ``._{kind}_up``
@@ -341,7 +335,7 @@ class Expr:
 
         return expr
 
-    def simplify_once(self, cache):
+    def simplify_once(self, dependents: defaultdict):
         """Simplify an expression
 
         This leverages the ``._simplify_down`` and ``._simplify_up``
@@ -350,22 +344,17 @@ class Expr:
         Parameters
         ----------
 
-        cache: dict, optional
-            Expressions that were previously rewritten
+        dependents: defaultdict[list]
+            The dependents for every node.
 
         Returns
         -------
         expr:
             output expression
-        changed:
-            whether or not any change occured
         """
         expr = self
 
         while True:
-            if expr._name in cache:
-                return cache[expr._name]
-
             out = expr._simplify_down()
             if out is None:
                 out = expr
@@ -373,14 +362,13 @@ class Expr:
                 return out
             if out._name != expr._name:
                 expr = out
-                continue
 
-            # Allow children to rewrite their parents
+            # Allow children to simplify their parents
             for child in expr.dependencies():
-                out = child._simplify_up(expr)
-
+                out = child._simplify_up(expr, dependents)
                 if out is None:
                     out = expr
+
                 if not isinstance(out, Expr):
                     return out
                 if out is not expr and out._name != expr._name:
@@ -392,7 +380,7 @@ class Expr:
             changed = False
             for operand in expr.operands:
                 if isinstance(operand, Expr):
-                    new = operand.simplify_once(cache=cache)
+                    new = operand.simplify_once(dependents=dependents)
                     if new._name != operand._name:
                         changed = True
                 else:
@@ -404,17 +392,13 @@ class Expr:
 
             break
 
-        if self._name not in cache and self._name != expr._name:
-            cache[self._name] = expr
-
         return expr
 
     def simplify(self) -> Expr:
         expr = self
-        cache = {}
         while True:
-            expr._register_dependents()
-            new = expr.simplify_once(cache=cache)
+            dependents = expr._construct_dependents(defaultdict(list))
+            new = expr.simplify_once(dependents=dependents)
             if new._name == expr._name:
                 break
             expr = new
@@ -423,7 +407,9 @@ class Expr:
     def _simplify_down(self):
         return
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
+        # determine_column_projection
+        # plain_column_projection
         return
 
     def lower_once(self):
@@ -1297,17 +1283,9 @@ class Blockwise(Expr):
         else:
             return (self.operation,) + tuple(args)
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if self._projection_passthrough and isinstance(parent, Projection):
-            column_union = [expr.columns for expr in self.dependents]
-            column_union = sorted(set(flatten(column_union, container=list)))
-            column_union = [col for col in column_union if col in self.frame.columns]
-            if column_union == self.frame.columns:
-                return
-            result = type(self)(self.frame[column_union], *self.operands[1:])
-            if result.columns == parent.operand("columns"):
-                return result
-            return type(parent)(result, parent.operand("columns"))
+            return plain_column_projection(self, parent, dependents)
 
     def _combine_similar(self, root: Expr):
         # Push projections back up through `_projection_passthrough`
@@ -1621,14 +1599,16 @@ class DropnaFrame(Blockwise):
     _keyword_only = ["how", "subset", "thresh"]
     operation = M.dropna
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if self.subset is not None:
-            columns = set(parent.columns).union(self.subset)
-            if columns == set(self.frame.columns):
+            columns = determine_column_projection(
+                self, parent, dependents, additional_columns=self.subset
+            )
+
+            if columns == self.frame.columns:
                 # Don't add unnecessary Projections
                 return
 
-            columns = [col for col in self.frame.columns if col in columns]
             return type(parent)(
                 type(self)(self.frame[columns], *self.operands[1:]),
                 *parent.operands[1:],
@@ -1648,19 +1628,17 @@ class CombineFirst(Blockwise):
             ),
         )
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            columns = parent.columns
-            frame_columns = sorted(set(columns).intersection(self.frame.columns))
-            other_columns = sorted(set(columns).intersection(self.other.columns))
+            columns = determine_column_projection(self, parent, dependents)
+            frame_columns = [col for col in self.frame.columns if col in columns]
+            other_columns = [col for col in self.other.columns if col in columns]
             if (
                 self.frame.columns == frame_columns
                 and self.other.columns == other_columns
             ):
                 return
 
-            frame_columns = [col for col in self.frame.columns if col in columns]
-            other_columns = [col for col in self.other.columns if col in columns]
             return type(parent)(
                 type(self)(self.frame[frame_columns], self.other[other_columns]),
                 *parent.operands[1:],
@@ -1721,12 +1699,12 @@ class Elemwise(Blockwise):
     _filter_passthrough = True
     _is_length_preserving = True
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if self._filter_passthrough and isinstance(parent, Filter):
             return type(self)(
                 self.frame[parent.operand("predicate")], *self.operands[1:]
             )
-        return super()._simplify_up(parent)
+        return super()._simplify_up(parent, dependents)
 
 
 class RenameFrame(Elemwise):
@@ -1734,20 +1712,26 @@ class RenameFrame(Elemwise):
     _keyword_only = ["columns"]
     operation = M.rename
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection) and isinstance(
             self.operand("columns"), Mapping
         ):
             reverse_mapping = {val: key for key, val in self.operand("columns").items()}
             if is_series_like(parent._meta):
-                # Fill this out when Series.rename is implemented
                 return
-            else:
-                columns = [
-                    reverse_mapping[col] if col in reverse_mapping else col
-                    for col in parent.columns
-                ]
-            return type(self)(self.frame[columns], *self.operands[1:])
+
+            columns = determine_column_projection(self, parent, dependents)
+            columns = [
+                reverse_mapping[col] if col in reverse_mapping else col
+                for col in columns
+            ]
+            if columns == self.frame.columns:
+                return
+
+            return type(parent)(
+                type(self)(self.frame[columns], *self.operands[1:]),
+                *parent.operands[1:],
+            )
 
 
 class RenameSeries(Elemwise):
@@ -1764,6 +1748,7 @@ class Fillna(Elemwise):
 
 
 class Replace(Elemwise):
+    _filter_passthrough = False
     _projection_passthrough = True
     _parameters = ["frame", "to_replace", "value", "regex"]
     _defaults = {"to_replace": None, "value": no_default, "regex": False}
@@ -1784,12 +1769,9 @@ class Clip(Elemwise):
     _defaults = {"lower": None, "upper": None}
     operation = M.clip
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            if self.frame.columns == parent.columns:
-                # Don't introduce unnecessary projections
-                return
-            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+            return plain_column_projection(self, parent, dependents)
 
 
 class Between(Elemwise):
@@ -1861,16 +1843,20 @@ class AsType(Elemwise):
             meta = clear_known_categories(meta)
         return meta
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
             dtypes = self.operand("dtypes")
+            columns = determine_column_projection(self, parent, dependents)
             if isinstance(dtypes, dict):
-                dtypes = {
-                    key: val for key, val in dtypes.items() if key in parent.columns
-                }
+                dtypes = {key: val for key, val in dtypes.items() if key in columns}
                 if not dtypes:
                     return type(parent)(self.frame, *parent.operands[1:])
-            return type(self)(self.frame[parent.operand("columns")], dtypes)
+            if self.frame.columns == columns:
+                return
+            result = type(self)(self.frame[columns], dtypes)
+            if not isinstance(columns, list):
+                return result
+            return type(parent)(result, *parent.operands[1:])
 
 
 class IsNa(Elemwise):
@@ -2018,18 +2004,9 @@ class ExplodeSeries(Blockwise):
 class ExplodeFrame(ExplodeSeries):
     _parameters = ["frame", "column"]
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            columns = set(parent.columns).union(self.column)
-            if columns == set(self.frame.columns):
-                # Don't add unnecessary Projections, protects against loops
-                return
-
-            columns = [col for col in self.frame.columns if col in columns]
-            return type(parent)(
-                type(self)(self.frame[columns], *self.operands[1:]),
-                *parent.operands[1:],
-            )
+            return plain_column_projection(self, parent, dependents, [self.column])
 
 
 class Drop(Elemwise):
@@ -2060,12 +2037,13 @@ class Assign(Elemwise):
     def _node_label_args(self):
         return [self.frame, self.key, self.value]
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            if self.key not in parent.columns:
+            columns = determine_column_projection(self, parent, dependents)
+            if self.key not in columns:
                 return type(parent)(self.frame, *parent.operands[1:])
 
-            columns = set(parent.columns) - {self.key}
+            columns = set(columns) - {self.key}
             if columns == set(self.frame.columns):
                 # Protect against pushing the same projection twice
                 return
@@ -2093,9 +2071,9 @@ class Filter(Blockwise):
     _parameters = ["frame", "predicate"]
     operation = operator.getitem
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            return self.frame[parent.operand("columns")][self.predicate]
+            return plain_column_projection(self, parent, dependents)
         if isinstance(parent, Index):
             return self.frame.index[self.predicate]
 
@@ -2235,11 +2213,14 @@ class AddPrefix(Elemwise):
         len_prefix = len(self.prefix)
         return [col[len_prefix:] for col in columns]
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            columns = self._convert_columns(parent.columns)
-            if columns == self.frame.columns:
+            columns = determine_column_projection(self, parent, dependents, order=False)
+            columns = self._convert_columns(_convert_to_list(columns))
+            if set(columns) == set(self.frame.columns):
                 return
+
+            columns = [col for col in self.frame.columns if col in columns]
             return type(parent)(
                 type(self)(self.frame[columns], self.operands[1]),
                 parent.operand("columns"),
@@ -2281,7 +2262,7 @@ class Head(Expr):
         if isinstance(self.frame, Head):
             return Head(self.frame.frame, min(self.n, self.frame.n))
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         from dask_expr import Repartition
 
         if isinstance(parent, Repartition) and parent.new_partitions == 1:
@@ -2333,7 +2314,7 @@ class Tail(Expr):
         if isinstance(self.frame, Tail):
             return Tail(self.frame.frame, min(self.n, self.frame.n))
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         from dask_expr import Repartition
 
         if isinstance(parent, Repartition) and parent.new_partitions == 1:
@@ -2368,19 +2349,33 @@ class Binop(Elemwise):
     def __str__(self):
         return f"{self.left} {self._operator_repr} {self.right}"
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            if isinstance(self.left, Expr) and self.left.ndim:
-                left = self.left[
-                    parent.operand("columns")
-                ]  # TODO: filter just the correct columns
+            changed = False
+            columns = determine_column_projection(self, parent, dependents)
+            columns = _convert_to_list(columns)
+            if (
+                isinstance(self.left, Expr)
+                and self.left.ndim > 1
+                and self.left.columns != columns
+            ):
+                left = self.left[columns]  # TODO: filter just the correct columns
+                changed = True
             else:
                 left = self.left
-            if isinstance(self.right, Expr) and self.right.ndim:
-                right = self.right[parent.operand("columns")]
+            if (
+                isinstance(self.right, Expr)
+                and self.right.ndim > 1
+                and self.right.columns != columns
+            ):
+                right = self.right[columns]  # TODO: filter just the correct columns
+                changed = True
             else:
                 right = self.right
-            return type(self)(left, right)
+            if not changed:
+                return
+
+            return type(parent)(type(self)(left, right), *parent.operands[1:])
 
     def _node_label_args(self):
         return [self.left, self.right]
@@ -2473,12 +2468,10 @@ class Unaryop(Elemwise):
     def __str__(self):
         return f"{self._operator_repr} {self.frame}"
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
             if isinstance(self.frame, Expr):
-                frame = self.frame[
-                    parent.operand("columns")
-                ]  # TODO: filter just the correct columns
+                return plain_column_projection(self, parent, dependents)
             else:
                 frame = self.frame
             return type(self)(frame)
@@ -2636,10 +2629,10 @@ def optimize(expr: Expr, combine_similar: bool = True, fuse: bool = True) -> Exp
 
     # Simplify
     result = expr.simplify()
-
-    # Combine similar
-    if combine_similar:
-        result = result.combine_similar()
+    #
+    # # Combine similar
+    # if combine_similar:
+    #     result = result.combine_similar()
 
     # Manipulate Expression to make it more efficient
     result = result.rewrite(kind="tune")
@@ -2820,9 +2813,9 @@ class FFill(MapOverlap):
     def _meta(self):
         return self.frame._meta
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+            return plain_column_projection(self, parent, dependents)
 
     @functools.cached_property
     def kwargs(self):
@@ -2887,9 +2880,9 @@ class Shift(MapOverlap):
     def kwargs(self):
         return dict(periods=self.periods, freq=self.freq)
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+            return plain_column_projection(self, parent, dependents)
 
     def _lower(self):
         return None
@@ -3023,6 +3016,53 @@ class Fused(Blockwise):
         for i, dep in enumerate(deps):
             graph["_" + str(i)] = dep
         return dask.core.get(graph, name)
+
+
+def determine_column_projection(
+    expr, parent, dependents, order=True, additional_columns=None
+):
+    column_union = parent.columns.copy()
+    parents = [x() for x in dependents[expr._name] if x() is not None]
+
+    for p in parents:
+        if len(p.columns) > 0:
+            column_union.append(p.columns)
+        elif parent.ndim == 1 and not isinstance(parent, Index):
+            # Reduction to a Series, so keep all columns
+            column_union.append(expr.columns)
+
+    if additional_columns is not None:
+        column_union.append(additional_columns)
+
+    # We can end up with MultiIndex columns from groupby ops, needs to be
+    # account for in the sort
+    column_union = sorted(
+        set(flatten(column_union, container=list)),
+        key=lambda x: x[0] if isinstance(x, tuple) else x,
+    )
+    if (
+        len(column_union) == 1
+        and parent.ndim == 1
+        and all(p.ndim == 1 for p in parents)
+    ):
+        return column_union[0]
+    if order and expr.ndim > 1:
+        return [col for col in expr.columns if col in column_union]
+    return column_union
+
+
+def plain_column_projection(expr, parent, dependents, additional_columns=None):
+    column_union = determine_column_projection(
+        expr, parent, dependents, False, additional_columns=additional_columns
+    )
+    if column_union == expr.frame.columns:
+        return
+    if isinstance(column_union, list):
+        column_union = [col for col in expr.frame.columns if col in column_union]
+    result = type(expr)(expr.frame[column_union], *expr.operands[1:])
+    if column_union == parent.operand("columns"):
+        return result
+    return type(parent)(result, parent.operand("columns"))
 
 
 from dask_expr._reductions import (

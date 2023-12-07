@@ -29,6 +29,8 @@ from dask_expr._expr import (
     RenameFrame,
     ResetIndex,
     ToFrame,
+    determine_column_projection,
+    plain_column_projection,
 )
 from dask_expr._util import _tokenize_deterministic, is_scalar
 
@@ -480,12 +482,6 @@ class Unique(ApplyConcatApply):
         df = _concat(inputs)
         return cls.aggregate_func(df, **kwargs)
 
-    def _simplify_up(self, parent):
-        return
-
-    def __dask_postcompute__(self):
-        return _concat, ()
-
 
 class DropDuplicates(Unique):
     _parameters = ["frame", "subset", "ignore_index", "split_out"]
@@ -510,9 +506,11 @@ class DropDuplicates(Unique):
             out["ignore_index"] = self.ignore_index
         return out
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if self.subset is not None and isinstance(parent, Projection):
-            columns = set(parent.columns).union(self.subset)
+            columns = determine_column_projection(
+                self, parent, dependents, additional_columns=self.subset
+            )
             if columns == set(self.frame.columns):
                 # Don't add unnecessary Projections, protects against loops
                 return
@@ -693,9 +691,9 @@ class Reduction(ApplyConcatApply):
             base = "(" + base + ")"
         return f"{base}.{self.__class__.__name__.lower()}({s})"
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+            return plain_column_projection(self, parent, dependents)
 
 
 class Sum(Reduction):
@@ -809,7 +807,7 @@ class Len(Reduction):
         if len(self.frame.columns):
             return Len(self.frame.index)
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         return
 
 
@@ -826,7 +824,7 @@ class Size(Reduction):
         else:
             return Len(self.frame)
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         return
 
 
@@ -1087,7 +1085,7 @@ class ValueCounts(ReductionConstantDim):
     def aggregate_kwargs(self):
         return {**self.chunk_kwargs, "normalize": self.normalize}
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         # We are already a Series
         return
 

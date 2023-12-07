@@ -17,6 +17,7 @@ from dask_expr._expr import (
     Literal,
     PartitionsFiltered,
     Projection,
+    determine_column_projection,
     no_default,
 )
 from dask_expr._reductions import Len
@@ -59,7 +60,7 @@ class BlockwiseIO(Blockwise, IO):
     def _fusion_compression_factor(self):
         return 1
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if (
             self._absorb_projections
             and isinstance(parent, Projection)
@@ -67,15 +68,15 @@ class BlockwiseIO(Blockwise, IO):
         ):
             # Column projection
             parent_columns = parent.operand("columns")
-            proposed_columns = _convert_to_list(parent_columns)
-            make_series = isinstance(parent_columns, (str, int)) and not self._series
-            if set(proposed_columns) == set(self.columns) and not make_series:
-                # Already projected
+            proposed_columns = determine_column_projection(self, parent, dependents)
+            if set(proposed_columns) == set(self.columns):
+                # Already projected or nothing to do
                 return
-            substitutions = {"columns": _convert_to_list(parent_columns)}
-            if make_series:
-                substitutions["_series"] = True
-            return self.substitute_parameters(substitutions)
+            substitutions = {"columns": _convert_to_list(proposed_columns)}
+            result = self.substitute_parameters(substitutions)
+            if result.columns != parent_columns:
+                result = result[parent_columns]
+            return result
 
     def _combine_similar(self, root: Expr):
         if self._absorb_projections:
@@ -426,7 +427,7 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
             )
         return self._pd_length_stats
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Lengths):
             _lengths = self._get_lengths()
             if _lengths:
@@ -438,7 +439,7 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
                 return Literal(sum(_lengths))
 
         if isinstance(parent, Projection):
-            return super()._simplify_up(parent)
+            return super()._simplify_up(parent, dependents)
 
     def _divisions(self):
         return self._divisions_and_locations[0]

@@ -28,6 +28,7 @@ from dask_expr._expr import (
     Filter,
     PartitionsFiltered,
     Projection,
+    determine_column_projection,
 )
 from dask_expr._reductions import (
     All,
@@ -117,13 +118,11 @@ class Shuffle(Expr):
         else:
             raise ValueError(f"{backend} not supported")
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
             # Move the column projection to come
             # before the abstract Shuffle
-            projection = parent.operand("columns")
-            if isinstance(projection, (str, int)):
-                projection = [projection]
+            projection = determine_column_projection(self, parent, dependents)
 
             partitioning_index = self.partitioning_index
             if isinstance(partitioning_index, (str, int)):
@@ -793,7 +792,7 @@ class SetIndex(BaseSetIndexSortValues):
 
         return SetPartition(self.frame, self._other, self.drop, divisions)
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         from dask_expr._expr import Filter, Head, Index, Tail
 
         # TODO, handle setting index with other frame
@@ -820,8 +819,14 @@ class SetIndex(BaseSetIndexSortValues):
             return SetIndex(tail, _other=self._other)
 
         if isinstance(parent, Projection):
-            columns = parent.columns + (
-                [self._other] if not isinstance(self._other, Expr) else []
+            columns = determine_column_projection(
+                self,
+                parent,
+                dependents,
+                False,
+                additional_columns=[self._other]
+                if not isinstance(self._other, Expr)
+                else [],
             )
             if self.frame.columns == columns:
                 return
@@ -940,7 +945,7 @@ class SortValues(BaseSetIndexSortValues):
             shuffled, self.sort_function, self.sort_function_kwargs
         )
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         from dask_expr._expr import Filter, Head, Tail
 
         if isinstance(parent, Head):
@@ -973,12 +978,12 @@ class SortValues(BaseSetIndexSortValues):
                 *self.operands[1:],
             )
         if isinstance(parent, Projection):
-            parent_columns = parent.columns
-            columns = parent_columns + [
-                col for col in self.by if col not in parent_columns
-            ]
+            columns = determine_column_projection(
+                self, parent, dependents, False, additional_columns=self.by
+            )
             if self.frame.columns == columns:
                 return
+            columns = [col for col in self.frame.columns if col in columns]
             return type(parent)(
                 type(self)(self.frame[columns], *self.operands[1:]),
                 parent.operand("columns"),
@@ -1097,13 +1102,18 @@ class SetIndexBlockwise(Blockwise):
             return (None,) * (self.frame.npartitions + 1)
         return tuple(self.new_divisions)
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            columns = parent.columns + (
-                _convert_to_list(self.other) if not isinstance(self.other, Expr) else []
+            columns = determine_column_projection(
+                self,
+                parent,
+                dependents,
+                False,
+                additional_columns=_convert_to_list(self.other),
             )
             if self.frame.columns == columns:
                 return
+            columns = [col for col in self.frame.columns if col in columns]
             return type(parent)(
                 type(self)(self.frame[columns], *self.operands[1:]),
                 parent.operand("columns"),
