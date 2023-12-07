@@ -662,9 +662,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         if self.operand("columns") is None:
             return 1
         nr_original_columns = len(self._dataset_info["schema"].names) - 1
-        return (
-            max(len(_convert_to_list(self.operand("columns"))), 1) / nr_original_columns
-        )
+        return len(_convert_to_list(self.operand("columns"))) / nr_original_columns
 
 
 #
