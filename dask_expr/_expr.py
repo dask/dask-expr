@@ -68,24 +68,6 @@ class Expr:
                 # Raise a ValueError instead of AttributeError to
                 # avoid infinite recursion
                 raise ValueError(f"{dep} has no attribute {self._required_attribute}")
-        self._dependents = []
-
-    def _clear_dependents(self):
-        self._dependents = []
-
-    def _construct_dependents(self, dependents: defaultdict) -> defaultdict:
-        stack = [self]
-        seen = set()
-        while stack:
-            node = stack.pop()
-            if node._name in seen:
-                continue
-            seen.add(node._name)
-
-            for dep in node.dependencies():
-                stack.append(dep)
-                dependents[dep._name].append(weakref.ref(node))
-        return dependents
 
     @property
     def _required_attribute(self) -> str:
@@ -397,7 +379,7 @@ class Expr:
     def simplify(self) -> Expr:
         expr = self
         while True:
-            dependents = expr._construct_dependents(defaultdict(list))
+            dependents = collect_depdendents(self)
             new = expr.simplify_once(dependents=dependents)
             if new._name == expr._name:
                 break
@@ -2849,6 +2831,22 @@ class Fused(Blockwise):
         for i, dep in enumerate(deps):
             graph["_" + str(i)] = dep
         return dask.core.get(graph, name)
+
+
+def collect_depdendents(expr) -> defaultdict:
+    dependents = defaultdict(list)
+    stack = [expr]
+    seen = set()
+    while stack:
+        node = stack.pop()
+        if node._name in seen:
+            continue
+        seen.add(node._name)
+
+        for dep in node.dependencies():
+            stack.append(dep)
+            dependents[dep._name].append(weakref.ref(node))
+    return dependents
 
 
 def determine_column_projection(
