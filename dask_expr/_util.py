@@ -4,18 +4,30 @@ import functools
 from collections import OrderedDict, UserDict
 from collections.abc import Hashable, Sequence
 from types import LambdaType
-from typing import Any, TypeVar, cast
+from typing import Any, Literal, TypeVar, cast
 
 import dask
 from dask import config
 from dask.base import normalize_token, tokenize
 from packaging.version import Version
+from pandas.api.types import is_datetime64_dtype, is_numeric_dtype
 
 K = TypeVar("K", bound=Hashable)
 V = TypeVar("V")
 
 DASK_VERSION = Version(dask.__version__)
 DASK_GT_20231000 = DASK_VERSION > Version("2023.10.0")
+
+
+def _validate_axis(axis=0, none_is_zero: bool = True) -> None | Literal[0, 1]:
+    if axis not in (0, 1, "index", "columns", None):
+        raise ValueError(f"No axis named {axis}")
+    # convert to numeric axis
+    numeric_axis: dict[str | None, Literal[0, 1]] = {"index": 0, "columns": 1}
+    if none_is_zero:
+        numeric_axis[None] = 0
+
+    return numeric_axis.get(axis, axis)
 
 
 def _convert_to_list(column) -> list | None:
@@ -40,6 +52,10 @@ def is_scalar(x):
     from dask_expr._expr import Expr
 
     return not isinstance(x, Expr)
+
+
+def is_valid_nth_dtype(dtype):
+    return is_numeric_dtype(dtype) or is_datetime64_dtype(dtype)
 
 
 @normalize_token.register(LambdaType)

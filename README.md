@@ -81,21 +81,29 @@ API Coverage
 - `drop`
 - `drop_duplicates`
 - `dropna`
+- `dtypes`
 - `eval`
 - `explode`
 - `fillna`
+- `ffill`
+- `bfill`
 - `groupby`
 - `head`
 - `idxmax`
 - `idxmin`
+- `ìloc`
 - `index`
 - `isin`
 - `isna`
 - `join`
 - `map`
+- `map_overlap`
 - `map_partitions`
+- `mask`
 - `max`
+- `mean`
 - `memory_usage`
+- `memory_usage_per_partition`
 - `merge`
 - `min`
 - `min`
@@ -106,6 +114,7 @@ API Coverage
 - `partitions`
 - `pivot_table`
 - `prod`
+- `query`
 - `rename`
 - `rename_axis`
 - `repartition`
@@ -113,6 +122,7 @@ API Coverage
 - `reset_index`
 - `round`
 - `sample`
+- `shift`
 - `sort_values`
 - `select_dtypes`
 - `set_index`
@@ -124,6 +134,7 @@ API Coverage
 - `to_timestamp`
 - `var`
 - `visualize`
+- `where`
 
 
 **`dask_expr.Series`**
@@ -142,8 +153,11 @@ API Coverage
 - `dask`
 - `drop_duplicates`
 - `dropna`
+- `dtype`
 - `explode`
 - `fillna`
+- `ffill`
+- `bfill`
 - `groupby`
 - `head`
 - `idxmax`
@@ -153,8 +167,11 @@ API Coverage
 - `isna`
 - `map`
 - `map_partitions`
+- `mask`
 - `max`
+- `mean`
 - `memory_usage`
+- `memory_usage_per_partition`
 - `min`
 - `min`
 - `mode`
@@ -163,11 +180,13 @@ API Coverage
 - `nunique_approx`
 - `partitions`
 - `prod`
+- `rename`
 - `rename_axis`
 - `repartition`
 - `replace`
 - `reset_index`
 - `round`
+- `shift`
 - `shuffle`
 - `std`
 - `sum`
@@ -178,6 +197,7 @@ API Coverage
 - `value_counts`
 - `var`
 - `visualize`
+- `where`
 
 
 **`dask_expr.Index`**
@@ -193,6 +213,7 @@ API Coverage
 - `copy`
 - `count`
 - `dask`
+- `dtype`
 - `fillna`
 - `groupby`
 - `head`
@@ -210,6 +231,7 @@ API Coverage
 - `nunique_approx`
 - `partitions`
 - `prod`
+- `rename`
 - `rename_axis`
 - `repartition`
 - `replace`
@@ -235,14 +257,55 @@ API Coverage
 - `last`
 - `max`
 - `mean`
+- `median`
 - `min`
 - `prod`
+- `shift`
 - `size`
 - `std`
 - `sum`
 - `transform`
 - `value_counts`
 - `var`
+
+Support for ``SeriesGroupBy`` and ``DataFrameGroupBy``.
+
+**`dask_expr._resample.Resampler`**
+
+- `agg`
+- `count`
+- `first`
+- `last`
+- `max`
+- `mean`
+- `median`
+- `min`
+- `nunique`
+- `ohlc`
+- `prod`
+- `quantile`
+- `sem`
+- `size`
+- `std`
+- `sum`
+- `var`
+
+
+**`dask_expr._rolling.Rolling`**
+
+- `agg`
+- `apply`
+- `count`
+- `max`
+- `mean`
+- `median`
+- `min`
+- `quantile`
+- `std`
+- `sum`
+- `var`
+- `skew`
+- `kurt`
 
 
 **Binary operators (`DataFrame`, `Series`, and `Index`)**:
@@ -284,3 +347,17 @@ API Coverage
 - `CategoricalAccessor`
 - `DatetimeAccessor`
 - `StringAccessor`
+
+**Function**
+
+- `concat`
+- `from_pandas`
+- `merge`
+- `pivot_table`
+- `read_csv`
+- `read_parquet`
+- `repartition`
+- `to_datetime`
+- `to_numeric`
+- `to_timedelta`
+- `to_parquet`

@@ -1,6 +1,6 @@
 import pytest
 
-from dask_expr import Merge, from_pandas
+from dask_expr import Merge, from_pandas, merge
 from dask_expr._expr import Projection
 from dask_expr._shuffle import Shuffle
 from dask_expr.tests._util import _backend_library, assert_eq
@@ -23,6 +23,10 @@ def test_merge(how, shuffle_backend):
 
     # Check result with/without fusion
     expect = pdf1.merge(pdf2, on="x", how=how)
+    assert_eq(df3, expect, check_index=False)
+    assert_eq(df3.optimize(), expect, check_index=False)
+
+    df3 = merge(df1, df2, on="x", how=how, shuffle_backend=shuffle_backend)
     assert_eq(df3, expect, check_index=False)
     assert_eq(df3.optimize(), expect, check_index=False)
 
@@ -362,3 +366,102 @@ def test_merge_combine_similar_hangs():
     # Double check that these don't hang
     out.optimize(fuse=False)
     out.optimize()
+
+
+def test_recursive_join():
+    dfs_to_merge = []
+    for i in range(10):
+        df = lib.DataFrame(
+            {
+                f"{i}A": [5, 6, 7, 8],
+                f"{i}B": [4, 3, 2, 1],
+            },
+            index=lib.Index([0, 1, 2, 3], name="a"),
+        )
+        ddf = from_pandas(df, 2)
+        dfs_to_merge.append(ddf)
+
+    ddf_loop = from_pandas(lib.DataFrame(index=lib.Index([0, 1, 3], name="a")), 3)
+    for ddf in dfs_to_merge:
+        ddf_loop = ddf_loop.join(ddf, how="left")
+
+    ddf_pairwise = from_pandas(lib.DataFrame(index=lib.Index([0, 1, 3], name="a")), 3)
+
+    ddf_pairwise = ddf_pairwise.join(dfs_to_merge, how="left")
+
+    # TODO: divisions is None for recursive join for now
+    assert_eq(ddf_pairwise, ddf_loop, check_divisions=False)
+
+
+def test_merge_repartition():
+    pdf = lib.DataFrame({"a": [1, 2, 3]})
+    pdf2 = lib.DataFrame({"b": [1, 2, 3]}, index=[1, 2, 3])
+
+    df = from_pandas(pdf, npartitions=2)
+    df2 = from_pandas(pdf2, npartitions=3)
+    assert_eq(df.join(df2), pdf.join(pdf2))
+
+
+def test_merge_reparititon_divisions():
+    pdf = lib.DataFrame({"a": [1, 2, 3, 4, 5, 6]})
+    pdf2 = lib.DataFrame({"b": [1, 2, 3, 4, 5, 6]}, index=[1, 2, 3, 4, 5, 6])
+    pdf3 = lib.DataFrame({"c": [1, 2, 3, 4, 5, 6]}, index=[1, 2, 3, 4, 5, 6])
+
+    df = from_pandas(pdf, npartitions=2)
+    df2 = from_pandas(pdf2, npartitions=3)
+    df3 = from_pandas(pdf3, npartitions=3)
+
+    assert_eq(df.join(df2).join(df3), pdf.join(pdf2).join(pdf3))
+
+
+def test_merge_npartitions():
+    pdf = lib.DataFrame({"a": [1, 2, 3, 4, 5, 6]})
+    pdf2 = lib.DataFrame({"b": [1, 2, 3, 4, 5, 6]}, index=[1, 2, 3, 4, 5, 6])
+    df = from_pandas(pdf, npartitions=1)
+    df2 = from_pandas(pdf2, npartitions=3)
+
+    result = df.join(df2, npartitions=6)
+    # Ignore npartitions when broadcasting
+    assert result.npartitions == 4
+    assert_eq(result, pdf.join(pdf2))
+
+    df = from_pandas(pdf, npartitions=2)
+    result = df.join(df2, npartitions=6)
+    # Ignore npartitions for repartition-join
+    assert result.npartitions == 4
+    assert_eq(result, pdf.join(pdf2))
+
+    pdf = lib.DataFrame(
+        {"a": [1, 2, 3, 4, 5, 6]}, index=lib.Index([6, 5, 4, 3, 2, 1], name="a")
+    )
+    pdf2 = lib.DataFrame(
+        {"b": [1, 2, 3, 4, 5, 6]}, index=lib.Index([1, 2, 7, 4, 5, 6], name="a")
+    )
+    df = from_pandas(pdf, npartitions=2, sort=False)
+    df2 = from_pandas(pdf2, npartitions=3, sort=False)
+
+    result = df.join(df2, npartitions=6)
+    assert result.npartitions == 6
+    assert_eq(result, pdf.join(pdf2))
+
+
+def test_merge_pandas_object():
+    pdf1 = lib.DataFrame({"x": range(20), "y": range(20)})
+    df1 = from_pandas(pdf1, 4)
+    pdf2 = lib.DataFrame({"x": range(20), "z": range(20)})
+
+    assert_eq(merge(df1, pdf2, on="x"), pdf1.merge(pdf2, on="x"), check_index=False)
+    assert_eq(merge(pdf2, df1, on="x"), pdf2.merge(pdf1, on="x"), check_index=False)
+
+    pdf1 = lib.DataFrame({"x": range(20), "y": range(20)}).set_index("x")
+    df1 = from_pandas(pdf1, 4)
+    assert_eq(
+        merge(df1, pdf2, left_index=True, right_on="x"),
+        pdf1.merge(pdf2, left_index=True, right_on="x"),
+        check_index=False,
+    )
+    assert_eq(
+        merge(pdf2, df1, left_on="x", right_index=True),
+        pdf2.merge(pdf1, left_on="x", right_index=True),
+        check_index=False,
+    )

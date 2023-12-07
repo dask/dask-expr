@@ -23,8 +23,10 @@ from dask.dataframe.core import (
     is_index_like,
     is_series_like,
     make_meta,
+    total_mem_usage,
 )
 from dask.dataframe.dispatch import meta_nonempty
+from dask.dataframe.rolling import CombinedOutput, _head_timedelta, overlap_chunk
 from dask.dataframe.utils import clear_known_categories, drop_by_shallow_copy
 from dask.typing import no_default
 from dask.utils import M, apply, funcname, import_required, is_arraylike
@@ -806,8 +808,14 @@ class Expr:
         # These are the same anyway
         return IsNa(self)
 
+    def mask(self, cond, other=np.nan):
+        return Mask(self, cond=cond, other=other)
+
     def round(self, decimals=0):
         return Round(self, decimals=decimals)
+
+    def where(self, cond, other=np.nan):
+        return Where(self, cond=cond, other=other)
 
     def apply(self, function, *args, **kwargs):
         return Apply(self, function, args, kwargs)
@@ -853,6 +861,9 @@ class Expr:
 
     def nunique_approx(self):
         return NuniqueApprox(self, b=16)
+
+    def memory_usage_per_partition(self, index=True, deep=False):
+        return MemoryUsagePerPartition(self, index, deep)
 
     @functools.cached_property
     def divisions(self):
@@ -1377,6 +1388,196 @@ class MapPartitions(Blockwise):
             )
 
 
+class MapOverlap(MapPartitions):
+    _parameters = [
+        "frame",
+        "func",
+        "before",
+        "after",
+        "meta",
+        "enforce_metadata",
+        "transform_divisions",
+        "clear_divisions",
+        "kwargs",
+    ]
+    _defaults = {
+        "meta": None,
+        "enfore_metadata": True,
+        "transform_divisions": True,
+        "kwargs": None,
+        "clear_divisions": False,
+    }
+
+    @functools.cached_property
+    def _kwargs(self) -> dict:
+        kwargs = self.kwargs
+        if kwargs is None:
+            kwargs = {}
+        kwargs = kwargs.copy()
+        kwargs.update({"before": self.before, "after": self.after, "func": self.func})
+        return kwargs
+
+    @functools.cached_property
+    def _meta(self):
+        meta = self.operand("meta")
+        args = [arg._meta if isinstance(arg, Expr) else arg for arg in self.args]
+        return _get_meta_map_partitions(args, [], self.func, self.kwargs, meta, None)
+
+    @functools.cached_property
+    def before(self):
+        before = self.operand("before")
+        if isinstance(before, str):
+            return pd.to_timedelta(before)
+        elif isinstance(before, numbers.Integral):
+            if before < 0:
+                raise ValueError("before must be positive integer")
+        return before
+
+    @functools.cached_property
+    def after(self):
+        after = self.operand("after")
+        if isinstance(after, str):
+            return pd.to_timedelta(after)
+        elif isinstance(after, numbers.Integral):
+            if after < 0:
+                raise ValueError("after must be positive integer")
+        return after
+
+    def _lower(self):
+        overlapped = CreateOverlappingPartitions(self.frame, self.before, self.after)
+
+        return MapPartitions(
+            overlapped,
+            _overlap_chunk,
+            self._meta,
+            self.enforce_metadata,
+            self.transform_divisions,
+            self.clear_divisions,
+            self._kwargs,
+        )
+
+
+class CreateOverlappingPartitions(Expr):
+    _parameters = ["frame", "before", "after"]
+
+    @functools.cached_property
+    def _meta(self):
+        return self.frame._meta
+
+    def _divisions(self):
+        return (None,) * (self.frame.npartitions + 1)
+
+    def _layer(self) -> dict:
+        dsk, prevs, nexts = {}, [], []
+
+        name_prepend = "overlap-prepend" + self.frame._name
+        if self.before:
+            prevs.append(None)
+            if isinstance(self.before, numbers.Integral):
+                before = self.before
+                for i in range(self.frame.npartitions - 1):
+                    dsk[(name_prepend, i)] = (M.tail, (self.frame._name, i), before)
+                    prevs.append((name_prepend, i))
+            else:
+                # We don't want to look at the divisions, so take twice the step and
+                # validate later.
+                before = 2 * self.before
+
+                for i in range(self.frame.npartitions - 1):
+                    dsk[(name_prepend, i)] = (
+                        _tail_timedelta,
+                        (self.frame._name, i + 1),
+                        (self.frame._name, i),
+                        before,
+                    )
+                    prevs.append((name_prepend, i))
+        else:
+            prevs.extend([None] * self.frame.npartitions)
+
+        name_append = "overlap-append" + self.frame._name
+        if self.after:
+            if isinstance(self.after, numbers.Integral):
+                after = self.after
+                for i in range(1, self.frame.npartitions):
+                    dsk[(name_append, i)] = (M.head, (self.frame._name, i), after)
+                    nexts.append((name_append, i))
+            else:
+                # We don't want to look at the divisions, so take twice the step and
+                # validate later.
+                after = 2 * self.after
+                for i in range(1, self.frame.npartitions):
+                    dsk[(name_append, i)] = (
+                        _head_timedelta,
+                        (self.frame._name, i - 1),
+                        (self.frame._name, i),
+                        after,
+                    )
+                    nexts.append((name_append, i))
+
+            nexts.append(None)
+
+        else:
+            nexts.extend([None] * self.frame.npartitions)
+
+        for i, (prev, next) in enumerate(zip(prevs, nexts)):
+            dsk[(self._name, i)] = (
+                _combined_parts,
+                prev,
+                (self.frame._name, i),
+                next,
+                self.before,
+                self.after,
+            )
+        return dsk
+
+
+def _tail_timedelta(current, prev_, before):
+    return prev_[prev_.index > (current.index.min() - before)]
+
+
+def _overlap_chunk(df, func, before, after, *args, **kwargs):
+    return overlap_chunk(func, before, after, df, *args, **kwargs)
+
+
+def _combined_parts(prev_part, current_part, next_part, before, after):
+    msg = (
+        "Partition size is less than overlapping "
+        "window size. Try using ``df.repartition`` "
+        "to increase the partition size."
+    )
+
+    if prev_part is not None:
+        if isinstance(before, numbers.Integral):
+            if prev_part.shape[0] != before:
+                raise NotImplementedError(msg)
+        else:
+            prev_part_input = prev_part
+            prev_part = _tail_timedelta(current_part, prev_part, before)
+            if len(prev_part_input) == len(prev_part):
+                raise NotImplementedError(msg)
+
+    if next_part is not None:
+        if isinstance(after, numbers.Integral):
+            if next_part.shape[0] != after:
+                raise NotImplementedError(msg)
+        else:
+            next_part_input = next_part
+            next_part = _head_timedelta(current_part, next_part, after)
+            if len(next_part_input) == len(next_part):
+                raise NotImplementedError(msg)
+
+    parts = [p for p in (prev_part, current_part, next_part) if p is not None]
+    combined = methods.concat(parts)
+
+    return CombinedOutput(
+        (
+            combined,
+            len(prev_part) if prev_part is not None else None,
+            len(next_part) if next_part is not None else None,
+        )
+    )
+
+
 class _Align(Blockwise):
     _parameters = ["frame", "other", "join", "fill_value"]
     _defaults = {"join": "outer", "fill_value": None}
@@ -1400,6 +1601,15 @@ class AlignGetitem(Blockwise):
         return self.frame._divisions()
 
 
+class ScalarToSeries(Blockwise):
+    _parameters = ["frame", "index"]
+    _defaults = {"index": 0}
+
+    @staticmethod
+    def operation(value, index=0):
+        return pd.Series(value, index=[index])
+
+
 class DropnaSeries(Blockwise):
     _parameters = ["frame"]
     operation = M.dropna
@@ -1418,8 +1628,9 @@ class DropnaFrame(Blockwise):
                 # Don't add unnecessary Projections
                 return
 
+            columns = [col for col in self.frame.columns if col in columns]
             return type(parent)(
-                type(self)(self.frame[sorted(columns)], *self.operands[1:]),
+                type(self)(self.frame[columns], *self.operands[1:]),
                 *parent.operands[1:],
             )
 
@@ -1447,6 +1658,9 @@ class CombineFirst(Blockwise):
                 and self.other.columns == other_columns
             ):
                 return
+
+            frame_columns = [col for col in self.frame.columns if col in columns]
+            other_columns = [col for col in self.other.columns if col in columns]
             return type(parent)(
                 type(self)(self.frame[frame_columns], self.other[other_columns]),
                 *parent.operands[1:],
@@ -1471,21 +1685,31 @@ class Sample(Blockwise):
         return (self.operation,) + tuple(args)
 
 
-class VarColumns(Blockwise):
-    _parameters = ["frame", "skipna", "ddof", "numeric_only"]
-    _defaults = {"skipna": True, "ddof": 1, "numeric_only": False}
-    _keyword_only = ["skipna", "ddof", "numeric_only"]
-    operation = M.var
-    _is_length_preserving = True
+class Query(Blockwise):
+    _parameters = ["frame", "_expr", "expr_kwargs"]
+    _defaults = {"expr_kwargs": {}}
+    _keyword_only = ["expr_kwargs"]
+    operation = M.query
 
     @functools.cached_property
     def _kwargs(self) -> dict:
-        return {"axis": 1, **super()._kwargs}
+        return {**self.expr_kwargs}
 
 
-class Sqrt(Blockwise):
-    _parameters = ["frame"]
-    operation = np.sqrt
+class MemoryUsagePerPartition(Blockwise):
+    _parameters = ["frame", "index", "deep"]
+    _defaults = {"index": True, "deep": False}
+    operation = staticmethod(total_mem_usage)
+
+    @functools.cached_property
+    def _meta(self):
+        meta = self.frame._meta
+        if is_series_like(meta):
+            return meta._constructor([super()._meta])
+        return meta._constructor_sliced([super()._meta])
+
+    def _divisions(self):
+        return (None,) * (self.frame.npartitions + 1)
 
 
 class Elemwise(Blockwise):
@@ -1526,6 +1750,12 @@ class RenameFrame(Elemwise):
             return type(self)(self.frame[columns], *self.operands[1:])
 
 
+class RenameSeries(Elemwise):
+    _parameters = ["frame", "index"]
+    _keyword_only = ["index"]
+    operation = M.rename
+
+
 class Fillna(Elemwise):
     _projection_passthrough = True
     _parameters = ["frame", "value"]
@@ -1542,6 +1772,7 @@ class Replace(Elemwise):
 
 
 class Isin(Elemwise):
+    _filter_passthrough = False
     _projection_passthrough = True
     _parameters = ["frame", "values"]
     operation = M.isin
@@ -1577,6 +1808,31 @@ class ToTimestamp(Elemwise):
         return tuple(
             pd.Index(self.frame.divisions).to_timestamp(freq=self.freq, how=self.how)
         )
+
+
+class ToNumeric(Elemwise):
+    _parameters = ["frame", "errors", "downcast"]
+    _defaults = {"errors": "raise", "downcast": None}
+    operation = staticmethod(pd.to_numeric)
+
+
+class ToDatetime(Elemwise):
+    _parameters = ["frame", "kwargs"]
+    _defaults = {"kwargs": None}
+    _keyword_only = ["kwargs"]
+    operation = staticmethod(pd.to_datetime)
+
+    @functools.cached_property
+    def _kwargs(self):
+        if (kwargs := self.operand("kwargs")) is None:
+            return {}
+        return kwargs
+
+
+class ToTimedelta(Elemwise):
+    _parameters = ["frame", "unit", "errors"]
+    _defaults = {"unit": None, "errors": "raise"}
+    operation = staticmethod(pd.to_timedelta)
 
 
 class AsType(Elemwise):
@@ -1623,10 +1879,24 @@ class IsNa(Elemwise):
     operation = M.isna
 
 
+class Mask(Elemwise):
+    _projection_passthrough = True
+    _parameters = ["frame", "cond", "other"]
+    _defaults = {"other": np.nan}
+    operation = M.mask
+
+
 class Round(Elemwise):
     _projection_passthrough = True
     _parameters = ["frame", "decimals"]
     operation = M.round
+
+
+class Where(Elemwise):
+    _projection_passthrough = True
+    _parameters = ["frame", "cond", "other"]
+    _defaults = {"other": np.nan}
+    operation = M.where
 
 
 class Abs(Elemwise):
@@ -1648,6 +1918,12 @@ class RenameAxis(Elemwise):
     operation = M.rename_axis
 
 
+class NotNull(Elemwise):
+    _parameters = ["frame"]
+    operation = M.notnull
+    _projection_passthrough = True
+
+
 class ToFrame(Elemwise):
     _parameters = ["frame", "name"]
     _defaults = {"name": no_default}
@@ -1660,6 +1936,13 @@ class ToFrameIndex(Elemwise):
     _defaults = {"name": no_default, "index": True}
     _keyword_only = ["name", "index"]
     operation = M.to_frame
+
+
+class ToSeriesIndex(Elemwise):
+    _parameters = ["frame", "index", "name"]
+    _defaults = {"name": no_default, "index": None}
+    _keyword_only = ["name", "index"]
+    operation = M.to_series
 
 
 class Apply(Elemwise):
@@ -1704,6 +1987,29 @@ class Map(Elemwise):
         return super()._divisions()
 
 
+class VarColumns(Elemwise):
+    _parameters = ["frame", "skipna", "ddof", "numeric_only"]
+    _defaults = {"skipna": True, "ddof": 1, "numeric_only": False}
+    _keyword_only = ["skipna", "ddof", "numeric_only"]
+    operation = M.var
+    _is_length_preserving = True
+
+    @functools.cached_property
+    def _kwargs(self) -> dict:
+        return {"axis": 1, **super()._kwargs}
+
+
+class NUniqueColumns(Elemwise):
+    _parameters = ["frame", "axis", "dropna"]
+    _defaults = {"axis": 1, "dropna": True}
+    operation = M.nunique
+
+
+class Sqrt(Elemwise):
+    _parameters = ["frame"]
+    operation = np.sqrt
+
+
 class ExplodeSeries(Blockwise):
     _parameters = ["frame"]
     operation = M.explode
@@ -1719,8 +2025,9 @@ class ExplodeFrame(ExplodeSeries):
                 # Don't add unnecessary Projections, protects against loops
                 return
 
+            columns = [col for col in self.frame.columns if col in columns]
             return type(parent)(
-                type(self)(self.frame[sorted(columns)], *self.operands[1:]),
+                type(self)(self.frame[columns], *self.operands[1:]),
                 *parent.operands[1:],
             )
 
@@ -1763,8 +2070,9 @@ class Assign(Elemwise):
                 # Protect against pushing the same projection twice
                 return
 
+            columns = [col for col in self.frame.columns if col in columns]
             return type(parent)(
-                type(self)(self.frame[sorted(columns)], *self.operands[1:]),
+                type(self)(self.frame[columns], *self.operands[1:]),
                 *parent.operands[1:],
             )
 
@@ -1813,7 +2121,7 @@ class Projection(Elemwise):
         if is_dataframe_like(self.frame._meta):
             return super()._meta
         # if we are not a DataFrame and have a scalar, we reduce to a scalar
-        if not isinstance(self.operand("columns"), list) and not hasattr(
+        if not isinstance(self.operand("columns"), (list, slice)) and not hasattr(
             self.operand("columns"), "dtype"
         ):
             return meta_nonempty(self.frame._meta).iloc[0]
@@ -2494,6 +2802,114 @@ def optimize_blockwise_fusion(expr):
             break
 
     return expr
+
+
+class FFill(MapOverlap):
+    _parameters = [
+        "frame",
+        "limit",
+    ]
+    _defaults = {"limit": None}
+    func = M.ffill
+    enforce_metadata = True
+
+    def _divisions(self):
+        return self.frame.divisions
+
+    @functools.cached_property
+    def _meta(self):
+        return self.frame._meta
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+
+    @functools.cached_property
+    def kwargs(self):
+        return dict(limit=self.limit)
+
+    @property
+    def before(self):
+        return 1 if self.limit is None else self.limit
+
+    @property
+    def after(self):
+        return 0
+
+    def _lower(self):
+        return None
+
+    def _simplify_down(self):
+        return MapOverlap(
+            frame=self.frame,
+            func=self.func,
+            before=self.before,
+            after=self.after,
+            meta=self._meta,
+            enforce_metadata=self.enforce_metadata,
+            kwargs=self.kwargs,
+        )
+
+
+class BFill(FFill):
+    func = M.bfill
+
+    @property
+    def before(self):
+        # bfill is the opposite direction of ffill, so
+        # we swap before with after of ffill.
+        return super().after
+
+    @property
+    def after(self):
+        # bfill is the opposite direction of ffill, so
+        # we swap after with before of ffill.
+        return super().before
+
+
+class Shift(MapOverlap):
+    _parameters = ["frame", "periods", "freq"]
+    _defaults = {"periods": 1, "freq": None}
+
+    func = M.shift
+    enforce_metadata = True
+    before = 0
+    after = 0
+
+    def _divisions(self):
+        return self.frame.divisions
+
+    @functools.cached_property
+    def _meta(self):
+        return meta_nonempty(self.frame._meta).shift(**self.kwargs)
+
+    @functools.cached_property
+    def kwargs(self):
+        return dict(periods=self.periods, freq=self.freq)
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+
+    def _lower(self):
+        return None
+
+    def _simplify_down(self):
+        if self.freq is None:
+            self.before, self.after = (
+                (self.periods, 0) if self.periods > 0 else (0, -self.periods)
+            )
+            return MapOverlap(
+                frame=self.frame,
+                func=self.func,
+                before=self.before,
+                after=self.after,
+                meta=self._meta,
+                enforce_metadata=self.enforce_metadata,
+                kwargs=self.kwargs,
+            )
+        else:
+            raise NotImplementedError()
 
 
 class Fused(Blockwise):

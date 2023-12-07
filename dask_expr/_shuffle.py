@@ -19,7 +19,7 @@ from dask.dataframe.shuffle import (
     shuffle_group_2,
     shuffle_group_get,
 )
-from dask.utils import M, digit, get_default_shuffle_method, insert
+from dask.utils import M, digit, get_default_shuffle_method, insert, is_series_like
 
 from dask_expr._expr import (
     Assign,
@@ -42,7 +42,9 @@ from dask_expr._reductions import (
     Mode,
     NBytes,
     NLargest,
+    NLargestSlow,
     NSmallest,
+    NSmallestSlow,
     Prod,
     Size,
     Sum,
@@ -50,7 +52,7 @@ from dask_expr._reductions import (
     ValueCounts,
 )
 from dask_expr._repartition import Repartition, RepartitionToFewer
-from dask_expr._util import LRU, _convert_to_list
+from dask_expr._util import LRU, _convert_to_list, is_valid_nth_dtype
 
 
 class Shuffle(Expr):
@@ -71,6 +73,8 @@ class Shuffle(Expr):
         to its necessary components.
     options: dict
         Algorithm-specific options.
+    index_shuffle : bool
+        Whether to perform the shuffle on the index.
     """
 
     _parameters = [
@@ -80,11 +84,13 @@ class Shuffle(Expr):
         "ignore_index",
         "backend",
         "options",
+        "index_shuffle",
     ]
     _defaults = {
         "ignore_index": False,
         "backend": None,
         "options": None,
+        "index_shuffle": None,
     }
     _is_length_preserving = True
 
@@ -213,6 +219,7 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
         npartitions_out = expr.npartitions_out
         ignore_index = expr.ignore_index
         options = expr.options
+        index_shuffle = expr.index_shuffle
 
         # Normalize partitioning_index
         if isinstance(partitioning_index, str):
@@ -231,7 +238,7 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
                 # Don't need to assign "_partitions" column
                 # if we are shuffling on a list of columns
                 nset = set(partitioning_index)
-                if nset & set(frame.columns) == nset:
+                if nset & set(frame.columns) == nset and not index_shuffle:
                     return cls(
                         frame,
                         partitioning_index,
@@ -246,6 +253,7 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
                 partitioning_index,
                 "_partitions",
                 npartitions_out,
+                index_shuffle,
             )
         else:
             index_added = frame
@@ -611,14 +619,29 @@ class AssignPartitioningIndex(Blockwise):
         New column name to assign.
     npartitions_out: int
         Number of partitions after repartitioning is finished.
+    assign_index : bool
+        Whether to use the index as partitioning column.
     """
 
-    _parameters = ["frame", "partitioning_index", "index_name", "npartitions_out"]
+    _parameters = [
+        "frame",
+        "partitioning_index",
+        "index_name",
+        "npartitions_out",
+        "assign_index",
+    ]
 
     @staticmethod
-    def operation(df, index, name: str, npartitions: int):
+    def operation(df, index, name: str, npartitions: int, assign_index):
         """Construct a hash-based partitioning index"""
-        index = _select_columns_or_index(df, index)
+        if assign_index:
+            # columns take precedence over index in _select_columns_or_index, so
+            # circumvent that, to_frame doesn't work because it loses the index
+            index = df[[]]
+            index["_index"] = df.index
+        else:
+            index = _select_columns_or_index(df, index)
+
         if isinstance(index, (str, list, tuple)):
             # Assume column selection from df
             index = [index] if isinstance(index, str) else list(index)
@@ -779,20 +802,22 @@ class SetIndex(BaseSetIndexSortValues):
             and isinstance(self._other, (int, str))
             and self._other in self.frame.columns
         ):
-            return SetIndex(
-                NSmallest(self.frame, n=parent.n, _columns=self._other),
-                _other=self._other,
-            )
+            if is_valid_nth_dtype(self.frame._meta.dtypes[self._other]):
+                head = NSmallest(self.frame, n=parent.n, _columns=self._other)
+            else:
+                head = NSmallestSlow(self.frame, n=parent.n, _columns=self._other)
+            return SetIndex(head, _other=self._other)
 
         if (
             isinstance(parent, Tail)
             and isinstance(self._other, (int, str))
             and self._other in self.frame.columns
         ):
-            return SetIndex(
-                NLargest(self.frame, n=parent.n, _columns=self._other),
-                _other=self._other,
-            )
+            if is_valid_nth_dtype(self.frame._meta.dtypes[self._other]):
+                tail = NLargest(self.frame, n=parent.n, _columns=self._other)
+            else:
+                tail = NLargestSlow(self.frame, n=parent.n, _columns=self._other)
+            return SetIndex(tail, _other=self._other)
 
         if isinstance(parent, Projection):
             columns = parent.columns + (
@@ -878,6 +903,13 @@ class SortValues(BaseSetIndexSortValues):
     def _meta(self):
         return self.frame._meta
 
+    @functools.cached_property
+    def _meta_by_dtype(self):
+        dtype = self._meta.dtypes[self.by]
+        if is_series_like(dtype):
+            dtype = dtype.iloc[0]
+        return dtype
+
     def _lower(self):
         if self.frame.npartitions == 1:
             return SortValuesBlockwise(
@@ -913,14 +945,28 @@ class SortValues(BaseSetIndexSortValues):
 
         if isinstance(parent, Head):
             if self.ascending:
-                return NSmallest(self.frame, n=parent.n, _columns=self.by)
+                if is_valid_nth_dtype(self._meta_by_dtype):
+                    return NSmallest(self.frame, n=parent.n, _columns=self.by)
+                else:
+                    return NSmallestSlow(self.frame, n=parent.n, _columns=self.by)
             else:
-                return NLargest(self.frame, n=parent.n, _columns=self.by)
+                if is_valid_nth_dtype(self._meta_by_dtype):
+                    return NLargest(self.frame, n=parent.n, _columns=self.by)
+                else:
+                    return NLargestSlow(self.frame, n=parent.n, _columns=self.by)
+
         if isinstance(parent, Tail):
             if self.ascending:
-                return NLargest(self.frame, n=parent.n, _columns=self.by)
+                if is_valid_nth_dtype(self._meta_by_dtype):
+                    return NLargest(self.frame, n=parent.n, _columns=self.by)
+                else:
+                    return NLargestSlow(self.frame, n=parent.n, _columns=self.by)
             else:
-                return NSmallest(self.frame, n=parent.n, _columns=self.by)
+                if is_valid_nth_dtype(self._meta_by_dtype):
+                    return NSmallest(self.frame, n=parent.n, _columns=self.by)
+                else:
+                    return NSmallestSlow(self.frame, n=parent.n, _columns=self.by)
+
         if isinstance(parent, Filter):
             return SortValues(
                 Filter(self.frame, parent.predicate.substitute(self, self.frame)),
@@ -987,6 +1033,10 @@ class SetPartition(SetIndex):
             shuffled, self.other._meta.name, drop=drop, set_name=set_name
         )
         return SortIndexBlockwise(index_set)
+
+    @property
+    def npartitions(self):
+        return len(self.new_divisions)
 
 
 class _SetPartitionsPreSetIndex(Blockwise):
