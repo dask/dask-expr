@@ -468,158 +468,6 @@ class Expr:
     def _lower(self):
         return
 
-    def combine_similar(
-        self, root: Expr | None = None, _cache: dict | None = None
-    ) -> Expr:
-        """Combine similar expression nodes using global information
-
-        This leverages the ``._combine_similar`` method defined
-        on each class. The global expression-tree traversal will
-        change IO leaves first, and finish with the root expression.
-        The primary purpose of this method is to allow column
-        projections to be "pushed back up" the expression graph
-        in the case that simlar IO & Blockwise operations can
-        be captured by the same operations.
-
-        Parameters
-        ----------
-        root:
-            The root node of the global expression graph. If not
-            specified, the root is assumed to be ``self``.
-        _cache:
-            Optional dictionary to use for caching.
-
-        Returns
-        -------
-        expr:
-            output expression
-        """
-        expr = self
-        update_root = root is None
-        root = root if root is not None else self
-
-        if _cache is None:
-            _cache = {}
-        elif (self._name, root._name) in _cache:
-            return _cache[(self._name, root._name)]
-
-        seen = set()
-        while expr._name not in seen:
-            # Call combine_similar on each dependency
-            new_operands = []
-            changed_dependency = False
-            for operand in expr.operands:
-                if isinstance(operand, Expr):
-                    new = operand.combine_similar(root=root, _cache=_cache)
-                    if new._name != operand._name:
-                        changed_dependency = True
-                else:
-                    new = operand
-                new_operands.append(new)
-
-            if changed_dependency:
-                expr = type(expr)(*new_operands)
-                if isinstance(expr, Projection):
-                    # We might introduce stacked Projections (merge for example).
-                    # So get rid of them here again
-                    expr_simplify_down = expr._simplify_down()
-                    if expr_simplify_down is not None:
-                        expr = expr_simplify_down
-                if update_root:
-                    root = expr
-                continue
-
-            # Execute "_combine_similar" on expr
-            out = expr._combine_similar(root)
-            if out is None:
-                out = expr
-            if not isinstance(out, Expr):
-                _cache[(self._name, root._name)] = out
-                return out
-            seen.add(expr._name)
-            if expr._name != out._name and update_root:
-                root = expr
-            expr = out
-
-        _cache[(self._name, root._name)] = expr
-        return expr
-
-    def _combine_similar(self, root: Expr):
-        return
-
-    def _combine_similar_branches(self, root, remove_ops, skip_ops=None):
-        # We have to go back until we reach an operation that was not pushed down
-        frame, operations = self._remove_operations(self.frame, remove_ops, skip_ops)
-        try:
-            common = type(self)(frame, *self.operands[1:])
-        except ValueError:
-            # May have encountered a problem with `_required_attribute`.
-            # (There is no guarentee that the same method will exist for
-            # both a Series and DataFrame)
-            return None
-
-        others = self._find_similar_operations(root, ignore=self._parameters)
-
-        others_compatible = []
-        for op in others:
-            if (
-                isinstance(op.frame, remove_ops)
-                and (common._name == type(op)(op.frame.frame, *op.operands[1:])._name)
-            ) or common._name == op._name:
-                others_compatible.append(op)
-
-        if isinstance(self.frame, Filter) and all(
-            isinstance(op.frame, Filter) for op in others_compatible
-        ):
-            # Avoid pushing filters up if all similar ops
-            # are acting on a Filter-based expression anyway
-            return None
-
-        if len(others_compatible) > 0:
-            # Add operations back in the same order
-            for i, op in enumerate(reversed(operations)):
-                common = common[op]
-                if i > 0:
-                    # Combine stacked projections
-                    common = common._simplify_down() or common
-            return common
-
-    def _remove_operations(self, frame, remove_ops, skip_ops=None):
-        """Searches for operations that we have to push up again to avoid
-        the duplication of branches that are doing the same.
-
-        Parameters
-        ----------
-        frame: Expression that we will search.
-        remove_ops: Ops that we will remove to push up again.
-        skip_ops: Ops that were introduced and that we want to ignore.
-
-        Returns
-        -------
-        tuple of the new expression and the operations that we removed.
-        """
-
-        operations, ops_to_push_up = [], []
-        frame_base = frame
-        combined_ops = remove_ops if skip_ops is None else remove_ops + skip_ops
-        while isinstance(frame, combined_ops):
-            # Have to respect ops that were injected while lowering or filters
-            if isinstance(frame, remove_ops):
-                ops_to_push_up.append(frame.operands[1])
-                frame = frame.frame
-                break
-            else:
-                operations.append((type(frame), frame.operands[1:]))
-                frame = frame.frame
-
-        if len(ops_to_push_up) > 0:
-            # Remove the projections but build the remaining things back up
-            for op_type, operands in reversed(operations):
-                frame = op_type(frame, *operands)
-            return frame, ops_to_push_up
-        else:
-            return frame_base, []
-
     def optimize(self, **kwargs):
         return optimize(self, **kwargs)
 
@@ -1292,18 +1140,6 @@ class Blockwise(Expr):
     def _simplify_up(self, parent, dependents):
         if self._projection_passthrough and isinstance(parent, Projection):
             return plain_column_projection(self, parent, dependents)
-
-    def _combine_similar(self, root: Expr):
-        # Push projections back up through `_projection_passthrough`
-        # operations if it reduces the number of unique expression nodes.
-        if (
-            self._projection_passthrough
-            and isinstance(self.frame, Projection)
-            or self._filter_passthrough
-            and isinstance(self.frame, Filter)
-        ):
-            return self._combine_similar_branches(root, (Filter, Projection))
-        return None
 
 
 class MapPartitions(Blockwise):
@@ -2607,38 +2443,29 @@ def normalize_expression(expr):
     return expr._name
 
 
-def optimize(expr: Expr, combine_similar: bool = True, fuse: bool = True) -> Expr:
+def optimize(expr: Expr, fuse: bool = True) -> Expr:
     """High level query optimization
 
     This leverages three optimization passes:
 
     1.  Class based simplification using the ``_simplify`` function and methods
-    2.  Combine similar operations
-    3.  Blockwise fusion
+    2.  Blockwise fusion
 
     Parameters
     ----------
     expr:
         Input expression to optimize
-    combine_similar:
-        whether or not to combine similar operations
-        (like `ReadParquet`) to aggregate redundant work.
     fuse:
         whether or not to turn on blockwise fusion
 
     See Also
     --------
     simplify
-    combine_similar
     optimize_blockwise_fusion
     """
 
     # Simplify
     result = expr.simplify()
-    #
-    # # Combine similar
-    # if combine_similar:
-    #     result = result.combine_similar()
 
     # Manipulate Expression to make it more efficient
     result = result.rewrite(kind="tune")

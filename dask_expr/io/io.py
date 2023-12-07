@@ -78,60 +78,6 @@ class BlockwiseIO(Blockwise, IO):
                 result = result[parent_columns]
             return result
 
-    def _combine_similar(self, root: Expr):
-        if self._absorb_projections:
-            # For BlockwiseIO expressions with "columns"/"_series"
-            # attributes (`_absorb_projections == True`), we can avoid
-            # redundant file-system access by aggregating multiple
-            # operations with different column projections into the
-            # same operation.
-            alike = self._find_similar_operations(root, ignore=["columns", "_series"])
-            if alike:
-                # We have other BlockwiseIO operations (of the same
-                # sub-type) in the expression graph that can be combined
-                # with this one.
-
-                # Find the column-projection union needed to combine
-                # the qualified BlockwiseIO operations
-                columns_operand = self.operand("columns")
-                if columns_operand is None:
-                    columns_operand = self.columns
-                columns = set(columns_operand)
-                for op in alike:
-                    op_columns = op.operand("columns")
-                    if op_columns is None:
-                        op_columns = op.columns
-                    columns |= set(op_columns)
-                columns = sorted(columns)
-                if columns_operand is None:
-                    columns_operand = self.columns
-                # Can bail if we are not changing columns or the "_series" operand
-                if columns_operand == columns and (
-                    len(columns) > 1 or not self._series
-                ):
-                    return
-
-                # Check if we have the operation we want elsewhere in the graph
-                for op in alike:
-                    if set(op.columns) == set(columns) and not op.operand("_series"):
-                        return (
-                            op[columns_operand[0]]
-                            if self._series
-                            else op[columns_operand]
-                        )
-
-                if set(self.columns) == set(columns):
-                    return  # Skip unnecessary projection change
-
-                # Create the "combined" ReadParquet operation
-                subs = {"columns": columns}
-                if self._series:
-                    subs["_series"] = False
-                new = self.substitute_parameters(subs)
-                return new[columns_operand[0]] if self._series else new[columns_operand]
-
-        return
-
     def _tune_up(self, parent):
         if self._fusion_compression_factor >= 1:
             return
