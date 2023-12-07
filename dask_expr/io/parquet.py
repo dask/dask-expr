@@ -43,6 +43,7 @@ from dask_expr._expr import (
     Literal,
     Or,
     Projection,
+    determine_column_projection,
 )
 from dask_expr._reductions import Len
 from dask_expr._util import _convert_to_list
@@ -453,7 +454,11 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
     def _simplify_up(self, parent, dependents):
         if isinstance(parent, Index):
             # Column projection
-            return self.substitute_parameters({"columns": [], "_series": False})
+            columns = determine_column_projection(self, parent, dependents)
+            if set(columns) == set(self.columns):
+                return
+            columns = [col for col in self.columns if col in columns]
+            return self.substitute_parameters({"columns": columns, "_series": False})
 
         if isinstance(parent, Projection):
             return super()._simplify_up(parent, dependents)
