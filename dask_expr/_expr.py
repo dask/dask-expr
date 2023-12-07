@@ -379,7 +379,7 @@ class Expr:
     def simplify(self) -> Expr:
         expr = self
         while True:
-            dependents = collect_depdendents(self)
+            dependents = collect_depdendents(expr)
             new = expr.simplify_once(dependents=dependents)
             if new._name == expr._name:
                 break
