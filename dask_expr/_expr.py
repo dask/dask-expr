@@ -1526,6 +1526,9 @@ class Elemwise(Blockwise):
 
     def _simplify_up(self, parent, dependents):
         if self._filter_passthrough and isinstance(parent, Filter):
+            parents = [x() for x in dependents[self._name] if x() is not None]
+            if not all(isinstance(p, Filter) for p in parents):
+                return
             return type(self)(
                 self.frame[parent.operand("predicate")], *self.operands[1:]
             )
@@ -1574,7 +1577,6 @@ class Fillna(Elemwise):
 
 
 class Replace(Elemwise):
-    _filter_passthrough = False
     _projection_passthrough = True
     _parameters = ["frame", "to_replace", "value", "regex"]
     _defaults = {"to_replace": None, "value": no_default, "regex": False}
