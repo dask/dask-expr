@@ -85,6 +85,10 @@ class GroupByApplyConcatApply(ApplyConcatApply):
             return 1
         return super().split_out
 
+    @property
+    def _projection_columns(self):
+        return self.frame.columns
+
     def _tune_down(self):
         if (
             isinstance(self.by, list)

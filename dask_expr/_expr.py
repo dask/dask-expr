@@ -883,6 +883,12 @@ class Expr:
             return list(self._meta.columns)
         except AttributeError:
             return []
+        except Exception:
+            raise
+
+    @property
+    def _projection_columns(self):
+        return self.columns
 
     @property
     def dtypes(self):
@@ -3026,10 +3032,7 @@ def determine_column_projection(
 
     for p in parents:
         if len(p.columns) > 0:
-            column_union.append(p.columns)
-        elif parent.ndim == 1 and not isinstance(parent, Index):
-            # Reduction to a Series, so keep all columns
-            column_union.append(expr.columns)
+            column_union.append(p._projection_columns)
 
     if additional_columns is not None:
         column_union.append(additional_columns)

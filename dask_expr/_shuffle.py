@@ -748,6 +748,12 @@ class SetIndex(BaseSetIndexSortValues):
             return self.operand("npartitions")
         return self.frame.npartitions
 
+    @property
+    def _projection_columns(self):
+        return self.columns + (
+            [self._other] if not isinstance(self._other, Expr) else []
+        )
+
     @functools.cached_property
     def _meta(self):
         if isinstance(self._other, Expr):
@@ -828,6 +834,7 @@ class SetIndex(BaseSetIndexSortValues):
                 if not isinstance(self._other, Expr)
                 else [],
             )
+            columns = _convert_to_list(columns)
             if self.frame.columns == columns:
                 return
             return type(parent)(

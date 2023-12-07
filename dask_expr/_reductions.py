@@ -653,6 +653,10 @@ class Reduction(ApplyConcatApply):
     reduction_combine = None
     reduction_aggregate = None
 
+    @property
+    def _projection_columns(self):
+        return self.frame.columns
+
     @classmethod
     def chunk(cls, df, **kwargs):
         out = cls.reduction_chunk(df, **kwargs)
