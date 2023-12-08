@@ -1,4 +1,5 @@
 import itertools
+import numbers
 import operator
 
 import dask
@@ -17,6 +18,7 @@ from dask.array.rechunk import (
 from dask.utils import cached_property
 
 from dask_expr.array import Array
+from dask_expr.array.core import IO
 
 
 class Rechunk(Array):
@@ -114,6 +116,33 @@ class Rechunk(Array):
         if isinstance(self.array, Rechunk):
             # TODO: should maybe or the two balance values
             return Rechunk(self.array.array, *self.operands[1:])
+        if isinstance(self.array, Elemwise):
+            if isinstance(self._chunks, (str, numbers.Number)):
+                return self.array.substitute(
+                    self.array,
+                    self.array.rechunk(self._chunks),
+                )
+            # TODO: handle subclasses
+            if type(self.array) == Elemwise and isinstance(self._chunks, tuple):
+                args = []
+                for arg, inds in toolz.partition_all(2, self.array.args):
+                    if inds is None:
+                        args.extend((arg, inds))
+                    else:
+                        assert isinstance(arg, Array)
+                        idx = tuple(self.array.out_ind.index(i) for i in inds)
+                        chunks = tuple([self._chunks[i] for i in idx])
+                        arg = arg.rechunk(chunks)
+                        args.extend((arg, inds))
+
+                return Elemwise(*self.array.operands[: -len(args)], *args)
+
+        if isinstance(self.array, IO) and "chunks" in self.array._parameters:
+            chunks = tuple(
+                c if n != 1 else 1 if isinstance(c, numbers.Number) else (1,)
+                for n, c in zip(self.array.shape, self._chunks)
+            )
+            return self.array.substitute_parameters({"chunks": chunks})
 
 
 def _compute_rechunk(old_name, old_chunks, chunks, level, name):
@@ -182,3 +211,6 @@ def _compute_rechunk(old_name, old_chunks, chunks, level, name):
     del old_blocks, new_index
 
     return name, chunks, {**x2, **intermediates}
+
+
+from dask_expr.array.blockwise import Elemwise

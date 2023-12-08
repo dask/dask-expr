@@ -124,8 +124,18 @@ class Array(core.Expr, DaskMethodsMixin):
         return elemwise(operator.mul, other, self)
 
 
-class FromArray(Array):
+class IO(Array):
+    pass
+
+
+class FromArray(IO):
     _parameters = ["array", "chunks"]
+
+    @property
+    def chunks(self):
+        return da.core.normalize_chunks(
+            self.operand("chunks"), self.array.shape, dtype=self.array.dtype
+        )
 
     @property
     def _meta(self):
@@ -161,7 +171,6 @@ class FromGraph(Array):
 
 
 def from_array(x, chunks="auto"):
-    chunks = da.core.normalize_chunks(chunks, x.shape, dtype=x.dtype)
     return FromArray(x, chunks)
 
 

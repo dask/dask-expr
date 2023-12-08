@@ -591,3 +591,10 @@ class Transpose(Elemwise):
     @property
     def args(self):
         return (self.array, tuple(range(self.array.ndim)))
+
+    def _simplify_down(self):
+        if isinstance(self.array, Transpose):
+            axes = tuple(self.array.axes[i] for i in self.axes)
+            return Transpose(self.array.array, axes)
+        if self.axes == tuple(range(self.ndim)):
+            return self.array

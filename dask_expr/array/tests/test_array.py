@@ -36,6 +36,37 @@ def test_rechunk_optimize():
     assert c.optimize()._name == d.optimize()._name
 
 
+def test_rechunk_blockwise_optimize():
+    a = np.random.random((10, 10))
+    b = da.from_array(a, chunks=(4, 4))
+
+    result = (da.from_array(a, chunks=(4, 4)) + 1).rechunk((5, 5))
+    expected = da.from_array(a, chunks=(5, 5)) + 1
+    assert result.optimize()._name == expected.optimize()._name
+
+    a = np.random.random((10,))
+    aa = da.from_array(a)
+    b = np.random.random((10, 10))
+    bb = da.from_array(b)
+
+    c = (aa + bb).rechunk((5, 2))
+    result = c.optimize()
+
+    expected = da.from_array(a, chunks=(2,)) + da.from_array(b, chunks=(5, 2))
+    assert result._name == expected._name
+
+    a = np.random.random((10, 1))
+    aa = da.from_array(a)
+    b = np.random.random((10, 10))
+    bb = da.from_array(b)
+
+    c = (aa + bb).rechunk((5, 2))
+    result = c.optimize()
+
+    expected = da.from_array(a, chunks=(5, 1)) + da.from_array(b, chunks=(5, 2))
+    assert result._name == expected._name
+
+
 def test_elemwise():
     a = np.random.random((10, 10))
     b = da.from_array(a, chunks=(4, 4))
@@ -60,3 +91,5 @@ def test_transpose():
     b = da.from_array(a, chunks=(5, 1))
     assert_eq(a.T + a, b.T + b)
     assert_eq(a + a.T, b + b.T)
+
+    assert b.T.T.optimize()._name == b.optimize()._name
