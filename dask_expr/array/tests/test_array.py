@@ -48,3 +48,15 @@ def test_elemwise():
     y = da.from_array(x, chunks=(4,))
 
     assert_eq(a + x, b + y)
+
+
+def test_transpose():
+    a = np.random.random((10, 20))
+    b = da.from_array(a, chunks=(2, 5))
+
+    assert_eq(a.T, b.T)
+
+    a = np.random.random((10, 1))
+    b = da.from_array(a, chunks=(5, 1))
+    assert_eq(a.T + a, b.T + b)
+    assert_eq(a + a.T, b + b.T)

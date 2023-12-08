@@ -107,7 +107,7 @@ class Blockwise(Array):
 
     @property
     def _name(self):
-        if self.operand("name"):
+        if "name" in self._parameters and self.operand("name"):
             return self.operand("name")
         else:
             return "{}-{}".format(
@@ -554,3 +554,40 @@ def is_scalar_for_elemwise(arg):
         or isinstance(arg, np.dtype)
         or (isinstance(arg, np.ndarray) and arg.ndim == 0)
     )
+
+
+class Transpose(Elemwise):
+    _parameters = ["array", "axes"]
+    func = staticmethod(np.transpose)
+    align_arrays = False
+    adjust_chunks = None
+    concatenate = None
+    token = "transpose"
+
+    @property
+    def new_axes(self):
+        return {}
+
+    @property
+    def name(self):
+        return self._name
+
+    @property
+    def _meta_provided(self):
+        return self.array._meta
+
+    @property
+    def dtype(self):
+        return self._meta.dtype
+
+    @property
+    def out_ind(self):
+        return self.axes
+
+    @property
+    def kwargs(self):
+        return {"axes": self.axes}
+
+    @property
+    def args(self):
+        return (self.array, tuple(range(self.array.ndim)))

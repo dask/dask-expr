@@ -97,6 +97,20 @@ class Array(core.Expr, DaskMethodsMixin):
 
         return Rechunk(self, chunks, threshold, block_size_limit, balance, method)
 
+    def transpose(self, axes=None):
+        if axes:
+            if len(axes) != self.ndim:
+                raise ValueError("axes don't match array")
+            axes = tuple(d + self.ndim if d < 0 else d for d in axes)
+        else:
+            axes = tuple(range(self.ndim))[::-1]
+
+        return Transpose(self, axes)
+
+    @property
+    def T(self):
+        return self.transpose()
+
     def __add__(self, other):
         return elemwise(operator.add, self, other)
 
@@ -151,4 +165,4 @@ def from_array(x, chunks="auto"):
     return FromArray(x, chunks)
 
 
-from dask_expr.array.blockwise import elemwise
+from dask_expr.array.blockwise import Transpose, elemwise
