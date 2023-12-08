@@ -117,7 +117,7 @@ def test_rolling_one_element_window(df, pdf):
     expecetd = df.foo.rolling("1s").count()
     assert_eq(result, expecetd)
 
-    
+
 @pytest.mark.parametrize("window", [1, 2, 4, 5])
 @pytest.mark.parametrize("center", [True, False])
 def test_rolling_cov(df, pdf, window, center):
