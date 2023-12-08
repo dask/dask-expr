@@ -237,7 +237,10 @@ class Rolling:
         self.kwargs = kwargs
         self.groupby_kwargs = groupby_kwargs
         self.groupby_slice = groupby_slice
+        
+        obj._meta.rolling(window, **self.kwargs)
 
+        
     def _single_agg(self, expr_cls, how_args=(), how_kwargs=None):
         return new_collection(
             expr_cls(
