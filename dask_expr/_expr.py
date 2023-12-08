@@ -30,7 +30,11 @@ from dask.utils import M, apply, funcname
 from tlz import merge_sorted, unique
 
 from dask_expr import _core as core
-from dask_expr._util import _tokenize_deterministic, _tokenize_partial
+from dask_expr._util import (
+    _calc_maybe_new_divisions,
+    _tokenize_deterministic,
+    _tokenize_partial,
+)
 
 
 class Expr(core.Expr):
@@ -689,14 +693,23 @@ class MapOverlap(MapPartitions):
         kwargs = self.kwargs
         if kwargs is None:
             kwargs = {}
-        kwargs = kwargs.copy()
-        kwargs.update({"before": self.before, "after": self.after, "func": self.func})
         return kwargs
+
+    @property
+    def args(self):
+        return (
+            [self.frame]
+            + [self.func, self.before, self.after]
+            + self.operands[len(self._parameters) :]
+        )
 
     @functools.cached_property
     def _meta(self):
         meta = self.operand("meta")
-        args = [arg._meta if isinstance(arg, Expr) else arg for arg in self.args]
+        args = [self.frame._meta] + [
+            arg._meta if isinstance(arg, Expr) else arg
+            for arg in self.operands[len(self._parameters) :]
+        ]
         return _get_meta_map_partitions(args, [], self.func, self.kwargs, meta, None)
 
     @functools.cached_property
@@ -730,6 +743,7 @@ class MapOverlap(MapPartitions):
             self.transform_divisions,
             self.clear_divisions,
             self._kwargs,
+            *self.args[1:],
         )
 
 
@@ -829,7 +843,7 @@ def _combined_parts(prev_part, current_part, next_part, before, after):
         else:
             prev_part_input = prev_part
             prev_part = _tail_timedelta(current_part, prev_part, before)
-            if len(prev_part_input) == len(prev_part):
+            if len(prev_part_input) == len(prev_part) and len(prev_part_input) > 0:
                 raise NotImplementedError(msg)
 
     if next_part is not None:
@@ -839,7 +853,7 @@ def _combined_parts(prev_part, current_part, next_part, before, after):
         else:
             next_part_input = next_part
             next_part = _head_timedelta(current_part, next_part, after)
-            if len(next_part_input) == len(next_part):
+            if len(next_part_input) == len(next_part) and len(next_part_input) > 0:
                 raise NotImplementedError(msg)
 
     parts = [p for p in (prev_part, current_part, next_part) if p is not None]
@@ -848,8 +862,8 @@ def _combined_parts(prev_part, current_part, next_part, before, after):
     return CombinedOutput(
         (
             combined,
-            len(prev_part) if prev_part is not None else None,
-            len(next_part) if next_part is not None else None,
+            len(prev_part) if prev_part is not None and len(prev_part) > 0 else None,
+            len(next_part) if next_part is not None and len(next_part) > 0 else None,
         )
     )
 
@@ -1385,12 +1399,13 @@ class Projection(Elemwise):
 
     @property
     def columns(self):
-        if isinstance(self.operand("columns"), list):
-            return self.operand("columns")
-        elif isinstance(self.operand("columns"), pd.Index):
-            return list(self.operand("columns"))
+        cols = self.operand("columns")
+        if isinstance(cols, list):
+            return cols
+        elif isinstance(cols, pd.Index):
+            return list(cols)
         else:
-            return [self.operand("columns")]
+            return [cols]
 
     @functools.cached_property
     def _meta(self):
@@ -2080,14 +2095,45 @@ def optimize_blockwise_fusion(expr):
     return expr
 
 
+class Diff(MapOverlap):
+    _parameters = ["frame", "periods"]
+    _defaults = {"periods": 1}
+    func = M.diff
+    enforce_metadata = True
+    transform_divisions = False
+    clear_divisions = False
+
+    def _divisions(self):
+        return self.frame.divisions
+
+    @functools.cached_property
+    def _meta(self):
+        return meta_nonempty(self.frame._meta).diff(**self.kwargs)
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+
+    @functools.cached_property
+    def kwargs(self):
+        return dict(periods=self.periods)
+
+    @property
+    def before(self):
+        return self.periods if self.periods > 0 else 0
+
+    @property
+    def after(self):
+        return 0 if self.periods > 0 else -self.periods
+
+
 class FFill(MapOverlap):
-    _parameters = [
-        "frame",
-        "limit",
-    ]
+    _parameters = ["frame", "limit"]
     _defaults = {"limit": None}
     func = M.ffill
     enforce_metadata = True
+    transform_divisions = False
+    clear_divisions = False
 
     def _divisions(self):
         return self.frame.divisions
@@ -2112,20 +2158,6 @@ class FFill(MapOverlap):
     def after(self):
         return 0
 
-    def _lower(self):
-        return None
-
-    def _simplify_down(self):
-        return MapOverlap(
-            frame=self.frame,
-            func=self.func,
-            before=self.before,
-            after=self.after,
-            meta=self._meta,
-            enforce_metadata=self.enforce_metadata,
-            kwargs=self.kwargs,
-        )
-
 
 class BFill(FFill):
     func = M.bfill
@@ -2149,11 +2181,14 @@ class Shift(MapOverlap):
 
     func = M.shift
     enforce_metadata = True
-    before = 0
-    after = 0
+    transform_divisions = False
+    clear_divisions = False
 
     def _divisions(self):
-        return self.frame.divisions
+        divisions = _calc_maybe_new_divisions(self.frame, self.periods, self.freq)
+        if divisions is None:
+            divisions = (None,) * (self.frame.npartitions + 1)
+        return divisions
 
     @functools.cached_property
     def _meta(self):
@@ -2167,25 +2202,13 @@ class Shift(MapOverlap):
         if isinstance(parent, Projection):
             return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
 
-    def _lower(self):
-        return None
+    @property
+    def before(self):
+        return self.periods if self.periods > 0 else 0
 
-    def _simplify_down(self):
-        if self.freq is None:
-            self.before, self.after = (
-                (self.periods, 0) if self.periods > 0 else (0, -self.periods)
-            )
-            return MapOverlap(
-                frame=self.frame,
-                func=self.func,
-                before=self.before,
-                after=self.after,
-                meta=self._meta,
-                enforce_metadata=self.enforce_metadata,
-                kwargs=self.kwargs,
-            )
-        else:
-            raise NotImplementedError()
+    @property
+    def after(self):
+        return 0 if self.periods > 0 else -self.periods
 
 
 class Fused(Blockwise):
