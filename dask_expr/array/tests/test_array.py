@@ -34,3 +34,17 @@ def test_rechunk_optimize():
     d = b.rechunk((5, 2))
 
     assert c.optimize()._name == d.optimize()._name
+
+
+def test_elemwise():
+    a = np.random.random((10, 10))
+    b = da.from_array(a, chunks=(4, 4))
+
+    (b + 1).compute()
+    assert_eq(a + 1, b + 1)
+    assert_eq(a + 2 * a, b + 2 * b)
+
+    x = np.random.random(10)
+    y = da.from_array(x, chunks=(4,))
+
+    assert_eq(a + x, b + y)

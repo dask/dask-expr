@@ -97,6 +97,18 @@ class Array(core.Expr, DaskMethodsMixin):
 
         return Rechunk(self, chunks, threshold, block_size_limit, balance, method)
 
+    def __add__(self, other):
+        return elemwise(operator.add, self, other)
+
+    def __radd__(self, other):
+        return elemwise(operator.add, other, self)
+
+    def __mul__(self, other):
+        return elemwise(operator.add, self, other)
+
+    def __rmul__(self, other):
+        return elemwise(operator.mul, other, self)
+
 
 class FromArray(Array):
     _parameters = ["array", "chunks"]
@@ -137,3 +149,6 @@ class FromGraph(Array):
 def from_array(x, chunks="auto"):
     chunks = da.core.normalize_chunks(chunks, x.shape, dtype=x.dtype)
     return FromArray(x, chunks)
+
+
+from dask_expr.array.blockwise import elemwise
