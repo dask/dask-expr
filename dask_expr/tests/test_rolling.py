@@ -150,3 +150,11 @@ def test_rolling_raises():
     pytest.raises(ValueError, lambda: ddf.rolling(3, axis=10))
     pytest.raises(ValueError, lambda: ddf.rolling(3, axis="coulombs"))
     pytest.raises(NotImplementedError, lambda: ddf.rolling(100).mean().compute())
+
+
+def test_time_rolling_constructor(df):
+    result = df.rolling("4s")
+    assert result.window == "4s"
+    assert result.min_periods is None
+    assert result.win_type is None
+    assert result._win_type == "freq"

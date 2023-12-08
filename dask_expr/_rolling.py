@@ -221,10 +221,20 @@ class Rolling:
     """Aggregate using one or more operations
 
     The purpose of this class is to expose an API similar
-    to Pandas' `Rollingr` for dask-expr
+    to Pandas' `Rolling` for dask-expr
     """
 
-    def __init__(self, obj, window, groupby_kwargs=None, groupby_slice=None, **kwargs):
+    def __init__(
+        self,
+        obj,
+        window,
+        groupby_kwargs=None,
+        groupby_slice=None,
+        min_periods=None,
+        center=False,
+        win_type=None,
+        axis=0,
+    ):
         if obj.divisions[0] is None:
             msg = (
                 "Can only rolling dataframes with known divisions\n"
@@ -234,13 +244,29 @@ class Rolling:
             raise ValueError(msg)
         self.obj = obj
         self.window = window
-        self.kwargs = kwargs
         self.groupby_kwargs = groupby_kwargs
         self.groupby_slice = groupby_slice
-        
+        self.min_periods = min_periods
+        self.center = center
+        self.win_type = win_type
+        self.axis = axis
+
+        # Allow pandas to raise if appropriate
         obj._meta.rolling(window, **self.kwargs)
 
-        
+        # Using .rolling(window='2s'), pandas will convert the
+        # offset str to a window in nanoseconds. But pandas doesn't
+        # accept the integer window with win_type='freq', so we store
+        # that information here.
+        # See https://github.com/pandas-dev/pandas/issues/15969
+        self._win_type = None if isinstance(self.window, int) else "freq"
+
+    @functools.cached_property
+    def kwargs(self):
+        return dict(
+            min_periods=self.min_periods, center=self.center, win_type=self.win_type
+        )
+
     def _single_agg(self, expr_cls, how_args=(), how_kwargs=None):
         return new_collection(
             expr_cls(
