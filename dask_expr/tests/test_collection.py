@@ -1616,6 +1616,11 @@ def test_items(df, pdf):
         assert_eq(expect_col, actual_col)
 
 
+def test_index_index(df):
+    with pytest.raises(NotImplementedError, match="has no"):
+        df.index.index
+
+
 @pytest.mark.parametrize("npartitions", [1, 4])
 def test_map_overlap(npartitions, pdf, df):
     def shifted_sum(df, before, after, c=0):
