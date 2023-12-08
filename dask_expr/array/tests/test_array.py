@@ -93,3 +93,22 @@ def test_transpose():
     assert_eq(a + a.T, b + b.T)
 
     assert b.T.T.optimize()._name == b.optimize()._name
+
+
+def test_slicing():
+    a = np.random.random((10, 20))
+    b = da.from_array(a, chunks=(2, 5))
+
+    assert_eq(a[:], b[:])
+    assert_eq(a[::2], b[::2])
+    assert_eq(a[1, :5], b[1, :5])
+    assert_eq(a[None, ..., ::5], b[None, ..., ::5])
+    assert_eq(a[3], b[3])
+
+
+def test_slicing_optimization():
+    a = np.random.random((10, 20))
+    b = da.from_array(a, chunks=(2, 5))
+
+    assert b[:].optimize()._name == b._name
+    assert b[5:, 4][::2].optimize()._name == b[5::2, 4].optimize()._name

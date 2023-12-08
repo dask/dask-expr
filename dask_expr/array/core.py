@@ -28,6 +28,20 @@ class Array(core.Expr, DaskMethodsMixin):
     def __array_ufunc__(self, numpy_ufunc, method, *inputs, **kwargs):
         raise NotImplementedError()
 
+    def __getitem__(self, index):
+        from dask.array.slicing import normalize_index
+
+        from dask_expr.array.slicing import Slice
+
+        if not isinstance(index, tuple):
+            index = (index,)
+
+        index2 = normalize_index(index, self.shape)
+
+        # TODO: handle slicing with dask array
+
+        return Slice(self, index2)
+
     @cached_property
     def shape(self) -> tuple[T_IntOrNaN, ...]:
         return tuple(cached_cumsum(c, initial_zero=True)[-1] for c in self.chunks)

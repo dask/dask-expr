@@ -123,6 +123,9 @@ class Rechunk(Array):
                     self.array.rechunk(self._chunks),
                 )
             # TODO: handle subclasses
+            # TODO: this probably doesn't support contractions or expansions
+            #       We should probably just abort in those cases for now (or do
+            #       chunksize math)
             if type(self.array) == Elemwise and isinstance(self._chunks, tuple):
                 args = []
                 for arg, inds in toolz.partition_all(2, self.array.args):
