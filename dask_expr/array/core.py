@@ -82,6 +82,9 @@ class Array(core.Expr, DaskMethodsMixin):
     def __hash__(self):
         return hash(self._name)
 
+    def optimize(self):
+        return self.simplify()
+
     def rechunk(
         self,
         chunks="auto",

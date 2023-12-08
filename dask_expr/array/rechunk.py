@@ -110,6 +110,11 @@ class Rechunk(Array):
                 "This shouldn't be hard, but I haven't done it yet, things are in motion over there"
             )
 
+    def _simplify_down(self):
+        if isinstance(self.array, Rechunk):
+            # TODO: should maybe or the two balance values
+            return Rechunk(self.array.array, *self.operands[1:])
+
 
 def _compute_rechunk(old_name, old_chunks, chunks, level, name):
     """Compute the rechunk of *x* to the given *chunks*."""
