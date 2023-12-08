@@ -2772,7 +2772,6 @@ class Shift(MapOverlap):
     enforce_metadata = True
     before = 0
     after = 0
-    axis = 0
 
     def _divisions(self):
         divisions = _calc_maybe_new_divisions(self.frame, self.periods, self.freq)
@@ -2786,7 +2785,7 @@ class Shift(MapOverlap):
 
     @functools.cached_property
     def kwargs(self):
-        return dict(periods=self.periods, freq=self.freq, axis=self.axis)
+        return dict(periods=self.periods, freq=self.freq)
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
