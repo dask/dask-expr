@@ -62,13 +62,7 @@ from dask_expr._reductions import (
 from dask_expr._repartition import Repartition
 from dask_expr._shuffle import SetIndex, SetIndexBlockwise, SortValues
 from dask_expr._str_accessor import StringAccessor
-from dask_expr._util import (
-    _BackendData,
-    _calc_maybe_new_divisions,
-    _convert_to_list,
-    _validate_axis,
-    is_scalar,
-)
+from dask_expr._util import _BackendData, _convert_to_list, _validate_axis, is_scalar
 from dask_expr.io import FromPandasDivisions
 
 #
@@ -671,12 +665,10 @@ class FrameBase(DaskMethodsMixin):
         if axis == 0:
             return new_collection(Shift(self.expr, periods, freq))
 
-        clear_divisions = _calc_maybe_new_divisions(self.expr, periods, freq) is None
         return self.map_partitions(
             func=Shift.func,
             enforce_metadata=False,
             transform_divisions=False,
-            clear_divisions=clear_divisions,
             periods=periods,
             axis=axis,
             freq=freq,
