@@ -85,6 +85,8 @@ API Coverage
 - `eval`
 - `explode`
 - `fillna`
+- `ffill`
+- `bfill`
 - `groupby`
 - `head`
 - `idxmax`
@@ -154,6 +156,8 @@ API Coverage
 - `dtype`
 - `explode`
 - `fillna`
+- `ffill`
+- `bfill`
 - `groupby`
 - `head`
 - `idxmax`
@@ -264,6 +268,7 @@ API Coverage
 - `value_counts`
 - `var`
 
+Support for ``SeriesGroupBy`` and ``DataFrameGroupBy``.
 
 **`dask_expr._resample.Resampler`**
 
@@ -352,4 +357,7 @@ API Coverage
 - `read_csv`
 - `read_parquet`
 - `repartition`
+- `to_datetime`
+- `to_numeric`
+- `to_timedelta`
 - `to_parquet`
