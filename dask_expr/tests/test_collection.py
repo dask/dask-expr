@@ -306,6 +306,16 @@ def test_diff(pdf, df, axis, periods):
     expected = pdf.diff(**kwargs)
     assert_eq(expected, actual)
 
+    # Check projections
+    expected = df[["x"]].diff(**kwargs)
+    actual = df.diff(**kwargs)[["x"]]
+
+    # no optimization on axis 1
+    if axis in ("columns", 1):
+        assert actual._name == actual.simplify()._name
+    else:
+        assert actual.simplify()._name == expected.simplify()._name
+
 
 @pytest.mark.parametrize(
     "func",
