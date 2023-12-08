@@ -1192,6 +1192,10 @@ class Series(FrameBase):
     def name(self):
         return self.expr._meta.name
 
+    @name.setter
+    def name(self, name):
+        self._expr = self.rename(index=name)._expr
+
     @property
     def dtype(self):
         return self.expr._meta.dtype
