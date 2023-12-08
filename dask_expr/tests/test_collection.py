@@ -10,7 +10,15 @@ from dask.dataframe._compat import PANDAS_GE_200, PANDAS_GE_210
 from dask.dataframe.utils import UNKNOWN_CATEGORIES
 from dask.utils import M
 
-from dask_expr import expr, from_pandas, is_scalar, optimize, to_datetime, to_numeric
+from dask_expr import (
+    expr,
+    from_pandas,
+    is_scalar,
+    optimize,
+    to_datetime,
+    to_numeric,
+    to_timedelta,
+)
 from dask_expr._expr import are_co_aligned
 from dask_expr._reductions import Len
 from dask_expr._shuffle import Shuffle
@@ -209,6 +217,21 @@ def test_fillna():
     assert_eq(actual, expected)
 
 
+@pytest.mark.parametrize("limit", (None, 1, 2))
+@pytest.mark.parametrize("how", ("ffill", "bfill"))
+@pytest.mark.parametrize("axis", ("index", "columns", 0, 1))
+def test_ffill_and_bfill(limit, axis, how):
+    if limit is None:
+        pytest.xfail("Need to determine partition size for Fill.before <= frame size")
+    if axis in (1, "columns"):
+        pytest.xfail("bfill/ffill not implemented for axis 1")
+    pdf = lib.DataFrame({"x": [1, 2, None, None, 5, 6]})
+    df = from_pandas(pdf, npartitions=2)
+    actual = getattr(df, how)(axis=axis, limit=limit)
+    expected = getattr(pdf, how)(axis=axis, limit=limit)
+    assert_eq(actual, expected)
+
+
 @pytest.mark.parametrize("periods", (1, 2))
 @pytest.mark.parametrize("freq", (None, "1h"))
 @pytest.mark.parametrize("axis", ("index", 0, "columns", 1))
@@ -248,14 +271,26 @@ def test_nlargest_nsmallest(df, pdf, func):
     "func",
     [
         lambda df: df.x > 10,
+        lambda df: df.x.gt(10),
         lambda df: df.x + 20 > df.y,
         lambda df: 10 < df.x,
+        lambda df: df.x.lt(10),
         lambda df: 10 <= df.x,
+        lambda df: df.x.le(10),
         lambda df: 10 == df.x,
+        lambda df: df.x.eq(10),
         lambda df: df.x < df.y,
+        lambda df: df.lt(df),
+        lambda df: df.x.lt(df.y),
         lambda df: df.x > df.y,
+        lambda df: df.gt(df),
+        lambda df: df.x.gt(df.y),
         lambda df: df.x == df.y,
+        lambda df: df.eq(df),
+        lambda df: df.x.eq(df.y),
         lambda df: df.x != df.y,
+        lambda df: df.ne(df),
+        lambda df: df.x.ne(df.y),
     ],
 )
 def test_conditionals(func, pdf, df):
@@ -358,7 +393,10 @@ def test_to_timestamp(pdf, how):
         lambda df: df.x.to_frame(),
         lambda df: df.drop(columns="x"),
         lambda df: df.drop(axis=1, labels=["x"]),
+        lambda df: df.x.index.to_series(),
         lambda df: df.x.index.to_frame(),
+        lambda df: df.x.index.to_series(name="abc"),
+        lambda df: df.x.index.to_frame(name="abc"),
         lambda df: df.eval("z=x+y"),
         lambda df: df.select_dtypes(include="integer"),
         lambda df: df.add_prefix(prefix="2_"),
@@ -396,6 +434,15 @@ def test_to_numeric(pdf, df):
 
     with pytest.raises(TypeError, match="arg must be a Series"):
         to_numeric("1.0")
+
+
+def test_to_timedelta(pdf, df):
+    expected = lib.to_timedelta(pdf.x)
+    result = to_timedelta(df.x)
+    assert_eq(result, expected)
+
+    with pytest.raises(TypeError, match="arg must be a Series"):
+        to_timedelta("1.0")
 
 
 def test_drop_not_implemented(pdf, df):
@@ -749,6 +796,13 @@ def test_partitions(pdf, df):
     out = optimize(df.partitions[1])
     assert len(out.dask) == 1
     assert_eq(out, pdf.iloc[10:20])
+
+
+def test_get_partition(pdf, df):
+    assert_eq(df.get_partition(0), pdf.iloc[:10])
+    assert_eq(df.get_partition(1), pdf.iloc[10:20])
+    assert_eq(df.get_partition(-1), pdf.iloc[90:])
+    assert_eq(df.x.get_partition(0), pdf.x.iloc[:10])
 
 
 def test_column_getattr(df):
@@ -1155,6 +1209,30 @@ def test_unknown_partitions_different_root():
         df.align(df2)
 
 
+@pytest.mark.parametrize("dropna", [False, True])
+def test_nunique(pdf, dropna):
+    pdf["z"] = pdf.y.astype(float)
+    pdf.loc[9:12, "z"] = np.nan  # Spans two partitions
+    df = from_pandas(pdf, npartitions=10)
+
+    assert_eq(
+        df.nunique(dropna=dropna),
+        pdf.nunique(dropna=dropna),
+    )
+    assert_eq(
+        df.nunique(axis=1, dropna=dropna),
+        pdf.nunique(axis=1, dropna=dropna),
+    )
+    assert_eq(
+        df.z.nunique(dropna=dropna),
+        pdf.z.nunique(dropna=dropna),
+    )
+    assert_eq(
+        df.set_index("z").index.nunique(dropna=dropna),
+        pdf.set_index("z").index.nunique(dropna=dropna),
+    )
+
+
 @xfail_gpu("compute_hll_array doesn't work for cudf")
 def test_nunique_approx(df, pdf):
     actual = df.nunique_approx().compute()
@@ -1485,3 +1563,29 @@ def test_isnull():
     assert_eq(df.isnull(), pdf.isnull())
     for c in pdf.columns:
         assert_eq(df[c].isnull(), pdf[c].isnull())
+
+
+def test_scalar_to_series():
+    sc = from_pandas(lib.Series([1])).sum()
+    ss1 = sc.to_series()
+    ss2 = sc.to_series("xxx")
+    assert_eq(ss1, lib.Series([1]))
+    assert_eq(ss2, lib.Series([1], index=["xxx"]))
+
+
+def test_keys(df, pdf):
+    assert_eq(df.keys(), pdf.keys())  # Alias for DataFrame.columns
+    assert_eq(df.x.keys(), pdf.x.keys())  # Alias for Series.index
+
+
+def test_iter(df, pdf):
+    assert_eq(list(df), list(pdf))  # column names
+
+
+def test_items(df, pdf):
+    expect = list(pdf.items())
+    actual = list(df.items())
+    assert len(expect) == len(actual)
+    for (expect_name, expect_col), (actual_name, actual_col) in zip(expect, actual):
+        assert expect_name == actual_name
+        assert_eq(expect_col, actual_col)
