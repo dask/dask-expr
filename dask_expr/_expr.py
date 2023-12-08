@@ -390,8 +390,6 @@ class Expr:
         return
 
     def _simplify_up(self, parent, dependents):
-        # determine_column_projection
-        # plain_column_projection
         return
 
     def lower_once(self):
