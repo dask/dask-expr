@@ -28,13 +28,13 @@ class Array(core.Expr, DaskMethodsMixin):
     def __array_ufunc__(self, numpy_ufunc, method, *inputs, **kwargs):
         raise NotImplementedError()
 
-    @property
-    def shape(self):
-        return tuple(sum(c) for c in self.chunks)
-
     @cached_property
     def shape(self) -> tuple[T_IntOrNaN, ...]:
         return tuple(cached_cumsum(c, initial_zero=True)[-1] for c in self.chunks)
+
+    @property
+    def ndim(self):
+        return len(self.shape)
 
     @property
     def chunksize(self) -> tuple[T_IntOrNaN, ...]:
@@ -81,6 +81,18 @@ class Array(core.Expr, DaskMethodsMixin):
 
     def __hash__(self):
         return hash(self._name)
+
+    def rechunk(
+        self,
+        chunks="auto",
+        threshold=None,
+        block_size_limit=None,
+        balance=False,
+        method=None,
+    ):
+        from dask_expr.array.rechunk import Rechunk
+
+        return Rechunk(self, chunks, threshold, block_size_limit, balance, method)
 
 
 class FromArray(Array):

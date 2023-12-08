@@ -12,3 +12,15 @@ def test_basic():
     repr(xx)
 
     assert_eq(x, xx)
+
+
+def test_rechunk():
+    a = np.random.random((10, 10))
+    b = da.from_array(a, chunks=(4, 4))
+    c = b.rechunk()
+    assert c.npartitions == 1
+    assert_eq(b, c)
+
+    d = b.rechunk((3, 3))
+    assert d.npartitions == 16
+    assert_eq(d, a)
