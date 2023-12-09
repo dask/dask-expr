@@ -28,6 +28,9 @@ class Array(core.Expr, DaskMethodsMixin):
     def __array_ufunc__(self, numpy_ufunc, method, *inputs, **kwargs):
         raise NotImplementedError()
 
+    def __array_function__(self, *args, **kwargs):
+        raise NotImplementedError()
+
     def __getitem__(self, index):
         from dask.array.slicing import normalize_index
 

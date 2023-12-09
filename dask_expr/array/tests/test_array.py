@@ -51,7 +51,6 @@ def test_rechunk_blockwise_optimize():
 
     c = (aa + bb).rechunk((5, 2))
     result = c.optimize()
-
     expected = da.from_array(a, chunks=(2,)) + da.from_array(b, chunks=(5, 2))
     assert result._name == expected._name
 
@@ -112,3 +111,14 @@ def test_slicing_optimization():
 
     assert b[:].optimize()._name == b._name
     assert b[5:, 4][::2].optimize()._name == b[5::2, 4].optimize()._name
+
+
+def test_xarray():
+    import xarray as xr
+
+    a = np.random.random((10, 20))
+    b = da.from_array(a)
+
+    x = (xr.DataArray(b, dims=["x", "y"]) + 1).chunk(x=2)
+
+    assert x.data.optimize()._name == (da.from_array(a, chunks={0: 2}) + 1)._name

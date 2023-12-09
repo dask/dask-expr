@@ -126,25 +126,34 @@ class Rechunk(Array):
             # TODO: this probably doesn't support contractions or expansions
             #       We should probably just abort in those cases for now (or do
             #       chunksize math)
-            if type(self.array) == Elemwise and isinstance(self._chunks, tuple):
+            if type(self.array) == Elemwise and isinstance(self._chunks, (dict, tuple)):
                 args = []
                 for arg, inds in toolz.partition_all(2, self.array.args):
                     if inds is None:
                         args.extend((arg, inds))
                     else:
                         assert isinstance(arg, Array)
-                        idx = tuple(self.array.out_ind.index(i) for i in inds)
-                        chunks = tuple([self._chunks[i] for i in idx])
+                        if isinstance(self._chunks, tuple):
+                            idx = tuple(self.array.out_ind.index(i) for i in inds)
+                            chunks = tuple([self._chunks[i] for i in idx])
+                        elif isinstance(self._chunks, dict):
+                            chunks = {
+                                i: self._chunks[j]
+                                for i, j in zip(self.array.out_ind, inds)
+                                if j in self._chunks
+                            }
                         arg = arg.rechunk(chunks)
                         args.extend((arg, inds))
 
                 return Elemwise(*self.array.operands[: -len(args)], *args)
 
         if isinstance(self.array, IO) and "chunks" in self.array._parameters:
-            chunks = tuple(
-                c if n != 1 else 1 if isinstance(c, numbers.Number) else (1,)
-                for n, c in zip(self.array.shape, self._chunks)
-            )
+            chunks = self._chunks
+            if isinstance(chunks, tuple):
+                chunks = tuple(
+                    c if n != 1 else 1 if isinstance(c, numbers.Number) else (1,)
+                    for n, c in zip(self.array.shape, self._chunks)
+                )
             return self.array.substitute_parameters({"chunks": chunks})
 
 
