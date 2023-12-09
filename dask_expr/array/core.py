@@ -140,6 +140,27 @@ class Array(core.Expr, DaskMethodsMixin):
     def __rmul__(self, other):
         return elemwise(operator.mul, other, self)
 
+    def sum(self, axis=None, dtype=None, keepdims=False, split_every=None, out=None):
+        """
+        Return the sum of the array elements over the given axis.
+
+        Refer to :func:`dask.array.sum` for full documentation.
+
+        See Also
+        --------
+        dask.array.sum : equivalent function
+        """
+        from dask_expr.array.reductions import sum
+
+        return sum(
+            self,
+            axis=axis,
+            dtype=dtype,
+            keepdims=keepdims,
+            split_every=split_every,
+            out=out,
+        )
+
 
 class IO(Array):
     pass

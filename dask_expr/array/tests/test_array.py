@@ -143,3 +143,11 @@ def test_xarray():
 def test_random():
     x = da.random.random((100, 100), chunks=(50, 50))
     assert_eq(x, x)
+
+
+def test_reductions():
+    a = np.random.random((10, 20))
+    b = da.from_array(a, chunks=(2, 5))
+
+    assert_eq(b.sum(), a.sum())
+    assert_eq(b.sum(axis=1), a.sum(axis=1))
