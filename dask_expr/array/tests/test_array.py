@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from dask.array.utils import assert_eq
 
 import dask_expr.array as da
@@ -111,6 +112,15 @@ def test_slicing_optimization():
 
     assert b[:].optimize()._name == b._name
     assert b[5:, 4][::2].optimize()._name == b[5::2, 4].optimize()._name
+
+    assert (b + 1)[:5].optimize()._name == (b[:5] + 1)._name
+
+
+@pytest.mark.xfail(reason="Blockwise specifies too much about dimension")
+def test_slicing_optimization_change_dimensionality():
+    a = np.random.random((10, 20))
+    b = da.from_array(a, chunks=(2, 5))
+    assert (b + 1)[5].optimize()._name == (b[5] + 1)._name
 
 
 def test_xarray():

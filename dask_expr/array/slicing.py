@@ -1,3 +1,4 @@
+import toolz
 from dask.array.optimization import fuse_slice
 from dask.array.slicing import normalize_slice, slice_array
 from dask.array.utils import meta_from_array
@@ -40,3 +41,19 @@ class Slice(Array):
                     fuse_slice(self.array.index, self.index), self.array.array.ndim
                 ),
             )
+
+        if isinstance(self.array, Elemwise) and all(
+            isinstance(i, (slice, list)) for i in self.index
+        ):  # TODO: deal with change in dimensionality
+            index = self.index + (slice(None),) * (self.ndim - len(self.index))
+            args = []
+            for arg, ind in toolz.partition(2, self.array.args):
+                if ind is None:
+                    args.extend((arg, ind))
+                else:
+                    idx = tuple(index[self.array.out_ind.index(i)] for i in ind)
+                    args.extend((arg[idx], ind))
+            return Elemwise(*self.array.operands[: -len(args)], *args)
+
+
+from dask_expr.array.blockwise import Elemwise
