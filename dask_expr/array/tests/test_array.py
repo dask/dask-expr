@@ -132,3 +132,8 @@ def test_xarray():
     x = (xr.DataArray(b, dims=["x", "y"]) + 1).chunk(x=2)
 
     assert x.data.optimize()._name == (da.from_array(a, chunks={0: 2}) + 1)._name
+
+
+def test_random():
+    x = da.random.random((100, 100), chunks=(50, 50))
+    assert_eq(x, x)
