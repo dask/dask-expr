@@ -355,6 +355,8 @@ def blockwise(
 
 
 class Elemwise(Blockwise):
+    # TODO: we should make this have simpler parameters.  Optimizations like
+    # slicing will be more powerful I think.
     pass
 
 
