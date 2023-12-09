@@ -36,6 +36,10 @@ def test_rechunk_optimize():
 
     assert c.optimize()._name == d.optimize()._name
 
+    assert (
+        b.T.rechunk((5, 2)).optimize()._name == da.from_array(a, chunks=(2, 5)).T._name
+    )
+
 
 def test_rechunk_blockwise_optimize():
     a = np.random.random((10, 10))
@@ -114,6 +118,8 @@ def test_slicing_optimization():
     assert b[5:, 4][::2].optimize()._name == b[5::2, 4].optimize()._name
 
     assert (b + 1)[:5].optimize()._name == (b[:5] + 1)._name
+    assert (b + 1)[5].optimize()._name == (b[5] + 1)._name
+    assert b.T[5:].optimize()._name == b[:, 5:].T._name
 
 
 @pytest.mark.xfail(reason="Blockwise specifies too much about dimension")

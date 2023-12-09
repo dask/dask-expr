@@ -42,18 +42,24 @@ class Slice(Array):
                 ),
             )
 
-        if isinstance(self.array, Elemwise) and all(
-            isinstance(i, (slice, list)) for i in self.index
-        ):  # TODO: deal with change in dimensionality
+        if isinstance(self.array, Elemwise):
             index = self.index + (slice(None),) * (self.ndim - len(self.index))
             args = []
             for arg, ind in toolz.partition(2, self.array.args):
                 if ind is None:
-                    args.extend((arg, ind))
+                    args.append(arg)
                 else:
                     idx = tuple(index[self.array.out_ind.index(i)] for i in ind)
-                    args.extend((arg[idx], ind))
+                    args.append(arg[idx])
             return Elemwise(*self.array.operands[: -len(args)], *args)
 
+        if isinstance(self.array, Transpose):
+            if any(isinstance(idx, (int)) or idx is None for idx in self.index):
+                return None  # can't handle changes in dimension
+            else:
+                index = self.index + (slice(None),) * (self.ndim - len(self.index))
+                new = tuple(index[i] for i in self.array.axes)
+                return self.array.substitute(self.array.array, self.array.array[new])
 
-from dask_expr.array.blockwise import Elemwise
+
+from dask_expr.array.blockwise import Elemwise, Transpose

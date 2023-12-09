@@ -130,7 +130,7 @@ class Rechunk(Array):
                 args = []
                 for arg, inds in toolz.partition_all(2, self.array.args):
                     if inds is None:
-                        args.extend((arg, inds))
+                        args.append(arg)
                     else:
                         assert isinstance(arg, Array)
                         if isinstance(self._chunks, tuple):
@@ -143,9 +143,20 @@ class Rechunk(Array):
                                 if j in self._chunks
                             }
                         arg = arg.rechunk(chunks)
-                        args.extend((arg, inds))
+                        args.append(arg)
 
                 return Elemwise(*self.array.operands[: -len(args)], *args)
+
+        if isinstance(self.array, Transpose):
+            if isinstance(self._chunks, tuple):
+                new = tuple(self._chunks[i] for i in self.array.axes)
+            elif isinstance(self._chunks, dict):
+                new = {self.array.axes.index[k]: v for k, v in self._chunks.items()}
+            else:
+                return None
+            return self.array.substitute(
+                self.array.array, self.array.array.rechunk(new)
+            )
 
         if isinstance(self.array, IO) and "chunks" in self.array._parameters:
             chunks = self._chunks
@@ -225,4 +236,4 @@ def _compute_rechunk(old_name, old_chunks, chunks, level, name):
     return name, chunks, {**x2, **intermediates}
 
 
-from dask_expr.array.blockwise import Elemwise
+from dask_expr.array.blockwise import Elemwise, Transpose

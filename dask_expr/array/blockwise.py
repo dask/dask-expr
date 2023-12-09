@@ -14,7 +14,7 @@ from dask.array.utils import compute_meta
 from dask.base import is_dask_collection, tokenize
 from dask.blockwise import blockwise as core_blockwise
 from dask.delayed import unpack_collections
-from dask.utils import funcname
+from dask.utils import cached_property, funcname
 
 from dask_expr.array.core import Array
 
@@ -355,9 +355,121 @@ def blockwise(
 
 
 class Elemwise(Blockwise):
-    # TODO: we should make this have simpler parameters.  Optimizations like
-    # slicing will be more powerful I think.
-    pass
+    _parameters = ["op", "dtype", "name"]
+    _defaults = {
+        "dtype": None,
+        "name": None,
+    }
+    align_arrays = False
+    new_axes = {}
+    adjust_chunks = None
+    token = None
+    _meta_provided = None
+    concatenate = None
+
+    @property
+    def elemwise_args(self):
+        return self.operands[len(self._parameters) :]
+
+    @property
+    def out_ind(self):
+        shapes = []
+        for arg in self.elemwise_args:
+            shape = getattr(arg, "shape", ())
+            if any(is_dask_collection(x) for x in shape):
+                # Want to exclude Delayed shapes and dd.Scalar
+                shape = ()
+            shapes.append(shape)
+        # if isinstance(where, Array):
+        #     shapes.append(where.shape)
+        # if isinstance(out, Array):
+        #     shapes.append(out.shape)
+
+        shapes = [s if isinstance(s, Iterable) else () for s in shapes]
+        out_ndim = len(
+            broadcast_shapes(*shapes)
+        )  # Raises ValueError if dimensions mismatch
+        return tuple(range(out_ndim))[::-1]
+
+    @cached_property
+    def _info(self):
+        if self.operand("dtype") is not None:
+            need_enforce_dtype = True
+            dtype = self.operand("dtype")
+        else:
+            # We follow NumPy's rules for dtype promotion, which special cases
+            # scalars and 0d ndarrays (which it considers equivalent) by using
+            # their values to compute the result dtype:
+            # https://github.com/numpy/numpy/issues/6240
+            # We don't inspect the values of 0d dask arrays, because these could
+            # hold potentially very expensive calculations. Instead, we treat
+            # them just like other arrays, and if necessary cast the result of op
+            # to match.
+            vals = [
+                np.empty((1,) * max(1, a.ndim), dtype=a.dtype)
+                if not is_scalar_for_elemwise(a)
+                else a
+                for a in self.elemwise_args
+            ]
+            try:
+                dtype = apply_infer_dtype(
+                    self.op, vals, {}, "elemwise", suggest_dtype=False
+                )
+            except Exception:
+                return NotImplemented
+            need_enforce_dtype = any(
+                not is_scalar_for_elemwise(a) and a.ndim == 0
+                for a in self.elemwise_args
+            )
+
+        # TODO: add back
+        # if where is not True:
+        #     blockwise_kwargs["elemwise_where_function"] = op
+        #     op = _elemwise_handle_where
+        #     args.extend([where, out])
+
+        if need_enforce_dtype:
+            blockwise_kwargs = {
+                "enforce_dtype": dtype,
+                "enforce_dtype_function": self.op,
+            }
+            op = _enforce_dtype
+        else:
+            blockwise_kwargs = {}
+            op = self.op
+
+        return op, dtype, blockwise_kwargs
+
+    @property
+    def func(self):
+        return self._info[0]
+
+    @property
+    def dtype(self):
+        return self._info[1]
+
+    @property
+    def kwargs(self):
+        return self._info[2]
+
+    @property
+    def token(self):
+        return funcname(self.op).strip("_")
+
+    @property
+    def args(self):
+        # for Blockwise rather than Elemwise
+        return tuple(
+            toolz.concat(
+                (
+                    a,
+                    tuple(range(a.ndim)[::-1])
+                    if not is_scalar_for_elemwise(a)
+                    else None,
+                )
+                for a in self.elemwise_args
+            )
+        )
 
 
 def elemwise(op, *args, out=None, where=True, dtype=None, name=None, **kwargs):
@@ -413,79 +525,7 @@ def elemwise(op, *args, out=None, where=True, dtype=None, name=None, **kwargs):
 
     args = [np.asarray(a) if isinstance(a, (list, tuple)) else a for a in args]
 
-    shapes = []
-    for arg in args:
-        shape = getattr(arg, "shape", ())
-        if any(is_dask_collection(x) for x in shape):
-            # Want to exclude Delayed shapes and dd.Scalar
-            shape = ()
-        shapes.append(shape)
-    if isinstance(where, Array):
-        shapes.append(where.shape)
-    if isinstance(out, Array):
-        shapes.append(out.shape)
-
-    shapes = [s if isinstance(s, Iterable) else () for s in shapes]
-    out_ndim = len(
-        broadcast_shapes(*shapes)
-    )  # Raises ValueError if dimensions mismatch
-    expr_inds = tuple(range(out_ndim))[::-1]
-
-    if dtype is not None:
-        need_enforce_dtype = True
-    else:
-        # We follow NumPy's rules for dtype promotion, which special cases
-        # scalars and 0d ndarrays (which it considers equivalent) by using
-        # their values to compute the result dtype:
-        # https://github.com/numpy/numpy/issues/6240
-        # We don't inspect the values of 0d dask arrays, because these could
-        # hold potentially very expensive calculations. Instead, we treat
-        # them just like other arrays, and if necessary cast the result of op
-        # to match.
-        vals = [
-            np.empty((1,) * max(1, a.ndim), dtype=a.dtype)
-            if not is_scalar_for_elemwise(a)
-            else a
-            for a in args
-        ]
-        try:
-            dtype = apply_infer_dtype(op, vals, {}, "elemwise", suggest_dtype=False)
-        except Exception:
-            return NotImplemented
-        need_enforce_dtype = any(
-            not is_scalar_for_elemwise(a) and a.ndim == 0 for a in args
-        )
-
-    # if not name:
-    #     name = f"{funcname(op)}-{tokenize(op, dtype, *args, where)}"
-
-    blockwise_kwargs = dict(dtype=dtype, token=funcname(op).strip("_"))
-
-    # TODO: add back
-    # if where is not True:
-    #     blockwise_kwargs["elemwise_where_function"] = op
-    #     op = _elemwise_handle_where
-    #     args.extend([where, out])
-
-    if need_enforce_dtype:
-        blockwise_kwargs["enforce_dtype"] = dtype
-        blockwise_kwargs["enforce_dtype_function"] = op
-        op = _enforce_dtype
-
-    result = blockwise(
-        op,
-        expr_inds,
-        *toolz.concat(
-            (a, tuple(range(a.ndim)[::-1]) if not is_scalar_for_elemwise(a) else None)
-            for a in args
-        ),
-        cls=Elemwise,
-        **blockwise_kwargs,
-    )
-
-    # TODO: handle out
-    # return handle_out(out, result)
-    return result
+    return Elemwise(op, dtype, name, *args)
 
 
 def broadcast_shapes(*shapes):
@@ -558,7 +598,7 @@ def is_scalar_for_elemwise(arg):
     )
 
 
-class Transpose(Elemwise):
+class Transpose(Blockwise):
     _parameters = ["array", "axes"]
     func = staticmethod(np.transpose)
     align_arrays = False
