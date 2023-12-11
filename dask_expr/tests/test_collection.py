@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import fnmatch
+import io
 import operator
 import pickle
 from datetime import timedelta
@@ -49,6 +51,66 @@ def test_del(pdf, df):
     del pdf["x"]
     del df["x"]
     assert_eq(pdf, df)
+
+
+@pytest.mark.parametrize("verbose", (True, False, None))
+@pytest.mark.parametrize("buf", (None, io.StringIO))
+@pytest.mark.parametrize("memory_usage", (True, False, None))
+def test_info(df, verbose, buf, memory_usage):
+    if buf is not None:
+        buf = buf()
+    kwargs = {
+        k: v
+        for k, v in (("verbose", verbose), ("buf", buf), ("memory_usage", memory_usage))
+        if v is not None
+    }
+
+    ret = df.info(**kwargs)
+
+    if buf and not verbose and not memory_usage:
+        expected = (
+            "<class 'dask_expr.DataFrame'>\n"
+            "Columns: 2 entries, x to y\n"
+            "dtypes: int64(2)"
+        )
+        assert buf.getvalue() == expected
+    elif buf and verbose and not memory_usage:
+        expected = (
+            "<class 'dask_expr.DataFrame'>\n"
+            "RangeIndex: 100 entries, 0 to 99\n"
+            "Data columns (total 2 columns):\n"
+            " #   Column  Non-Null Count  Dtype\n"
+            "---  ------  --------------  -----\n"
+            " 0   x       100 non-null      int64\n"
+            " 1   y       100 non-null      int64\n"
+            "dtypes: int64(2)"
+        )
+        assert buf.getvalue() == expected
+    elif buf and not verbose and memory_usage:
+        expected = (
+            "<class 'dask_expr.DataFrame'>\n"
+            "Columns: 2 entries, x to y\n"
+            "dtypes: int64(2)\n"
+            "memory usage: *\n"
+        )
+        assert fnmatch.fnmatch(buf.getvalue(), expected)
+    elif all((buf, verbose, memory_usage)):
+        expected = (
+            "<class 'dask_expr.DataFrame'>\n"
+            "RangeIndex: 100 entries, 0 to 99\n"
+            "Data columns (total 2 columns):\n"
+            " #   Column  Non-Null Count  Dtype\n"
+            "---  ------  --------------  -----\n"
+            " 0   x       100 non-null      int64\n"
+            " 1   y       100 non-null      int64\n"
+            "dtypes: int64(2)\n"
+            "memory usage: *\n"
+        )
+        assert fnmatch.fnmatch(buf.getvalue(), expected)
+    elif buf is None:
+        assert ret is None
+    else:
+        raise NotImplementedError(f"Case not covered for kwargs: {kwargs}")
 
 
 def test_setitem(pdf, df):
@@ -210,6 +272,14 @@ def test_dropna(pdf):
     assert_eq(df.y.dropna(), pdf.y.dropna())
 
 
+def test_value_counts_with_dropna():
+    pdf = lib.DataFrame({"x": [1, 2, 1, 3, np.nan, 1, 4]})
+    df = from_pandas(pdf, npartitions=3)
+    result = df.x.value_counts(dropna=False)
+    expected = pdf.x.value_counts(dropna=False)
+    assert_eq(result, expected)
+
+
 def test_fillna():
     pdf = lib.DataFrame({"x": [1, 2, None, None, 5, 6]})
     df = from_pandas(pdf, npartitions=2)
@@ -363,6 +433,20 @@ def test_unary_operators(func):
 @pytest.mark.parametrize(
     "func",
     [
+        lambda df: df.x + df.y,
+        lambda df: 2 * df.x,
+        lambda df: df.x * df.y,
+        lambda df: df.x - df.y,
+        lambda df: df.x**2,
+    ],
+)
+def test_binary_operator(pdf, df, func):
+    assert_eq(func(pdf), func(df))
+
+
+@pytest.mark.parametrize(
+    "func",
+    [
         lambda df: df[(df.x > 10) | (df.x < 5)],
         lambda df: df[(df.x > 7) & (df.x < 10)],
     ],
@@ -431,6 +515,27 @@ def test_to_timestamp(pdf, how):
 )
 def test_blockwise(func, pdf, df):
     assert_eq(func(pdf), func(df))
+
+
+def test_rename(pdf, df):
+    q = df.x.rename({1: 2})
+    assert q.divisions[0] is None
+    assert_eq(q, pdf.x.rename({1: 2}))
+
+    q = df.x.rename(lambda x: x)
+    assert q.divisions[0] is None
+    assert_eq(q, pdf.x.rename(lambda x: x))
+
+    q = df.x.rename({1: 2}, sorted_index=True)
+    assert q.divisions[0] is not None
+    assert_eq(q, pdf.x.rename({1: 2}))
+
+    q = df.x.rename(lambda x: x, sorted_index=True)
+    assert q.divisions[0] is not None
+    assert_eq(q, pdf.x.rename(lambda x: x))
+
+    with pytest.raises(ValueError, match="non-monotonic"):
+        df.x.rename({0: 200}, sorted_index=True).divisions
 
 
 def test_to_datetime():
@@ -516,6 +621,14 @@ def test_rename_axis(pdf):
     assert_eq(df.rename_axis(index="dummy"), pdf.rename_axis(index="dummy"))
     assert_eq(df.rename_axis(columns="dummy"), pdf.rename_axis(columns="dummy"))
     assert_eq(df.x.rename_axis(index="dummy"), pdf.x.rename_axis(index="dummy"))
+
+
+def test_series_name(pdf, df):
+    pser = pdf.x
+    ser = df.x
+    assert ser.name == pser.name
+    ser.name = "y"
+    assert ser.name == "y"
 
 
 def test_isin(df, pdf):
@@ -1433,6 +1546,9 @@ def test_columns_setter(df, pdf):
     expecetd = pdf[["a"]]
     assert_eq(result, expecetd)
 
+    with pytest.raises(ValueError, match="Length mismatch"):
+        df.columns = [1, 2, 3]
+
 
 def test_filter_pushdown(df, pdf):
     indexer = df.x > 5
@@ -1625,6 +1741,18 @@ def test_items(df, pdf):
     for (expect_name, expect_col), (actual_name, actual_col) in zip(expect, actual):
         assert expect_name == actual_name
         assert_eq(expect_col, actual_col)
+
+
+def test_index_index(df):
+    with pytest.raises(NotImplementedError, match="has no"):
+        df.index.index
+
+
+def test_axes(df, pdf):
+    assert len(df.axes) == len(pdf.axes)
+    [assert_eq(d, p) for d, p in zip(df.axes, pdf.axes)]
+    assert len(df.x.axes) == len(pdf.x.axes)
+    assert_eq(df.x.axes[0], pdf.x.axes[0])
 
 
 @pytest.mark.parametrize("npartitions", [1, 4])
