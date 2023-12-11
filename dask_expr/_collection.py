@@ -12,7 +12,6 @@ import pandas as pd
 from dask.array import Array
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
 from dask.dataframe import methods
-from dask.dataframe._compat import PANDAS_GE_150
 from dask.dataframe.accessor import CachedAccessor
 from dask.dataframe.core import (
     _concat,
@@ -1193,8 +1192,6 @@ class DataFrame(FrameBase):
         """
         Concise summary of a Dask DataFrame
         """
-        from dask.utils import M
-
         mem_use = memory_usage
 
         if buf is None:
@@ -1216,7 +1213,7 @@ class DataFrame(FrameBase):
             computations.update({"index": self.index, "count": self.count()})
         if mem_use:
             computations.update(
-                {"memory_usage": self.map_partitions(M.memory_usage, index=True)}
+                {"memory_usage": self.memory_usage(deep=True, index=True)}
             )
         import dask.array as da
 
