@@ -46,6 +46,7 @@ from dask_expr._expr import (
     no_default,
 )
 from dask_expr._merge import JoinRecursive, Merge
+from dask_expr._quantile import SeriesQuantile
 from dask_expr._quantiles import RepartitionQuantiles
 from dask_expr._reductions import (
     DropDuplicates,
@@ -1284,6 +1285,13 @@ class Series(FrameBase):
         if is_scalar(index) or isinstance(index, tuple):
             return new_collection(expr.RenameSeries(self.expr, index))
         raise NotImplementedError(f"passing index={type(index)} is not supported")
+
+    def quantile(self, q=0.5, method="default"):
+        assert pd.api.types.is_numeric_dtype(self.dtype), self.dtype
+        allowed_methods = ["default", "dask", "tdigest"]
+        if method not in allowed_methods:
+            raise ValueError("method can only be 'default', 'dask' or 'tdigest'")
+        return new_collection(SeriesQuantile(self.expr, q, method))
 
     @property
     def is_monotonic_increasing(self):
