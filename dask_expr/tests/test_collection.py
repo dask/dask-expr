@@ -1669,6 +1669,13 @@ def test_quantile(df):
         lib.Series([19.0, 79.0], index=[0.2, 0.8]),
     )
 
+    with pytest.raises(AssertionError):
+        df.x.quantile(q=[]).compute()
+
+    ser = from_pandas(lib.Series(["a", "b", "c"]), npartitions=2)
+    with pytest.raises(TypeError, match="on non-numeric"):
+        ser.quantile()
+
 
 def test_map_overlap_raises():
     def func(x):

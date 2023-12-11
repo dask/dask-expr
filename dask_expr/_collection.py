@@ -1404,7 +1404,8 @@ class Series(FrameBase):
             algorithm (``'dask'``).  If set to ``'tdigest'`` will use tdigest
             for floats and ints and fallback to the ``'dask'`` otherwise.
         """
-        assert pd.api.types.is_numeric_dtype(self.dtype), self.dtype
+        if not pd.api.types.is_numeric_dtype(self.dtype):
+            raise TypeError(f"quantile() on non-numeric dtype {self.dtype}")
         allowed_methods = ["default", "dask", "tdigest"]
         if method not in allowed_methods:
             raise ValueError("method can only be 'default', 'dask' or 'tdigest'")
