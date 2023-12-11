@@ -1206,9 +1206,6 @@ class DataFrame(FrameBase):
         if len(self.columns) == 0:
             lines.append(f"{type(self.index._meta).__name__}: 0 entries")
             lines.append(f"Empty {type(self).__name__}")
-            if PANDAS_GE_150:
-                # pandas dataframe started adding a newline when info is called.
-                lines.append("")
             put_lines(buf, lines)
             return
 
