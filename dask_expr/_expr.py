@@ -1065,7 +1065,10 @@ class RenameSeries(Elemwise):
             old = pd.Series(1, index=self.frame.divisions)
             new_divisions = old.rename(index).index
             if not new_divisions.is_monotonic_increasing:
-                raise ValueError("new divisions are not monotonic")
+                raise ValueError(
+                    "The renamer creates an Index with non-monotonic divisions. "
+                    "This is not allowed. Please set sorted_index=False."
+                )
             return tuple(new_divisions.tolist())
         else:
             return (None,) * (self.frame.npartitions + 1)
