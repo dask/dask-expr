@@ -77,7 +77,7 @@ class SeriesQuantileTdigest(SeriesQuantile):
     @functools.cached_property
     def _meta(self):
         import_required(
-            "crick", "crick is a required dependency for using the t-digest method."
+            "crick", "crick is a required dependency for using the tdigest method."
         )
         return super()._meta
 
