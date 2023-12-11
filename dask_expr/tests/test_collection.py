@@ -450,7 +450,7 @@ def test_rename(pdf, df):
     assert q.divisions[0] is not None
     assert_eq(q, pdf.x.rename(lambda x: x))
 
-    with pytest.raises(ValueError, match="not monotonic"):
+    with pytest.raises(ValueError, match="non-monotonic"):
         df.x.rename({0: 200}, sorted_index=True).divisions
 
 
