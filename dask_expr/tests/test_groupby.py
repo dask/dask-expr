@@ -95,6 +95,8 @@ def test_groupby_numeric(pdf, df, api, numeric_only):
             "value_counts", marks=xfail_gpu("value_counts not supported by cudf")
         ),
         "size",
+        "head",
+        "tail",
     ],
 )
 def test_groupby_no_numeric_only(pdf, func):
@@ -400,6 +402,25 @@ def test_groupby_median(df, pdf):
     assert_eq(q, pdf.groupby("x").median())
     assert_eq(df.groupby("x")["y"].median(), pdf.groupby("x")["y"].median())
     assert_eq(df.groupby("x").median()["y"], pdf.groupby("x").median()["y"])
+
+
+def test_groupby_ffill_bfill(pdf):
+    pdf["y"] = pdf["y"].astype("float64")
+
+    pdf.iloc[np.arange(0, len(pdf) - 1, 3), 1] = np.nan
+    df = from_pandas(pdf, npartitions=10)
+    assert_eq(df.groupby("x").ffill(), pdf.groupby("x").ffill())
+    assert_eq(df.groupby("x").bfill(), pdf.groupby("x").bfill())
+
+    actual = df.groupby("x")["y"].ffill()
+    expect = df[["x", "y"]].groupby("x")["y"].ffill()
+    assert actual.optimize()._name == expect.optimize()._name
+    assert_eq(actual, pdf.groupby("x")["y"].ffill())
+
+    actual = df.groupby("x").ffill()["y"]
+    expect = df[["x", "y"]].groupby("x").ffill()["y"]
+    assert actual.optimize()._name == expect.optimize()._name
+    assert_eq(actual, pdf.groupby("x")["y"].ffill())
 
 
 def test_groupby_rolling():
