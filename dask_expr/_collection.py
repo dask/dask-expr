@@ -1199,7 +1199,7 @@ class DataFrame(FrameBase):
             import sys
 
             buf = sys.stdout
-        lines = [str(type(self))]
+        lines = [str(type(self)).replace("._collection", "")]
 
         if len(self.columns) == 0:
             lines.append(f"{type(self.index._meta).__name__}: 0 entries")

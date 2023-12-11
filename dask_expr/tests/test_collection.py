@@ -69,14 +69,14 @@ def test_info(df, verbose, buf, memory_usage):
 
     if buf and not verbose and not memory_usage:
         expected = (
-            "<class 'dask_expr._collection.DataFrame'>\n"
+            "<class 'dask_expr.DataFrame'>\n"
             "Columns: 2 entries, x to y\n"
             "dtypes: int64(2)"
         )
         assert buf.getvalue() == expected
     elif buf and verbose and not memory_usage:
         expected = (
-            "<class 'dask_expr._collection.DataFrame'>\n"
+            "<class 'dask_expr.DataFrame'>\n"
             "RangeIndex: 100 entries, 0 to 99\n"
             "Data columns (total 2 columns):\n"
             " #   Column  Non-Null Count  Dtype\n"
@@ -88,7 +88,7 @@ def test_info(df, verbose, buf, memory_usage):
         assert buf.getvalue() == expected
     elif buf and not verbose and memory_usage:
         expected = (
-            "<class 'dask_expr._collection.DataFrame'>\n"
+            "<class 'dask_expr.DataFrame'>\n"
             "Columns: 2 entries, x to y\n"
             "dtypes: int64(2)\n"
             "memory usage: *\n"
@@ -96,7 +96,7 @@ def test_info(df, verbose, buf, memory_usage):
         assert fnmatch.fnmatch(buf.getvalue(), expected)
     elif all((buf, verbose, memory_usage)):
         expected = (
-            "<class 'dask_expr._collection.DataFrame'>\n"
+            "<class 'dask_expr.DataFrame'>\n"
             "RangeIndex: 100 entries, 0 to 99\n"
             "Data columns (total 2 columns):\n"
             " #   Column  Non-Null Count  Dtype\n"
