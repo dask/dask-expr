@@ -233,7 +233,6 @@ class Rolling:
         min_periods=None,
         center=False,
         win_type=None,
-        axis=0,
     ):
         if obj.divisions[0] is None:
             msg = (
@@ -249,7 +248,6 @@ class Rolling:
         self.min_periods = min_periods
         self.center = center
         self.win_type = win_type
-        self.axis = axis
 
         # Allow pandas to raise if appropriate
         obj._meta.rolling(window, **self.kwargs)
