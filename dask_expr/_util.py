@@ -4,9 +4,10 @@ import functools
 from collections import OrderedDict, UserDict
 from collections.abc import Hashable, Sequence
 from types import LambdaType
-from typing import Any, TypeVar, cast
+from typing import Any, Literal, TypeVar, cast
 
 import dask
+import pandas as pd
 from dask import config
 from dask.base import normalize_token, tokenize
 from packaging.version import Version
@@ -17,6 +18,51 @@ V = TypeVar("V")
 
 DASK_VERSION = Version(dask.__version__)
 DASK_GT_20231000 = DASK_VERSION > Version("2023.10.0")
+
+
+def _calc_maybe_new_divisions(df, periods, freq):
+    """Maybe calculate new divisions by periods of size freq
+
+    Used to shift the divisions for the `shift` method. If freq isn't a fixed
+    size (not anchored or relative), then the divisions are shifted
+    appropriately.
+
+    Returning None, indicates divisions ought to be cleared.
+
+    Parameters
+    ----------
+    df : dd.DataFrame, dd.Series, or dd.Index
+    periods : int
+        The number of periods to shift.
+    freq : DateOffset, timedelta, or time rule string
+        The frequency to shift by.
+    """
+    if isinstance(freq, str):
+        freq = pd.tseries.frequencies.to_offset(freq)
+
+    is_offset = isinstance(freq, pd.DateOffset)
+    if is_offset:
+        if freq.is_anchored() or not hasattr(freq, "delta"):
+            # Can't infer divisions on relative or anchored offsets, as
+            # divisions may now split identical index value.
+            # (e.g. index_partitions = [[1, 2, 3], [3, 4, 5]])
+            return None  # Would need to clear divisions
+    if df.known_divisions:
+        divs = pd.Series(range(len(df.divisions)), index=df.divisions)
+        divisions = divs.shift(periods, freq=freq).index
+        return tuple(divisions)
+    return df.divisions
+
+
+def _validate_axis(axis=0, none_is_zero: bool = True) -> None | Literal[0, 1]:
+    if axis not in (0, 1, "index", "columns", None):
+        raise ValueError(f"No axis named {axis}")
+    # convert to numeric axis
+    numeric_axis: dict[str | None, Literal[0, 1]] = {"index": 0, "columns": 1}
+    if none_is_zero:
+        numeric_axis[None] = 0
+
+    return numeric_axis.get(axis, axis)
 
 
 def _convert_to_list(column) -> list | None:
@@ -34,6 +80,8 @@ def _convert_to_list(column) -> list | None:
 def is_scalar(x):
     # np.isscalar does not work for some pandas scalars, for example pd.NA
     if isinstance(x, Sequence) and not isinstance(x, str) or hasattr(x, "dtype"):
+        return False
+    if isinstance(x, dict):
         return False
     if isinstance(x, (str, int)):
         return True

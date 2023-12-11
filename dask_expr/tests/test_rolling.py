@@ -1,3 +1,5 @@
+import numpy as np
+import pandas as pd
 import pytest
 
 from dask_expr import from_pandas
@@ -17,7 +19,7 @@ def pdf():
 
 @pytest.fixture
 def df(pdf, request):
-    npartitions = getattr(request, "param", 1)
+    npartitions = getattr(request, "param", 2)
     yield from_pandas(pdf, npartitions=npartitions)
 
 
@@ -37,8 +39,7 @@ def df(pdf, request):
         ("kurt", ()),
     ],
 )
-@pytest.mark.parametrize("window", (1, 2))
-@pytest.mark.parametrize("min_periods", (None, 1))
+@pytest.mark.parametrize("window,min_periods", ((1, None), (3, 2), (3, 3)))
 @pytest.mark.parametrize("center", (True, False))
 @pytest.mark.parametrize("df", (1, 2), indirect=True)
 def test_rolling_apis(df, pdf, window, api, how_args, min_periods, center):
@@ -60,7 +61,7 @@ def test_rolling_apis(df, pdf, window, api, how_args, min_periods, center):
 
 @pytest.mark.parametrize("window", (1, 2))
 @pytest.mark.parametrize("df", (1, 2), indirect=True)
-def test_resample_agg(df, pdf, window):
+def test_rolling_agg(df, pdf, window):
     def my_sum(vals, foo=None, *, bar=None):
         return vals.sum()
 
@@ -76,3 +77,89 @@ def test_resample_agg(df, pdf, window):
     q = df.rolling(window).agg(my_sum)["foo"].simplify()
     eq = df["foo"].rolling(window).agg(my_sum).simplify()
     assert q._name != eq._name
+
+
+@pytest.mark.parametrize("window", (1, 2))
+@pytest.mark.parametrize("df", (1, 2), indirect=True)
+@pytest.mark.parametrize("raw", (True, False))
+@pytest.mark.parametrize("foo", (1, None))
+@pytest.mark.parametrize("bar", (2, None))
+def test_rolling_apply(df, pdf, window, raw, foo, bar):
+    def my_sum(vals, foo_=None, *, bar_=None):
+        assert foo_ == foo
+        assert bar_ == bar
+        if raw:
+            assert isinstance(vals, np.ndarray)
+        else:
+            assert isinstance(vals, pd.Series)
+        return vals.sum()
+
+    kwargs = dict(raw=raw, args=(foo,), kwargs=dict(bar_=bar))
+
+    result = df.rolling(window).apply(my_sum, **kwargs)
+    expected = pdf.rolling(window).apply(my_sum, **kwargs)
+    assert_eq(result, expected)
+
+    result = df.rolling(window).apply(my_sum, **kwargs)["foo"]
+    expected = pdf.rolling(window).apply(my_sum, **kwargs)["foo"]
+    assert_eq(result, expected)
+
+    # simplify up disabled for `apply`, function may access other columns
+    q = df.rolling(window).apply(my_sum, **kwargs)["foo"].simplify()
+    eq = df["foo"].rolling(window).apply(my_sum, **kwargs).simplify()
+    assert q._name == eq._name
+
+
+def test_rolling_one_element_window(df, pdf):
+    pdf.index = lib.date_range("2000-01-01", periods=12, freq="2s")
+    df = from_pandas(pdf, npartitions=3)
+    result = pdf.foo.rolling("1s").count()
+    expected = df.foo.rolling("1s").count()
+    assert_eq(result, expected)
+
+
+def test_rolling_one_element_window_empty_after(df, pdf):
+    pdf.index = lib.date_range("2000-01-01", periods=12, freq="2s")
+    df = from_pandas(pdf, npartitions=3)
+    result = df.map_overlap(lambda x: x.rolling("1s").count(), before="1s", after="1s")
+    expected = pdf.rolling("1s").count()
+    assert_eq(result, expected)
+
+
+@pytest.mark.parametrize("window", [1, 2, 4, 5])
+@pytest.mark.parametrize("center", [True, False])
+def test_rolling_cov(df, pdf, window, center):
+    # DataFrame
+    prolling = pdf.drop("foo", axis=1).rolling(window, center=center)
+    drolling = df.drop("foo", axis=1).rolling(window, center=center)
+    assert_eq(prolling.cov(), drolling.cov())
+
+    # Series
+    prolling = pdf.bar.rolling(window, center=center)
+    drolling = df.bar.rolling(window, center=center)
+    assert_eq(prolling.cov(), drolling.cov())
+
+    # Projection
+    actual = df.rolling(window, center=center).cov()[["foo", "bar"]].simplify()
+    expected = df[["foo", "bar"]].rolling(window, center=center).cov().simplify()
+    assert actual._name == expected._name
+
+
+def test_rolling_raises():
+    df = pd.DataFrame(
+        {"a": np.random.randn(25).cumsum(), "b": np.random.randint(100, size=(25,))}
+    )
+    ddf = from_pandas(df, npartitions=2)
+
+    pytest.raises(ValueError, lambda: ddf.rolling(1.5))
+    pytest.raises(ValueError, lambda: ddf.rolling(-1))
+    pytest.raises(ValueError, lambda: ddf.rolling(3, min_periods=1.2))
+    pytest.raises(ValueError, lambda: ddf.rolling(3, min_periods=-2))
+    pytest.raises(NotImplementedError, lambda: ddf.rolling(100).mean().compute())
+
+
+def test_time_rolling_constructor(df):
+    result = df.rolling("4s")
+    assert result.window == "4s"
+    assert result.min_periods is None
+    assert result.win_type is None

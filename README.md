@@ -85,10 +85,13 @@ API Coverage
 - `eval`
 - `explode`
 - `fillna`
+- `ffill`
+- `bfill`
 - `groupby`
 - `head`
 - `idxmax`
 - `idxmin`
+- `ìloc`
 - `index`
 - `isin`
 - `isna`
@@ -96,8 +99,11 @@ API Coverage
 - `map`
 - `map_overlap`
 - `map_partitions`
+- `mask`
 - `max`
+- `mean`
 - `memory_usage`
+- `memory_usage_per_partition`
 - `merge`
 - `min`
 - `min`
@@ -108,6 +114,7 @@ API Coverage
 - `partitions`
 - `pivot_table`
 - `prod`
+- `query`
 - `rename`
 - `rename_axis`
 - `repartition`
@@ -115,6 +122,7 @@ API Coverage
 - `reset_index`
 - `round`
 - `sample`
+- `shift`
 - `sort_values`
 - `select_dtypes`
 - `set_index`
@@ -126,6 +134,7 @@ API Coverage
 - `to_timestamp`
 - `var`
 - `visualize`
+- `where`
 
 
 **`dask_expr.Series`**
@@ -147,6 +156,8 @@ API Coverage
 - `dtype`
 - `explode`
 - `fillna`
+- `ffill`
+- `bfill`
 - `groupby`
 - `head`
 - `idxmax`
@@ -156,8 +167,11 @@ API Coverage
 - `isna`
 - `map`
 - `map_partitions`
+- `mask`
 - `max`
+- `mean`
 - `memory_usage`
+- `memory_usage_per_partition`
 - `min`
 - `min`
 - `mode`
@@ -166,11 +180,13 @@ API Coverage
 - `nunique_approx`
 - `partitions`
 - `prod`
+- `rename`
 - `rename_axis`
 - `repartition`
 - `replace`
 - `reset_index`
 - `round`
+- `shift`
 - `shuffle`
 - `std`
 - `sum`
@@ -181,6 +197,7 @@ API Coverage
 - `value_counts`
 - `var`
 - `visualize`
+- `where`
 
 
 **`dask_expr.Index`**
@@ -214,6 +231,7 @@ API Coverage
 - `nunique_approx`
 - `partitions`
 - `prod`
+- `rename`
 - `rename_axis`
 - `repartition`
 - `replace`
@@ -234,11 +252,14 @@ API Coverage
 - `agg`
 - `aggregate`
 - `apply`
+- `bfill
 - `count`
+- `ffill`
 - `first`
 - `last`
 - `max`
 - `mean`
+- `median`
 - `min`
 - `prod`
 - `shift`
@@ -249,6 +270,7 @@ API Coverage
 - `value_counts`
 - `var`
 
+Support for ``SeriesGroupBy`` and ``DataFrameGroupBy``.
 
 **`dask_expr._resample.Resampler`**
 
@@ -274,6 +296,7 @@ API Coverage
 **`dask_expr._rolling.Rolling`**
 
 - `agg`
+- `apply`
 - `count`
 - `max`
 - `mean`
@@ -294,6 +317,7 @@ API Coverage
 - `__sub__`
 - `__rsub__`
 - `__mul__`
+- `__pow__`
 - `__rmul__`
 - `__truediv__`
 - `__rtruediv__`
@@ -332,7 +356,11 @@ API Coverage
 - `concat`
 - `from_pandas`
 - `merge`
+- `pivot_table`
 - `read_csv`
 - `read_parquet`
 - `repartition`
+- `to_datetime`
+- `to_numeric`
+- `to_timedelta`
 - `to_parquet`
