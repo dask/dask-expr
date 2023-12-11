@@ -254,13 +254,6 @@ class Rolling:
         # Allow pandas to raise if appropriate
         obj._meta.rolling(window, **self.kwargs)
 
-        # Using .rolling(window='2s'), pandas will convert the
-        # offset str to a window in nanoseconds. But pandas doesn't
-        # accept the integer window with win_type='freq', so we store
-        # that information here.
-        # See https://github.com/pandas-dev/pandas/issues/15969
-        self._win_type = None if isinstance(self.window, int) else "freq"
-
     @functools.cached_property
     def kwargs(self):
         return dict(

@@ -155,4 +155,3 @@ def test_time_rolling_constructor(df):
     assert result.window == "4s"
     assert result.min_periods is None
     assert result.win_type is None
-    assert result._win_type == "freq"
