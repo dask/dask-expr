@@ -1659,6 +1659,7 @@ def test_map_overlap():
 
 def test_quantile(df):
     assert_eq(df.x.quantile(), 49.0)
+    assert_eq(df.x.quantile(method="dask"), 49.0)
     assert_eq(
         df.x.quantile(q=[0.2, 0.8]),
         lib.Series([19.0, 79.0], index=[0.2, 0.8], name="x"),
