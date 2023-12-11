@@ -252,7 +252,9 @@ API Coverage
 - `agg`
 - `aggregate`
 - `apply`
+- `bfill
 - `count`
+- `ffill`
 - `first`
 - `last`
 - `max`
@@ -315,6 +317,7 @@ Support for ``SeriesGroupBy`` and ``DataFrameGroupBy``.
 - `__sub__`
 - `__rsub__`
 - `__mul__`
+- `__pow__`
 - `__rmul__`
 - `__truediv__`
 - `__rtruediv__`

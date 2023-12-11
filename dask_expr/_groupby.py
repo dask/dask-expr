@@ -15,10 +15,14 @@ from dask.dataframe.groupby import (
     _groupby_slice_apply,
     _groupby_slice_shift,
     _groupby_slice_transform,
+    _head_aggregate,
+    _head_chunk,
     _normalize_spec,
     _nunique_df_chunk,
     _nunique_df_combine,
     _nunique_series_chunk,
+    _tail_aggregate,
+    _tail_chunk,
     _value_counts,
     _value_counts_aggregate,
     _var_agg,
@@ -579,6 +583,20 @@ class NUniqueSeries(NUnique):
     aggregate = staticmethod(nunique_df_aggregate)
 
 
+class Head(SingleAggregation):
+    groupby_chunk = staticmethod(_head_chunk)
+    groupby_aggregate = staticmethod(_head_aggregate)
+
+    @classmethod
+    def combine(cls, inputs, **kwargs):
+        return _concat(inputs)
+
+
+class Tail(Head):
+    groupby_chunk = staticmethod(_tail_chunk)
+    groupby_aggregate = staticmethod(_tail_aggregate)
+
+
 class Median(Expr):
     _parameters = [
         "frame",
@@ -733,6 +751,30 @@ class GroupByTransform(GroupByApply):
     @functools.cached_property
     def grp_func(self):
         return functools.partial(_groupby_slice_transform, func=self.func)
+
+
+def _fillna(group, *, what, **kwargs):
+    return getattr(group, what)(**kwargs)
+
+
+class GroupByBFill(GroupByTransform):
+    func = staticmethod(functools.partial(_fillna, what="bfill"))
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            by_columns = self.by if not isinstance(self.by, Expr) else []
+            columns = sorted(set(parent.columns + by_columns))
+            if columns == self.frame.columns:
+                return
+            columns = [col for col in self.frame.columns if col in columns]
+            return type(parent)(
+                type(self)(self.frame[columns], *self.operands[1:]),
+                *parent.operands[1:],
+            )
+
+
+class GroupByFFill(GroupByBFill):
+    func = staticmethod(functools.partial(_fillna, what="ffill"))
 
 
 class GroupByShift(GroupByApply):
@@ -1015,11 +1057,45 @@ class GroupBy:
         numeric_kwargs = self._numeric_only_kwargs(numeric_only)
         return self._single_agg(Last, **kwargs, **numeric_kwargs)
 
+    def ffill(self, limit=None):
+        return self._transform_like_op(GroupByFFill, None, limit=limit)
+
+    def bfill(self, limit=None):
+        return self._transform_like_op(GroupByBFill, None, limit=limit)
+
     def size(self, **kwargs):
         return self._single_agg(Size, **kwargs)
 
     def value_counts(self, **kwargs):
         return self._single_agg(ValueCounts, **kwargs)
+
+    def head(self, n=5, split_every=None, split_out=1):
+        chunk_kwargs = {"n": n}
+        aggregate_kwargs = {
+            "n": n,
+            "index_levels": len(self.by) if not isinstance(self.by, Expr) else 1,
+        }
+        return self._single_agg(
+            Head,
+            split_every=split_every,
+            split_out=split_out,
+            chunk_kwargs=chunk_kwargs,
+            aggregate_kwargs=aggregate_kwargs,
+        )
+
+    def tail(self, n=5, split_every=None, split_out=1):
+        chunk_kwargs = {"n": n}
+        aggregate_kwargs = {
+            "n": n,
+            "index_levels": len(self.by) if not isinstance(self.by, Expr) else 1,
+        }
+        return self._single_agg(
+            Tail,
+            split_every=split_every,
+            split_out=split_out,
+            chunk_kwargs=chunk_kwargs,
+            aggregate_kwargs=aggregate_kwargs,
+        )
 
     def var(self, ddof=1, numeric_only=True, split_out=1):
         if not numeric_only:
@@ -1083,9 +1159,9 @@ class GroupBy:
             )
         )
 
-    def transform(self, func, meta=no_default, *args, **kwargs):
+    def _transform_like_op(self, expr_cls, func, meta=no_default, *args, **kwargs):
         return new_collection(
-            GroupByTransform(
+            expr_cls(
                 self.obj.expr,
                 self.by,
                 self.observed,
@@ -1098,6 +1174,9 @@ class GroupBy:
                 kwargs=kwargs,
             )
         )
+
+    def transform(self, func, meta=no_default, *args, **kwargs):
+        return self._transform_like_op(GroupByTransform, func, meta, *args, **kwargs)
 
     def shift(self, periods=1, meta=no_default, *args, **kwargs):
         kwargs = {"periods": periods, **kwargs}
@@ -1144,7 +1223,6 @@ class GroupBy:
             min_periods=min_periods,
             center=center,
             win_type=win_type,
-            axis=axis,
             groupby_kwargs={
                 "by": self.by,
                 "sort": self.sort,
