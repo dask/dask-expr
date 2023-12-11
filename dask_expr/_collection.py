@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+from dask import compute
 from dask.array import Array
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
 from dask.dataframe import methods
@@ -1215,11 +1216,8 @@ class DataFrame(FrameBase):
             computations.update(
                 {"memory_usage": self.memory_usage(deep=True, index=True)}
             )
-        import dask.array as da
 
-        computations = dict(
-            zip(computations.keys(), da.compute(*computations.values()))
-        )
+        computations = dict(zip(computations.keys(), compute(*computations.values())))
 
         if verbose:
             import textwrap
