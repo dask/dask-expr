@@ -207,6 +207,8 @@ class ShuffleReduce(Expr):
         # Convert back to Series if necessary
         if is_series_like(self._meta):
             shuffled = shuffled[shuffled.columns[0]]
+        elif is_index_like(self._meta):
+            shuffled = shuffled.index
 
         # Blockwise aggregate
         result = Aggregate(
@@ -499,16 +501,14 @@ class DropDuplicates(Unique):
     def _meta(self):
         return self.chunk(meta_nonempty(self.frame._meta), **self.chunk_kwargs)
 
-    def _subset_kwargs(self):
-        if is_series_like(self.frame._meta):
-            return {}
-        return {"subset": self.subset}
-
     @property
     def chunk_kwargs(self):
-        if PANDAS_GE_200:
-            return {"ignore_index": self.ignore_index, **self._subset_kwargs()}
-        return self._subset_kwargs()
+        out = {}
+        if is_dataframe_like(self.frame._meta):
+            out["subset"] = self.subset
+        if PANDAS_GE_200 and not is_index_like(self.frame._meta):
+            out["ignore_index"] = self.ignore_index
+        return out
 
     def _simplify_up(self, parent):
         if self.subset is not None and isinstance(parent, Projection):
@@ -517,8 +517,9 @@ class DropDuplicates(Unique):
                 # Don't add unnecessary Projections, protects against loops
                 return
 
+            columns = [col for col in self.frame.columns if col in columns]
             return type(parent)(
-                type(self)(self.frame[sorted(columns)], *self.operands[1:]),
+                type(self)(self.frame[columns], *self.operands[1:]),
                 *parent.operands[1:],
             )
 
@@ -1085,6 +1086,10 @@ class ValueCounts(ReductionConstantDim):
     @property
     def aggregate_kwargs(self):
         return {**self.chunk_kwargs, "normalize": self.normalize}
+
+    @property
+    def combine_kwargs(self):
+        return self.chunk_kwargs
 
     def _simplify_up(self, parent):
         # We are already a Series

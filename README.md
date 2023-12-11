@@ -89,6 +89,8 @@ API Coverage
 - `eval`
 - `explode`
 - `fillna`
+- `ffill`
+- `bfill`
 - `groupby`
 - `head`
 - `idxmax`
@@ -124,6 +126,7 @@ API Coverage
 - `reset_index`
 - `round`
 - `sample`
+- `shift`
 - `sort_values`
 - `select_dtypes`
 - `set_index`
@@ -161,6 +164,8 @@ API Coverage
 - `dtype`
 - `explode`
 - `fillna`
+- `ffill`
+- `bfill`
 - `groupby`
 - `head`
 - `idxmax`
@@ -190,6 +195,7 @@ API Coverage
 - `replace`
 - `reset_index`
 - `round`
+- `shift`
 - `shuffle`
 - `std`
 - `sum`
@@ -255,11 +261,14 @@ API Coverage
 - `agg`
 - `aggregate`
 - `apply`
+- `bfill
 - `count`
+- `ffill`
 - `first`
 - `last`
 - `max`
 - `mean`
+- `median`
 - `min`
 - `nunique`
 - `prod`
@@ -271,6 +280,7 @@ API Coverage
 - `value_counts`
 - `var`
 
+Support for ``SeriesGroupBy`` and ``DataFrameGroupBy``.
 
 **`dask_expr._resample.Resampler`**
 
@@ -317,6 +327,7 @@ API Coverage
 - `__sub__`
 - `__rsub__`
 - `__mul__`
+- `__pow__`
 - `__rmul__`
 - `__truediv__`
 - `__rtruediv__`
@@ -359,4 +370,7 @@ API Coverage
 - `read_csv`
 - `read_parquet`
 - `repartition`
+- `to_datetime`
+- `to_numeric`
+- `to_timedelta`
 - `to_parquet`

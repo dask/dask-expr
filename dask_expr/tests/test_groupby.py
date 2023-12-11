@@ -46,6 +46,12 @@ def test_groupby_numeric(pdf, df, api, numeric_only):
     expect = getattr(pdf.groupby("x"), api)(numeric_only=numeric_only)
     assert_eq(agg, expect)
 
+    g = df.y.groupby(df.x)
+    agg = getattr(g, api)()
+
+    expect = getattr(pdf.y.groupby(pdf.x), api)()
+    assert_eq(agg, expect)
+
     g = df.groupby("x")
     agg = getattr(g, api)(numeric_only=numeric_only)["y"]
 
@@ -73,6 +79,8 @@ def test_groupby_numeric(pdf, df, api, numeric_only):
             "value_counts", marks=xfail_gpu("value_counts not supported by cudf")
         ),
         "size",
+        "head",
+        "tail",
     ],
 )
 def test_groupby_no_numeric_only(pdf, func):
@@ -82,6 +90,12 @@ def test_groupby_no_numeric_only(pdf, func):
     agg = getattr(g, func)()
 
     expect = getattr(pdf.groupby("x"), func)()
+    assert_eq(agg, expect)
+
+    g = df.y.groupby(df.x)
+    agg = getattr(g, func)()
+
+    expect = getattr(pdf.y.groupby(pdf.x), func)()
     assert_eq(agg, expect)
 
 
@@ -100,6 +114,7 @@ def test_groupby_nunique(df, pdf):
     assert_eq(df.groupby("x").y.nunique(split_out=1), pdf.groupby("x").y.nunique())
     assert_eq(df.groupby("x").y.nunique(split_out=True), pdf.groupby("x").y.nunique())
     assert df.groupby("x").y.nunique().npartitions == df.npartitions
+    assert_eq(df.y.groupby(df.x).nunique(split_out=1), pdf.y.groupby(pdf.x).nunique())
 
 
 def test_groupby_series(pdf, df):
@@ -131,6 +146,22 @@ def test_groupby_agg(pdf, df, spec):
     agg = g.agg(spec)
 
     expect = pdf.groupby("x").agg(spec)
+    assert_eq(agg, expect)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "sum",
+        ["sum"],
+        ["sum", "mean"],
+    ],
+)
+def test_series_groupby_agg(pdf, df, spec):
+    g = df.y.groupby(df.x)
+    agg = g.agg(spec)
+
+    expect = pdf.y.groupby(pdf.x).agg(spec)
     assert_eq(agg, expect)
 
 
@@ -275,6 +306,11 @@ def test_groupby_single_agg_split_out(pdf, df, api, sort, split_out):
     expect = getattr(pdf.groupby("x", sort=sort), api)()
     assert_eq(agg, expect, sort_results=not sort)
 
+    g = df.y.groupby(df.x, sort=sort)
+    agg = getattr(g, api)(split_out=split_out)
+    expect = getattr(pdf.y.groupby(pdf.x, sort=sort), api)()
+    assert_eq(agg, expect, sort_results=not sort)
+
 
 @pytest.mark.parametrize(
     "spec",
@@ -336,3 +372,77 @@ def test_groupby_var_dropna_observed(dropna, observed, func):
     dd_result = getattr(ddf.groupby("b", observed=observed, dropna=dropna), func)()
     pdf_result = getattr(df.groupby("b", observed=observed, dropna=dropna), func)()
     assert_eq(dd_result, pdf_result)
+
+
+def test_groupby_median(df, pdf):
+    assert_eq(df.groupby("x").median(), pdf.groupby("x").median())
+    q = df.groupby("x").median(split_out=2)
+    assert q.optimize().npartitions == 2
+    assert_eq(q, pdf.groupby("x").median())
+    assert_eq(df.groupby("x")["y"].median(), pdf.groupby("x")["y"].median())
+    assert_eq(df.groupby("x").median()["y"], pdf.groupby("x").median()["y"])
+
+
+def test_groupby_ffill_bfill(pdf):
+    pdf["y"] = pdf["y"].astype("float64")
+
+    pdf.iloc[np.arange(0, len(pdf) - 1, 3), 1] = np.nan
+    df = from_pandas(pdf, npartitions=10)
+    assert_eq(df.groupby("x").ffill(), pdf.groupby("x").ffill())
+    assert_eq(df.groupby("x").bfill(), pdf.groupby("x").bfill())
+
+    actual = df.groupby("x")["y"].ffill()
+    expect = df[["x", "y"]].groupby("x")["y"].ffill()
+    assert actual.optimize()._name == expect.optimize()._name
+    assert_eq(actual, pdf.groupby("x")["y"].ffill())
+
+    actual = df.groupby("x").ffill()["y"]
+    expect = df[["x", "y"]].groupby("x").ffill()["y"]
+    assert actual.optimize()._name == expect.optimize()._name
+    assert_eq(actual, pdf.groupby("x")["y"].ffill())
+
+
+def test_groupby_rolling():
+    df = lib.DataFrame(
+        {
+            "column1": range(600),
+            "group1": 5 * ["g" + str(i) for i in range(120)],
+        },
+        index=lib.date_range("20190101", periods=60).repeat(10),
+    )
+
+    ddf = from_pandas(df, npartitions=8)
+
+    expected = df.groupby("group1").rolling("1D").sum()
+    actual = ddf.groupby("group1").rolling("1D").sum()
+
+    assert_eq(expected, actual, check_divisions=False)
+
+    expected = df.groupby("group1").column1.rolling("1D").mean()
+    actual = ddf.groupby("group1").column1.rolling("1D").mean()
+
+    assert_eq(expected, actual, check_divisions=False)
+
+
+def test_rolling_groupby_projection():
+    df = lib.DataFrame(
+        {
+            "column1": range(600),
+            "a": 1,
+            "group1": 5 * ["g" + str(i) for i in range(120)],
+        },
+        index=lib.date_range("20190101", periods=60).repeat(10),
+    )
+
+    ddf = from_pandas(df, npartitions=8)
+
+    actual = ddf.groupby("group1").rolling("1D").sum()["column1"]
+    expected = df.groupby("group1").rolling("1D").sum()["column1"]
+
+    assert_eq(expected, actual, check_divisions=False)
+
+    optimal = (
+        ddf[["group1", "column1"]].groupby("group1").rolling("1D").sum()["column1"]
+    )
+
+    assert actual.optimize()._name == (optimal.optimize()._name)
