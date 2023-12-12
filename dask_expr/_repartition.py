@@ -27,14 +27,12 @@ class Repartition(Expr):
         "new_divisions",
         "force",
         "partition_size",
-        "freq",
     ]
     _defaults = {
         "new_partitions": None,
         "new_divisions": None,
         "force": False,
         "partition_size": None,
-        "freq": None,
     }
     _is_length_preserving = True
 
@@ -105,8 +103,6 @@ class Repartition(Expr):
             return RepartitionDivisions(self.frame, self.new_divisions, self.force)
         elif self.partition_size is not None:
             return RepartitionSize(self.frame, partition_size=self.partition_size)
-        elif self.freq is not None:
-            return RepartitionFreq(self.frame, freq=self.freq)
         else:
             raise NotImplementedError()
 
