@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+from dask import compute
 from dask.array import Array
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
 from dask.dataframe import methods
@@ -23,8 +24,14 @@ from dask.dataframe.core import (
     new_dd_object,
 )
 from dask.dataframe.dispatch import meta_nonempty
-from dask.dataframe.utils import has_known_categories
-from dask.utils import IndexCallable, random_state_data, typename
+from dask.dataframe.utils import has_known_categories, index_summary
+from dask.utils import (
+    IndexCallable,
+    memory_repr,
+    put_lines,
+    random_state_data,
+    typename,
+)
 from fsspec.utils import stringify_path
 from tlz import first
 
@@ -46,6 +53,7 @@ from dask_expr._expr import (
     no_default,
 )
 from dask_expr._merge import JoinRecursive, Merge
+from dask_expr._quantile import SeriesQuantile
 from dask_expr._quantiles import RepartitionQuantiles
 from dask_expr._reductions import (
     DropDuplicates,
@@ -64,7 +72,13 @@ from dask_expr._reductions import (
 from dask_expr._repartition import Repartition, RepartitionFreq
 from dask_expr._shuffle import SetIndex, SetIndexBlockwise, SortValues
 from dask_expr._str_accessor import StringAccessor
-from dask_expr._util import _BackendData, _convert_to_list, _validate_axis, is_scalar
+from dask_expr._util import (
+    _BackendData,
+    _convert_to_list,
+    _maybe_from_pandas,
+    _validate_axis,
+    is_scalar,
+)
 from dask_expr.io import FromPandasDivisions
 
 #
@@ -151,6 +165,9 @@ class FrameBase(DaskMethodsMixin):
 
     @columns.setter
     def columns(self, columns):
+        if len(columns) != len(self.columns):
+            # surface pandas error
+            self._expr._meta.columns = columns
         self._expr = self.rename(dict(zip(self.columns, columns)))._expr
 
     def __len__(self):
@@ -485,11 +502,11 @@ class FrameBase(DaskMethodsMixin):
 
     def repartition(
         self,
-        npartitions: int | None = None,
         divisions: tuple | None = None,
-        force: bool = False,
+        npartitions: int | None = None,
         partition_size: str = None,
         freq=None,
+        force: bool = False,
     ):
         """Repartition a collection
 
@@ -498,17 +515,17 @@ class FrameBase(DaskMethodsMixin):
 
         Parameters
         ----------
+        divisions : list, optional
+            The "dividing lines" used to split the dataframe into partitions.
+            For ``divisions=[0, 10, 50, 100]``, there would be three output partitions,
+            where the new index contained [0, 10), [10, 50), and [50, 100), respectively.
+            See https://docs.dask.org/en/latest/dataframe-design.html#partitions.
         npartitions : int, Callable, optional
             Approximate number of partitions of output. The number of
             partitions used may be slightly lower than npartitions depending
             on data distribution, but will never be higher.
             The Callable gets the number of partitions of the input as an argument
             and should return an int.
-        divisions : list, optional
-            The "dividing lines" used to split the dataframe into partitions.
-            For ``divisions=[0, 10, 50, 100]``, there would be three output partitions,
-            where the new index contained [0, 10), [10, 50), and [50, 100), respectively.
-            See https://docs.dask.org/en/latest/dataframe-design.html#partitions.
         partition_size : str, optional
             Max number of bytes of memory for each partition. Use numbers or strings
             like 5MB. If specified npartitions and divisions will be ignored. Note that
@@ -729,6 +746,7 @@ for op in [
     "__rmul__",
     "__truediv__",
     "__rtruediv__",
+    "__pow__",
     "__lt__",
     "__rlt__",
     "__gt__",
@@ -773,15 +791,19 @@ class DataFrame(FrameBase):
         for i, name in enumerate(self.columns):
             yield (name, self.iloc[:, i])
 
+    @property
+    def axes(self):
+        return [self.index, self.columns]
+
     def assign(self, **pairs):
         result = self
-        data = self.copy()
         for k, v in pairs.items():
+            v = _maybe_from_pandas([v])[0]
             if not isinstance(k, str):
                 raise TypeError(f"Column name cannot be type {type(k)}")
 
             if callable(v):
-                v = v(data)
+                v = v(result)
 
             if isinstance(v, (Scalar, Series)):
                 if isinstance(v, Series):
@@ -966,8 +988,10 @@ class DataFrame(FrameBase):
         o.update(c for c in self.columns if (isinstance(c, str) and c.isidentifier()))
         return list(o)
 
-    def map(self, func, na_action=None):
-        return new_collection(expr.Map(self.expr, arg=func, na_action=na_action))
+    def map(self, func, na_action=None, meta=None):
+        return new_collection(
+            expr.Map(self.expr, arg=func, na_action=na_action, meta=meta)
+        )
 
     def __repr__(self):
         return f"<dask_expr.expr.DataFrame: expr={self.expr}>"
@@ -1195,6 +1219,91 @@ class DataFrame(FrameBase):
                 ]
             )
 
+    def info(self, buf=None, verbose=False, memory_usage=False):
+        """
+        Concise summary of a Dask DataFrame
+        """
+        mem_use = memory_usage
+
+        if buf is None:
+            import sys
+
+            buf = sys.stdout
+        lines = [str(type(self)).replace("._collection", "")]
+
+        if len(self.columns) == 0:
+            lines.append(f"{type(self.index._meta).__name__}: 0 entries")
+            lines.append(f"Empty {type(self).__name__}")
+            put_lines(buf, lines)
+            return
+
+        # Group and execute the required computations
+        computations = {}
+        if verbose:
+            memory_usage = True
+            computations.update({"index": self.index, "count": self.count()})
+        if mem_use:
+            computations.update(
+                {"memory_usage": self.memory_usage(deep=True, index=True)}
+            )
+
+        computations = dict(zip(computations.keys(), compute(*computations.values())))
+
+        if verbose:
+            import textwrap
+
+            index = computations["index"]
+            counts = computations["count"]
+            lines.append(index_summary(index))
+            lines.append(f"Data columns (total {len(self.columns)} columns):")
+
+            from pandas.io.formats.printing import pprint_thing
+
+            space = max(len(pprint_thing(k)) for k in self.columns) + 1
+            column_width = max(space, 7)
+
+            header = (
+                textwrap.dedent(
+                    """\
+             #   {{column:<{column_width}}} Non-Null Count  Dtype
+            ---  {{underl:<{column_width}}} --------------  -----"""
+                )
+                .format(column_width=column_width)
+                .format(column="Column", underl="------")
+            )
+            column_template = textwrap.dedent(
+                """\
+            {{i:^3}}  {{name:<{column_width}}} {{count}} non-null      {{dtype}}""".format(
+                    column_width=column_width
+                )
+            )
+            column_info = [
+                column_template.format(
+                    i=pprint_thing(i),
+                    name=pprint_thing(name),
+                    count=pprint_thing(count),
+                    dtype=pprint_thing(dtype),
+                )
+                for i, (name, count, dtype) in enumerate(
+                    zip(self.columns, counts, self.dtypes)
+                )
+            ]
+            lines.extend(header.split("\n"))
+        else:
+            column_info = [index_summary(self.columns, name="Columns")]
+
+        lines.extend(column_info)
+        dtype_counts = [
+            "%s(%d)" % k for k in sorted(self.dtypes.value_counts().items(), key=str)
+        ]
+        lines.append("dtypes: {}".format(", ".join(dtype_counts)))
+
+        if mem_use:
+            memory_int = computations["memory_usage"].sum()
+            lines.append(f"memory usage: {memory_repr(memory_int)}\n")
+
+        put_lines(buf, lines)
+
 
 class Series(FrameBase):
     """Series-like Expr Collection"""
@@ -1202,6 +1311,10 @@ class Series(FrameBase):
     @property
     def shape(self):
         return (self.size,)
+
+    @property
+    def axes(self):
+        return [self.index]
 
     def __dir__(self):
         o = set(dir(type(self)))
@@ -1212,6 +1325,10 @@ class Series(FrameBase):
     @property
     def name(self):
         return self.expr._meta.name
+
+    @name.setter
+    def name(self, name):
+        self._expr = self.rename(index=name)._expr
 
     @property
     def dtype(self):
@@ -1224,8 +1341,10 @@ class Series(FrameBase):
     def keys(self):
         return self.index
 
-    def map(self, arg, na_action=None):
-        return new_collection(expr.Map(self.expr, arg=arg, na_action=na_action))
+    def map(self, arg, na_action=None, meta=None):
+        return new_collection(
+            expr.Map(self.expr, arg=arg, na_action=na_action, meta=None)
+        )
 
     def __repr__(self):
         return f"<dask_expr.expr.Series: expr={self.expr}>"
@@ -1293,10 +1412,27 @@ class Series(FrameBase):
 
         return SeriesGroupBy(self, by, **kwargs)
 
-    def rename(self, index):
-        if is_scalar(index) or isinstance(index, tuple):
-            return new_collection(expr.RenameSeries(self.expr, index))
-        raise NotImplementedError(f"passing index={type(index)} is not supported")
+    def rename(self, index, sorted_index=False):
+        return new_collection(expr.RenameSeries(self.expr, index, sorted_index))
+
+    def quantile(self, q=0.5, method="default"):
+        """Approximate quantiles of Series
+
+        Parameters
+        ----------
+        q : list/array of floats, default 0.5 (50%)
+            Iterable of numbers ranging from 0 to 1 for the desired quantiles
+        method : {'default', 'tdigest', 'dask'}, optional
+            What method to use. By default will use dask's internal custom
+            algorithm (``'dask'``).  If set to ``'tdigest'`` will use tdigest
+            for floats and ints and fallback to the ``'dask'`` otherwise.
+        """
+        if not pd.api.types.is_numeric_dtype(self.dtype):
+            raise TypeError(f"quantile() on non-numeric dtype {self.dtype}")
+        allowed_methods = ["default", "dask", "tdigest"]
+        if method not in allowed_methods:
+            raise ValueError("method can only be 'default', 'dask' or 'tdigest'")
+        return new_collection(SeriesQuantile(self.expr, q, method))
 
     @property
     def is_monotonic_increasing(self):
@@ -1325,6 +1461,12 @@ class Index(Series):
 
     def memory_usage(self, deep=False):
         return new_collection(MemoryUsageIndex(self.expr, deep=deep))
+
+    @property
+    def index(self):
+        raise NotImplementedError(
+            f"{self.__class__.__name__!r} object has no attribute 'index'"
+        )
 
     def __dir__(self):
         o = set(dir(type(self)))
