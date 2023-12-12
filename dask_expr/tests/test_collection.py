@@ -341,13 +341,9 @@ def test_boolean_operators(func):
     assert_eq(func(pdf), func(df))
 
 
-@pytest.mark.parametrize(
-    "axis", ("columns", 1, "index", 0), ids=lambda axis: f"{axis=}"
-)
-@pytest.mark.parametrize("level", (None, 0, "x"), ids=lambda level: f"{level=}")
-@pytest.mark.parametrize(
-    "fill_value", (None, 1), ids=lambda fill_value: f"{fill_value=}"
-)
+@pytest.mark.parametrize("axis", ("columns", 1, "index", 0))
+@pytest.mark.parametrize("level", (None, 0, "x"))
+@pytest.mark.parametrize("fill_value", (None, 1))
 @pytest.mark.parametrize(
     "op",
     (
@@ -369,9 +365,8 @@ def test_boolean_operators(func):
         "rmod",
         "rpow",
     ),
-    ids=lambda op: f"{op=}",
 )
-@pytest.mark.parametrize("series", (True, False), ids=lambda series: f"{series=}")
+@pytest.mark.parametrize("series", (True, False))
 def test_method_operators(pdf, df, axis, level, fill_value, op, series):
     kwargs = {
         k: v
