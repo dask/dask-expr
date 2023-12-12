@@ -1050,13 +1050,21 @@ class DataFrame(FrameBase):
     def memory_usage(self, deep=False, index=True):
         return new_collection(MemoryUsageFrame(self.expr, deep=deep, _index=index))
 
-    def drop_duplicates(self, subset=None, ignore_index=False, split_out=True):
+    def drop_duplicates(
+        self, subset=None, ignore_index=False, split_out=True, keep="first"
+    ):
+        if keep is False:
+            raise NotImplementedError("drop_duplicates with keep=False")
         # Fail early if subset is not valid, e.g. missing columns
         subset = _convert_to_list(subset)
-        meta_nonempty(self._meta).drop_duplicates(subset=subset)
+        meta_nonempty(self._meta).drop_duplicates(subset=subset, keep=keep)
         return new_collection(
             DropDuplicates(
-                self.expr, subset=subset, ignore_index=ignore_index, split_out=split_out
+                self.expr,
+                subset=subset,
+                ignore_index=ignore_index,
+                split_out=split_out,
+                keep=keep,
             )
         )
 
@@ -1427,9 +1435,13 @@ class Series(FrameBase):
         else:
             return uniqs.size
 
-    def drop_duplicates(self, ignore_index=False, split_out=True):
+    def drop_duplicates(self, ignore_index=False, split_out=True, keep="first"):
+        if keep is False:
+            raise NotImplementedError("drop_duplicates with keep=False")
         return new_collection(
-            DropDuplicates(self.expr, ignore_index=ignore_index, split_out=split_out)
+            DropDuplicates(
+                self.expr, ignore_index=ignore_index, split_out=split_out, keep=keep
+            )
         )
 
     def dropna(self):
