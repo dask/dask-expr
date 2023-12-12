@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from dask.base import tokenize
 from dask.dataframe import methods
-from dask.dataframe.core import split_evenly
+from dask.dataframe.core import _map_freq_to_period_start, split_evenly
 from dask.dataframe.utils import is_series_like
 from dask.utils import iter_chunks, parse_bytes
 from pandas.api.types import is_datetime64_any_dtype, is_numeric_dtype
@@ -27,12 +27,14 @@ class Repartition(Expr):
         "new_divisions",
         "force",
         "partition_size",
+        "freq",
     ]
     _defaults = {
         "new_partitions": None,
         "new_divisions": None,
         "force": False,
         "partition_size": None,
+        "freq": None,
     }
     _is_length_preserving = True
 
@@ -103,6 +105,8 @@ class Repartition(Expr):
             return RepartitionDivisions(self.frame, self.new_divisions, self.force)
         elif self.partition_size is not None:
             return RepartitionSize(self.frame, partition_size=self.partition_size)
+        elif self.freq is not None:
+            return RepartitionFreq(self.frame, freq=self.freq)
         else:
             raise NotImplementedError()
 
@@ -342,6 +346,33 @@ class RepartitionDivisions(Repartition):
                 d[(out2, j - 1)] = (methods.concat, tmp)
             j += 1
         return d
+
+
+class RepartitionFreq(Repartition):
+    _parameters = ["frame", "freq"]
+
+    def _divisions(self):
+        freq = _map_freq_to_period_start(self.freq)
+
+        try:
+            start = self.frame.divisions[0].ceil(freq)
+        except ValueError:
+            start = self.frame.divisions[0]
+        divisions = methods.tolist(
+            pd.date_range(start=start, end=self.frame.divisions[-1], freq=freq)
+        )
+        if not len(divisions):
+            divisions = [self.frame.divisions[0], self.frame.divisions[-1]]
+        else:
+            divisions.append(self.frame.divisions[-1])
+            if divisions[0] != self.frame.divisions[0]:
+                divisions = [self.frame.divisions[0]] + divisions
+        return divisions
+
+    def _lower(self):
+        if not isinstance(self.frame.divisions[0], pd.Timestamp):
+            raise TypeError("Can only repartition on frequency for timeseries")
+        return RepartitionDivisions(self.frame, self._divisions())
 
 
 class RepartitionSize(Repartition):
