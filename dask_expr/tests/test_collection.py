@@ -1844,6 +1844,21 @@ def test_axes(df, pdf):
     assert_eq(df.x.axes[0], pdf.x.axes[0])
 
 
+def test_map_overlap_divisions(df, pdf):
+    result = df.shift(2)
+    assert result.divisions == result.optimize().divisions
+    result = df.ffill()
+    assert result.divisions == result.optimize().divisions
+    result = df.bfill()
+    assert result.divisions == result.optimize().divisions
+
+    pdf.index = lib.date_range("2019-12-31", freq="s", periods=len(pdf))
+    df = from_pandas(pdf, npartitions=10)
+    result = df.shift(freq="2s")
+    assert result.known_divisions
+    assert not result.optimize().known_divisions
+
+
 @pytest.mark.parametrize("npartitions", [1, 4])
 def test_map_overlap(npartitions, pdf, df):
     def shifted_sum(df, before, after, c=0):
