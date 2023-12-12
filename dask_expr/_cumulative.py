@@ -50,16 +50,15 @@ class CumulativeBlockwise(Blockwise):
         return self.operands[:-1]
 
 
-def _take_last(a, skipna=True):
-    if skipna:
-        a = a.bfill()
-    return a.tail(n=1).squeeze()
-
-
 class TakeLast(Blockwise):
     _parameters = ["frame", "skipna"]
-    operation = staticmethod(_take_last)
     _projection_passthrough = True
+
+    @staticmethod
+    def operation(a, skipna=True):
+        if skipna:
+            a = a.bfill()
+        return a.tail(n=1).squeeze()
 
 
 class CumulativeFinalize(Expr):
