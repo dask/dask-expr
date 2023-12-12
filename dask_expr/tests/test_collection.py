@@ -326,7 +326,7 @@ def test_ffill_and_bfill(limit, axis, how):
 @pytest.mark.parametrize("axis", ("index", 0, "columns", 1))
 def test_shift(pdf, df, periods, freq, axis):
     if freq and axis in ("columns", 1):
-        pytest.skip(msg="Neither dask or pandas supports freq w/ axis 1 shift")
+        pytest.skip(reason="Neither dask or pandas supports freq w/ axis 1 shift")
 
     if freq is not None:
         pdf["time"] = lib.date_range("2000-01-01", "2000-01-02", periods=len(pdf))
@@ -429,6 +429,53 @@ def test_boolean_operators(func):
     assert_eq(func(pdf), func(df))
 
 
+@pytest.mark.parametrize("axis", ("columns", 1, "index", 0))
+@pytest.mark.parametrize("level", (None, 0, "x"))
+@pytest.mark.parametrize("fill_value", (None, 1))
+@pytest.mark.parametrize(
+    "op",
+    (
+        "add",
+        "sub",
+        "mul",
+        "div",
+        "divide",
+        "truediv",
+        "floordiv",
+        "mod",
+        "pow",
+        "radd",
+        "rsub",
+        "rmul",
+        "rdiv",
+        "rtruediv",
+        "rfloordiv",
+        "rmod",
+        "rpow",
+    ),
+)
+@pytest.mark.parametrize("series", (True, False))
+def test_method_operators(pdf, df, axis, level, fill_value, op, series):
+    kwargs = {
+        k: v
+        for k, v in (("axis", axis), ("level", level), ("fill_value", fill_value))
+        if v is not None
+    }
+    if series:
+        kwargs.pop("axis")
+        pdf = pdf.x
+        df = df.x
+
+    if level is not None:
+        with pytest.raises(NotImplementedError, match="level must be None"):
+            getattr(df, op)(other=df, **kwargs)
+        return
+
+    expected = getattr(pdf, op)(other=pdf, **kwargs)
+    actual = getattr(df, op)(other=df, **kwargs)
+    assert_eq(expected, actual)
+
+
 @pytest.mark.parametrize(
     "func",
     [
@@ -492,6 +539,7 @@ def test_to_timestamp(pdf, how):
         lambda df: df.x.map(lambda x: x + 1),
         lambda df: df[df.x > 5],
         lambda df: df.assign(a=df.x + df.y, b=df.x - df.y),
+        lambda df: df.assign(a=df.x + df.y, b=lambda x: x.a + 1),
         lambda df: df.replace(to_replace=1, value=1000),
         lambda df: df.x.replace(to_replace=1, value=1000),
         lambda df: df.isna(),
@@ -617,6 +665,12 @@ def test_drop_not_implemented(pdf, df):
 )
 def test_blockwise_pandas_only(func, pdf, df):
     assert_eq(func(pdf), func(df))
+
+
+def test_map_meta(pdf, df):
+    expected = pdf.x.map(lambda x: x + 1)
+    result = df.x.map(lambda x: x + 1, meta=expected.iloc[:0])
+    assert_eq(result, expected)
 
 
 def test_simplify_add_suffix_add_prefix(df, pdf):
@@ -1489,6 +1543,10 @@ def test_assign_different_roots():
         df["new"] = df2.x
 
 
+def test_assign_pandas_inputs(df, pdf):
+    assert_eq(df.assign(a=pdf.x), pdf.assign(a=pdf.x))
+
+
 @xfail_gpu()
 def test_astype_categories(df):
     result = df.astype("category")
@@ -1599,6 +1657,10 @@ def test_shape(df, pdf):
     assert result[0]._name == (df.x.size)._name
     assert assert_eq(result[0], pdf.shape[0])
 
+    result = df[[]].shape
+    assert assert_eq(result[0], pdf[[]].shape[0])
+    assert assert_eq(result[1], pdf[[]].shape[1])
+
 
 def test_size(df, pdf):
     assert_eq(df.size, pdf.size)
@@ -1673,6 +1735,26 @@ def test_map_overlap():
 
     result = df.map_overlap(func, before=1, after=0)
     assert_eq(result, expected, check_index=False)
+
+
+def test_quantile(df):
+    assert_eq(df.x.quantile(), 49.0)
+    assert_eq(df.x.quantile(method="dask"), 49.0)
+    assert_eq(
+        df.x.quantile(q=[0.2, 0.8]),
+        lib.Series([19.0, 79.0], index=[0.2, 0.8], name="x"),
+    )
+    assert_eq(
+        df.x.index.quantile(q=[0.2, 0.8]),
+        lib.Series([19.0, 79.0], index=[0.2, 0.8]),
+    )
+
+    with pytest.raises(AssertionError):
+        df.x.quantile(q=[]).compute()
+
+    ser = from_pandas(lib.Series(["a", "b", "c"]), npartitions=2)
+    with pytest.raises(TypeError, match="on non-numeric"):
+        ser.quantile()
 
 
 def test_map_overlap_raises():

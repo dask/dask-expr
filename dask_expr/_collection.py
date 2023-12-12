@@ -53,6 +53,7 @@ from dask_expr._expr import (
     no_default,
 )
 from dask_expr._merge import JoinRecursive, Merge
+from dask_expr._quantile import SeriesQuantile
 from dask_expr._quantiles import RepartitionQuantiles
 from dask_expr._reductions import (
     DropDuplicates,
@@ -71,7 +72,13 @@ from dask_expr._reductions import (
 from dask_expr._repartition import Repartition
 from dask_expr._shuffle import SetIndex, SetIndexBlockwise, SortValues
 from dask_expr._str_accessor import StringAccessor
-from dask_expr._util import _BackendData, _convert_to_list, _validate_axis, is_scalar
+from dask_expr._util import (
+    _BackendData,
+    _convert_to_list,
+    _maybe_from_pandas,
+    _validate_axis,
+    is_scalar,
+)
 from dask_expr.io import FromPandasDivisions
 
 #
@@ -108,6 +115,64 @@ def _wrap_expr_op(self, other, op=None):
                 AlignPartitions(other, self.expr)
             )
         )
+
+
+def _wrap_expr_method_operator(name, class_):
+    """
+    Add method operators to Series or DataFrame like DataFrame.add.
+    _wrap_expr_method_operator("add", DataFrame)
+    """
+    if class_ == DataFrame:
+
+        def method(self, other, axis="columns", level=None, fill_value=None):
+            if level is not None:
+                raise NotImplementedError("level must be None")
+
+            # TODO(milesgranger): Add support for other, `other` types than DataFrame.
+            if not isinstance(other, DataFrame):
+                raise NotImplementedError("only other=DataFrame implemented")
+
+            axis = _validate_axis(axis)
+
+            if axis in (1, "columns"):
+                if isinstance(other, Series):
+                    msg = f"Unable to {name} dd.Series with axis=1"
+                    raise ValueError(msg)
+            return new_collection(
+                expr.MethodOperator(
+                    name=name,
+                    left=self.expr,
+                    right=other.expr,
+                    axis=axis,
+                    level=level,
+                    fill_value=fill_value,
+                )
+            )
+
+    elif class_ == Series:
+
+        def method(self, other, level=None, fill_value=None, axis=0):
+            if level is not None:
+                raise NotImplementedError("level must be None")
+
+            axis = _validate_axis(axis)
+
+            return new_collection(
+                expr.MethodOperator(
+                    name=name,
+                    left=self.expr,
+                    right=other.expr,
+                    axis=axis,
+                    fill_value=fill_value,
+                    level=level,
+                )
+            )
+
+    else:
+        raise NotImplementedError(f"Cannot create method operator for {class_=}")
+
+    method.__name__ = name
+    return method
 
 
 def _wrap_unary_expr_op(self, op=None):
@@ -494,7 +559,7 @@ class FrameBase(DaskMethodsMixin):
         return new_collection(new_expr)
 
     def repartition(
-        self, npartitions=None, divisions=None, force=False, partition_size=None
+        self, divisions=None, npartitions=None, partition_size=None, force=False
     ):
         """Repartition a collection
 
@@ -503,17 +568,17 @@ class FrameBase(DaskMethodsMixin):
 
         Parameters
         ----------
+        divisions : list, optional
+            The "dividing lines" used to split the dataframe into partitions.
+            For ``divisions=[0, 10, 50, 100]``, there would be three output partitions,
+            where the new index contained [0, 10), [10, 50), and [50, 100), respectively.
+            See https://docs.dask.org/en/latest/dataframe-design.html#partitions.
         npartitions : int, Callable, optional
             Approximate number of partitions of output. The number of
             partitions used may be slightly lower than npartitions depending
             on data distribution, but will never be higher.
             The Callable gets the number of partitions of the input as an argument
             and should return an int.
-        divisions : list, optional
-            The "dividing lines" used to split the dataframe into partitions.
-            For ``divisions=[0, 10, 50, 100]``, there would be three output partitions,
-            where the new index contained [0, 10), [10, 50), and [50, 100), respectively.
-            See https://docs.dask.org/en/latest/dataframe-design.html#partitions.
         partition_size : str, optional
             Max number of bytes of memory for each partition. Use numbers or strings
             like 5MB. If specified npartitions and divisions will be ignored. Note that
@@ -771,7 +836,7 @@ class DataFrame(FrameBase):
 
     @property
     def shape(self):
-        return self.size / len(self.columns), len(self.columns)
+        return self.size / max(len(self.columns), 1), len(self.columns)
 
     def keys(self):
         return self.columns
@@ -789,13 +854,13 @@ class DataFrame(FrameBase):
 
     def assign(self, **pairs):
         result = self
-        data = self.copy()
         for k, v in pairs.items():
+            v = _maybe_from_pandas([v])[0]
             if not isinstance(k, str):
                 raise TypeError(f"Column name cannot be type {type(k)}")
 
             if callable(v):
-                v = v(data)
+                v = v(result)
 
             if isinstance(v, (Scalar, Series)):
                 if isinstance(v, Series):
@@ -980,8 +1045,10 @@ class DataFrame(FrameBase):
         o.update(c for c in self.columns if (isinstance(c, str) and c.isidentifier()))
         return list(o)
 
-    def map(self, func, na_action=None):
-        return new_collection(expr.Map(self.expr, arg=func, na_action=na_action))
+    def map(self, func, na_action=None, meta=None):
+        return new_collection(
+            expr.Map(self.expr, arg=func, na_action=na_action, meta=meta)
+        )
 
     def __repr__(self):
         return f"<dask_expr.expr.DataFrame: expr={self.expr}>"
@@ -1331,8 +1398,10 @@ class Series(FrameBase):
     def keys(self):
         return self.index
 
-    def map(self, arg, na_action=None):
-        return new_collection(expr.Map(self.expr, arg=arg, na_action=na_action))
+    def map(self, arg, na_action=None, meta=None):
+        return new_collection(
+            expr.Map(self.expr, arg=arg, na_action=na_action, meta=None)
+        )
 
     def __repr__(self):
         return f"<dask_expr.expr.Series: expr={self.expr}>"
@@ -1403,6 +1472,25 @@ class Series(FrameBase):
     def rename(self, index, sorted_index=False):
         return new_collection(expr.RenameSeries(self.expr, index, sorted_index))
 
+    def quantile(self, q=0.5, method="default"):
+        """Approximate quantiles of Series
+
+        Parameters
+        ----------
+        q : list/array of floats, default 0.5 (50%)
+            Iterable of numbers ranging from 0 to 1 for the desired quantiles
+        method : {'default', 'tdigest', 'dask'}, optional
+            What method to use. By default will use dask's internal custom
+            algorithm (``'dask'``).  If set to ``'tdigest'`` will use tdigest
+            for floats and ints and fallback to the ``'dask'`` otherwise.
+        """
+        if not pd.api.types.is_numeric_dtype(self.dtype):
+            raise TypeError(f"quantile() on non-numeric dtype {self.dtype}")
+        allowed_methods = ["default", "dask", "tdigest"]
+        if method not in allowed_methods:
+            raise ValueError("method can only be 'default', 'dask' or 'tdigest'")
+        return new_collection(SeriesQuantile(self.expr, q, method))
+
     @property
     def is_monotonic_increasing(self):
         return new_collection(IsMonotonicIncreasing(self.expr))
@@ -1410,6 +1498,32 @@ class Series(FrameBase):
     @property
     def is_monotonic_decreasing(self):
         return new_collection(IsMonotonicDecreasing(self.expr))
+
+
+for name in [
+    "add",
+    "sub",
+    "mul",
+    "div",
+    "divide",
+    "truediv",
+    "floordiv",
+    "mod",
+    "pow",
+    "radd",
+    "rsub",
+    "rmul",
+    "rdiv",
+    "rtruediv",
+    "rfloordiv",
+    "rmod",
+    "rpow",
+]:
+    assert not hasattr(DataFrame, name), name
+    setattr(DataFrame, name, _wrap_expr_method_operator(name, DataFrame))
+
+    assert not hasattr(Series, name), name
+    setattr(Series, name, _wrap_expr_method_operator(name, Series))
 
 
 class Index(Series):
