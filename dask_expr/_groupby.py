@@ -67,16 +67,12 @@ class GroupByChunk(Chunk):
 
     def dependencies(self):
         deps = [operand for operand in self.operands if isinstance(operand, Expr)]
-        if isinstance(self.by, (list, tuple)):
-            deps.extend(op for op in self.by if isinstance(op, Expr))
+        deps.extend(op for op in self.by if isinstance(op, Expr))
         return deps
 
     @functools.cached_property
     def _args(self) -> list:
-        if not isinstance(self.by, (list, tuple)):
-            return [self.frame, self.by]
-        else:
-            return [self.frame] + list(self.by)
+        return [self.frame] + self.by
 
 
 class GroupByApplyConcatApply(ApplyConcatApply):
@@ -84,33 +80,20 @@ class GroupByApplyConcatApply(ApplyConcatApply):
 
     @functools.cached_property
     def _by_meta(self):
-        if isinstance(self.by, Expr):
-            return [meta_nonempty(self.by._meta)]
-        elif is_scalar(self.by):
-            return [self.by]
-        else:
-            return [
-                meta_nonempty(x._meta) if isinstance(x, Expr) else x for x in self.by
-            ]
+        return [meta_nonempty(x._meta) if isinstance(x, Expr) else x for x in self.by]
 
     @functools.cached_property
     def _by_columns(self):
-        if isinstance(self.by, Expr):
-            return []
-        else:
-            return [x for x in self.by if not isinstance(x, Expr)]
+        return [x for x in self.by if not isinstance(x, Expr)]
 
     @property
     def split_by(self):
-        if isinstance(self.by, Expr):
-            return self.by.columns
-        else:
-            return list(
-                flatten(
-                    [[x] if not isinstance(x, Expr) else x.columns for x in self.by],
-                    container=list,
-                )
+        return list(
+            flatten(
+                [[x] if not isinstance(x, Expr) else x.columns for x in self.by],
+                container=list,
             )
+        )
 
     @functools.cached_property
     def _meta_chunk(self):
@@ -427,21 +410,11 @@ class GroupByReduction(Reduction):
 
     @functools.cached_property
     def _by_meta(self):
-        if isinstance(self.by, Expr):
-            return meta_nonempty(self.by._meta)
-        elif is_scalar(self.by):
-            return self.by
-        else:
-            return [
-                meta_nonempty(x._meta) if isinstance(x, Expr) else x for x in self.by
-            ]
+        return [meta_nonempty(x._meta) if isinstance(x, Expr) else x for x in self.by]
 
     @functools.cached_property
     def _by_columns(self):
-        if isinstance(self.by, Expr):
-            return []
-        else:
-            return [x for x in self.by if not isinstance(x, Expr)]
+        return [x for x in self.by if not isinstance(x, Expr)]
 
     @functools.cached_property
     def _meta_chunk(self):
@@ -470,15 +443,12 @@ class Var(GroupByReduction):
 
     @property
     def split_by(self):
-        if isinstance(self.by, Expr):
-            return self.by.columns
-        else:
-            return list(
-                flatten(
-                    [[x] if not isinstance(x, Expr) else x.columns for x in self.by],
-                    container=list,
-                )
+        return list(
+            flatten(
+                [[x] if not isinstance(x, Expr) else x.columns for x in self.by],
+                container=list,
             )
+        )
 
     @staticmethod
     def chunk(frame, *by, **kwargs):
@@ -949,7 +919,7 @@ def _extract_meta(x, nonempty=False):
 ###
 
 
-def _validate_by_expr(obj, by):
+def _clean_by_expr(obj, by):
     if (
         isinstance(by, Series)
         and by.name in obj.columns
@@ -987,9 +957,9 @@ class GroupBy:
         slice=None,
     ):
         if isinstance(by, (tuple, list)):
-            by = [_validate_by_expr(obj, x) for x in by]
+            by = [_clean_by_expr(obj, x) for x in by]
         else:
-            by = _validate_by_expr(obj, by)
+            by = _clean_by_expr(obj, by)
 
         by_ = by if isinstance(by, (tuple, list)) else [by]
         self._slice = slice
