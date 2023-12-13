@@ -493,7 +493,7 @@ class FromScalars(IO):
         return self.dependencies()
 
     def _divisions(self):
-        return (None, None)
+        return (min(self.names), max(self.names))
 
     @functools.cached_property
     def _meta(self):

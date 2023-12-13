@@ -1772,6 +1772,7 @@ def test_map_overlap():
 
 def test_quantile_frame(df, pdf):
     assert_eq(df.quantile(), lib.Series([49.0, 7.0], index=["x", "y"], name=0.5))
+    assert df.quantile().divisions == ("x", "y")
     assert_eq(df.quantile(q=[0.5]), lib.DataFrame({"x": [49.0], "y": 7.0}, index=[0.5]))
     assert_eq(
         df.quantile(q=[0.5], numeric_only=True),
