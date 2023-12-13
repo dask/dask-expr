@@ -361,6 +361,26 @@ class Expr(core.Expr):
     def count(self, numeric_only=False):
         return Count(self, numeric_only)
 
+    def cumsum(self, skipna=True):
+        from dask_expr._cumulative import CumSum
+
+        return CumSum(self, skipna=skipna)
+
+    def cumprod(self, skipna=True):
+        from dask_expr._cumulative import CumProd
+
+        return CumProd(self, skipna=skipna)
+
+    def cummax(self, skipna=True):
+        from dask_expr._cumulative import CumMax
+
+        return CumMax(self, skipna=skipna)
+
+    def cummin(self, skipna=True):
+        from dask_expr._cumulative import CumMin
+
+        return CumMin(self, skipna=skipna)
+
     def abs(self):
         return Abs(self)
 
@@ -1292,13 +1312,20 @@ class Apply(Elemwise):
 
 class Map(Elemwise):
     _projection_passthrough = True
-    _parameters = ["frame", "arg", "na_action"]
-    _defaults = {"na_action": None}
+    _parameters = ["frame", "arg", "na_action", "meta"]
+    _defaults = {"na_action": None, "meta": None}
+    _keyword_only = ["meta"]
     operation = M.map
 
     @functools.cached_property
     def _meta(self):
-        return self.frame._meta
+        if self.operand("meta") is None:
+            return self.frame._meta
+        return self.operand("meta")
+
+    @functools.cached_property
+    def _kwargs(self) -> dict:
+        return {}
 
     def _divisions(self):
         if is_index_like(self.frame._meta):
@@ -1719,6 +1746,20 @@ class Add(Binop):
             and self.left._name == self.right._name
         ):
             return 2 * self.left
+
+
+class MethodOperator(Binop):
+    _parameters = ["name", "left", "right", "axis", "level", "fill_value"]
+    _defaults = {"axis": "columns", "level": None, "fill_value": None}
+    _keyword_only = ["axis", "level", "fill_value"]
+
+    @property
+    def _operator_repr(self):
+        return self.name
+
+    @staticmethod
+    def operation(name, left, right, **kwargs):
+        return getattr(left, name)(right, **kwargs)
 
 
 class Sub(Binop):
