@@ -242,6 +242,24 @@ def test_std_kwargs(axis, skipna, ddof):
     )
 
 
+@pytest.mark.parametrize("func", ["cumsum", "cumprod", "cummin", "cummax"])
+def test_cumulative_methods(df, pdf, func):
+    assert_eq(getattr(df, func)(), getattr(pdf, func)(), check_dtype=False)
+    assert_eq(getattr(df.x, func)(), getattr(pdf.x, func)())
+
+    q = getattr(df, func)()["x"]
+    assert q.simplify()._name == getattr(df.x, func)()
+
+    pdf.loc[slice(None, None, 2), "x"] = np.nan
+    df = from_pandas(pdf, npartitions=10)
+    assert_eq(
+        getattr(df, func)(skipna=False),
+        getattr(pdf, func)(skipna=False),
+        check_dtype=False,
+    )
+    assert_eq(getattr(df.x, func)(skipna=False), getattr(pdf.x, func)(skipna=False))
+
+
 @xfail_gpu("nbytes not supported by cudf")
 def test_nbytes(pdf, df):
     with pytest.raises(NotImplementedError, match="nbytes is not implemented"):
@@ -1209,28 +1227,35 @@ def test_astype_simplify(df, pdf):
 
 @pytest.mark.parametrize("split_out", [1, True])
 def test_drop_duplicates(df, pdf, split_out):
-    assert_eq(df.drop_duplicates(split_out=split_out), pdf.drop_duplicates())
-    assert_eq(
-        df.drop_duplicates(ignore_index=True, split_out=split_out),
-        pdf.drop_duplicates(ignore_index=True),
-        check_index=split_out is not True,
-    )
-    assert_eq(
-        df.drop_duplicates(subset=["y"], split_out=split_out),
-        pdf.drop_duplicates(subset=["y"]),
-    )
-    assert_eq(
-        df.y.drop_duplicates(split_out=split_out),
-        pdf.y.drop_duplicates(),
-    )
+    with dask.config.set({"dataframe.shuffle.method": "tasks"}):
+        assert_eq(
+            df.drop_duplicates(split_out=split_out),
+            pdf.drop_duplicates(),
+            check_index=split_out is not True,
+        )
+        assert_eq(
+            df.drop_duplicates(ignore_index=True, split_out=split_out),
+            pdf.drop_duplicates(ignore_index=True),
+            check_index=split_out is not True,
+        )
+        assert_eq(
+            df.drop_duplicates(subset=["y"], split_out=split_out),
+            pdf.drop_duplicates(subset=["y"]),
+            check_index=split_out is not True,
+        )
+        assert_eq(
+            df.y.drop_duplicates(split_out=split_out),
+            pdf.y.drop_duplicates(),
+            check_index=split_out is not True,
+        )
 
-    actual = df.set_index("y").index.drop_duplicates(split_out=split_out)
-    if split_out is True:
-        actual = actual.compute().sort_values()  # shuffle is unordered
-    assert_eq(
-        actual,
-        pdf.set_index("y").index.drop_duplicates(),
-    )
+        actual = df.set_index("y").index.drop_duplicates(split_out=split_out)
+        if split_out is True:
+            actual = actual.compute().sort_values()  # shuffle is unordered
+        assert_eq(
+            actual,
+            pdf.set_index("y").index.drop_duplicates(),
+        )
 
     with pytest.raises(KeyError, match="'a'"):
         df.drop_duplicates(subset=["a"], split_out=split_out)
@@ -1638,6 +1663,10 @@ def test_shape(df, pdf):
     result = df.x.shape
     assert result[0]._name == (df.x.size)._name
     assert assert_eq(result[0], pdf.shape[0])
+
+    result = df[[]].shape
+    assert assert_eq(result[0], pdf[[]].shape[0])
+    assert assert_eq(result[1], pdf[[]].shape[1])
 
 
 def test_size(df, pdf):
