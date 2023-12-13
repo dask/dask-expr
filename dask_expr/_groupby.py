@@ -38,6 +38,7 @@ from dask_expr._expr import (
     Expr,
     MapPartitions,
     Projection,
+    RenameSeries,
     are_co_aligned,
     no_default,
 )
@@ -87,10 +88,6 @@ class GroupByBase:
     def levels(self):
         return _determine_levels(self.by)
 
-    @property
-    def _chunk_cls_args(self):
-        return self.by
-
 
 class GroupByChunk(Chunk, GroupByBase):
     @functools.cached_property
@@ -105,6 +102,10 @@ class GroupByApplyConcatApply(ApplyConcatApply, GroupByBase):
     def _meta_chunk(self):
         meta = meta_nonempty(self.frame._meta)
         return self.chunk(meta, *self._by_meta, **self.chunk_kwargs)
+
+    @property
+    def _chunk_cls_args(self):
+        return self.by
 
     @property
     def split_out(self):
@@ -396,6 +397,10 @@ class ValueCounts(SingleAggregation):
 
 class GroupByReduction(Reduction, GroupByBase):
     _chunk_cls = GroupByChunk
+
+    @property
+    def _chunk_cls_args(self):
+        return self.by
 
     @functools.cached_property
     def _meta_chunk(self):
@@ -699,12 +704,11 @@ class GroupByApply(Expr, GroupByBase):
         ):
             if isinstance(self.by[0], Expr):
                 df = Assign(df, "_by", self.by[0])
-
-            df = Shuffle(df, self.by[0], df.npartitions)
-            if isinstance(self.by[0], Expr):
-                by = Projection(df, self.by[0].name)
-                by.name = self.by[0].name
+                df = Shuffle(df, "_by", df.npartitions)
+                by = [RenameSeries(Projection(df, "_by"), index=self.by[0].columns[0])]
                 df = Projection(df, [col for col in df.columns if col != "_by"])
+            else:
+                df = Shuffle(df, self.by[0], df.npartitions)
 
             grp_func = self._shuffle_grp_func(True)
         else:
@@ -847,7 +851,8 @@ def _contains_index_name(index_name, by):
 
 def _meta_apply_transform(obj, grp_func):
     kwargs = obj.operand("kwargs")
-    by_meta = obj.by if not isinstance(obj.by, Expr) else meta_nonempty(obj.by._meta)
+    by_meta = obj._by_meta
+    by_meta = [x if is_scalar(x) else meta_nonempty(x) for x in by_meta]
     meta_args, meta_kwargs = _extract_meta((obj.operand("args"), kwargs), nonempty=True)
     return make_meta(
         grp_func(

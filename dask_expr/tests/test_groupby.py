@@ -5,6 +5,7 @@ from dask_expr import from_pandas
 from dask_expr._groupby import GroupByUDFBlockwise
 from dask_expr._reductions import TreeReduce
 from dask_expr._shuffle import Shuffle
+from dask_expr.io import FromPandas
 from dask_expr.tests._util import _backend_library, assert_eq, xfail_gpu
 
 # Set DataFrame backend for this module
@@ -85,6 +86,33 @@ def test_groupby_numeric(pdf, df, api, numeric_only):
     agg = getattr(g, api)()
     expect = getattr(pdf.groupby(["x", "z"]), api)(numeric_only=numeric_only)
     assert_eq(agg, expect)
+
+
+def test_groupby_reduction_optimize(pdf, df):
+    df = df.replace(1, 5)
+    agg = df.groupby(df.x).y.sum()
+    expected_query = df[["x", "y"]]
+    expected_query = expected_query.groupby(expected_query.x).y.sum()
+    assert agg.optimize()._name == expected_query.optimize()._name
+    expect = pdf.replace(1, 5).groupby(["x"]).y.sum()
+    assert_eq(agg, expect)
+
+    df2 = df[["y"]]
+    agg = df2.groupby(df.x).y.sum()
+    ops = [
+        op for op in agg.expr.optimize(fuse=False).walk() if isinstance(op, FromPandas)
+    ]
+    assert len(ops) == 1
+    assert ops[0].columns == ["x", "y"]
+
+    df2 = df[["y"]]
+    agg = df2.groupby(df.x).y.apply(lambda x: x)
+    ops = [
+        op for op in agg.expr.optimize(fuse=False).walk() if isinstance(op, FromPandas)
+    ]
+    assert len(ops) == 1
+    assert ops[0].columns == ["x", "y"]
+    assert_eq(agg, pdf.replace(1, 5).groupby(pdf.replace(1, 5).x).y.apply(lambda x: x))
 
 
 @pytest.mark.parametrize(
