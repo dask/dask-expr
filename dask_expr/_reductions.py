@@ -363,10 +363,6 @@ class ApplyConcatApply(Expr):
         else:
             return 1
 
-    @property
-    def split_by(self):
-        return None
-
     def _layer(self):
         # This is an abstract expression
         raise NotImplementedError()
