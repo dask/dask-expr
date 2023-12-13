@@ -251,8 +251,8 @@ class FrameBase(DaskMethodsMixin):
 
     def compute(self, fuse=True, combine_similar=True, **kwargs):
         out = self
-        # if not isinstance(out, Scalar):
-        #     out = out.repartition(npartitions=1)
+        if not isinstance(out, Scalar):
+            out = out.repartition(npartitions=1)
         out = out.optimize(combine_similar=combine_similar, fuse=fuse)
         return DaskMethodsMixin.compute(out, **kwargs)
 
