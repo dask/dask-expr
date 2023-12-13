@@ -470,7 +470,7 @@ class DiskShuffle(SimpleShuffle):
 
         # Barrier
         barrier_token = "barrier-" + always_new_token
-        dsk3 = {barrier_token: (barrier, list(dsk2))}
+        dsk3 = {(barrier_token,): (barrier, list(dsk2))}
 
         # Collect groups
         dsk4 = {
