@@ -391,13 +391,6 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
             return _convert_to_list(columns_operand)
 
     @functools.cached_property
-    def _sorted_data(self):
-        data = self.frame
-        if not data.index.is_monotonic_increasing:
-            data = data.sort_index(ascending=True)
-        return data
-
-    @functools.cached_property
     def _divisions_and_locations(self):
         assert isinstance(self.frame, _BackendData)
         npartitions = self.operand("npartitions")
@@ -461,8 +454,7 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
 
     def _filtered_task(self, index: int):
         start, stop = self._locations()[index : index + 2]
-        data = self.frame if not self.sort else self._sorted_data
-        part = data.iloc[start:stop]
+        part = self.frame.iloc[start:stop]
         if self.operand("columns") is not None:
             return part[self.columns[0]] if self._series else part[self.columns]
         return part
