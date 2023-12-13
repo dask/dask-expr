@@ -1,15 +1,18 @@
 import functools
+from typing import Callable
 
 import numpy as np
 import pandas as pd
 import toolz
 from dask.dataframe import hyperloglog, methods
+from dask.dataframe._compat import PANDAS_GE_200
 from dask.dataframe.core import (
     _concat,
     idxmaxmin_agg,
     idxmaxmin_chunk,
     idxmaxmin_combine,
     is_dataframe_like,
+    is_index_like,
     is_series_like,
     make_meta,
     meta_nonempty,
@@ -18,8 +21,16 @@ from dask.dataframe.core import (
 from dask.utils import M, apply, funcname
 
 from dask_expr._concat import Concat
-from dask_expr._expr import Blockwise, Expr, Index, Projection
-from dask_expr._util import is_scalar
+from dask_expr._expr import (
+    Blockwise,
+    Expr,
+    Index,
+    Projection,
+    RenameFrame,
+    ResetIndex,
+    ToFrame,
+)
+from dask_expr._util import _tokenize_deterministic, is_scalar
 
 
 class Chunk(Blockwise):
@@ -34,8 +45,9 @@ class Chunk(Blockwise):
 
     _parameters = ["frame", "kind", "chunk", "chunk_kwargs"]
 
-    def operation(self, df, *args, **kwargs):
-        return self.chunk(df, *args, **kwargs)
+    @property
+    def operation(self):
+        return self.chunk
 
     @functools.cached_property
     def _args(self) -> list:
@@ -52,7 +64,7 @@ class Chunk(Blockwise):
             for dep in self.dependencies():
                 lines.extend(dep._tree_repr_lines(2))
 
-        for k, v in self.chunk_kwargs.items():
+        for k, v in self._kwargs.items():
             try:
                 if v != self.kind._defaults[k]:
                     header += f" {k}={v}"
@@ -64,96 +76,168 @@ class Chunk(Blockwise):
         return lines
 
 
-class ApplyConcatApply(Expr):
-    """Perform reduction-like operation on dataframes
+class Aggregate(Chunk):
+    """Partition-wise aggregation component of `ApplyConcatApply`
 
-    This pattern is commonly used for reductions, groupby-aggregations, and
-    more.  It requires three methods to be implemented:
-
-    -   `chunk`: applied to each input partition
-    -   `combine`: applied to lists of intermediate partitions as they are
-        combined in batches
-    -   `aggregate`: applied at the end to finalize the computation
-
-    These methods should be easy to serialize, and can take in keyword
-    arguments defined in `chunks/combine/aggregate_kwargs`.
-
-    In many cases people don't define all three functions.  In these cases
-    combine takes from aggregate and aggregate takes from chunk.
+    This class is used within `ApplyConcatApply._lower`.
+    See Also
+    --------
+    ApplyConcatApply
     """
 
-    _parameters = ["frame"]
-    chunk = None
-    combine = None
-    aggregate = None
-    chunk_kwargs = {}
-    combine_kwargs = {}
-    aggregate_kwargs = {}
-    _chunk_cls = Chunk
+    _parameters = ["frame", "kind", "aggregate", "aggregate_kwargs"]
 
-    def _layer(self):
-        # This is an abstract expression
-        raise NotImplementedError()
-
-    @functools.cached_property
-    def _meta_chunk(self):
-        meta = meta_nonempty(self.frame._meta)
-        return self.chunk(meta, **self.chunk_kwargs)
-
-    @functools.cached_property
-    def _meta(self):
-        meta = self._meta_chunk
-        aggregate = self.aggregate or (lambda x: x)
-        if self.combine:
-            combine = self.combine
-            combine_kwargs = self.combine_kwargs
-        else:
-            combine = aggregate
-            combine_kwargs = self.aggregate_kwargs
-
-        meta = combine([meta], **combine_kwargs)
-        meta = aggregate([meta], **self.aggregate_kwargs)
-        return make_meta(meta)
-
-    def _divisions(self):
-        return (None, None)
+    @staticmethod
+    def _call_with_list_arg(func, *args, **kwargs):
+        return func(list(args), **kwargs)
 
     @property
-    def _chunk_cls_args(self):
-        return []
+    def operation(self):
+        return functools.partial(self._call_with_list_arg, self.aggregate)
+
+    @functools.cached_property
+    def _args(self) -> list:
+        return [self.frame]
+
+    @functools.cached_property
+    def _kwargs(self) -> dict:
+        return self.aggregate_kwargs or {}
+
+
+class ShuffleReduce(Expr):
+    """Shuffle-reduction component of `ApplyConcatApply`
+    when `split_out > 1`
+
+    This class is used within `ApplyConcatApply._lower`.
+
+    See Also
+    --------
+    ApplyConcatApply
+    """
+
+    _parameters = [
+        "frame",
+        "kind",
+        "_meta",
+        "combine",
+        "aggregate",
+        "combine_kwargs",
+        "aggregate_kwargs",
+        "split_by",
+        "split_every",
+        "split_out",
+        "sort",
+    ]
+    _defaults = {
+        "split_every": 8,
+        "split_out": True,
+        "sort": None,
+    }
+
+    @property
+    def split_out(self):
+        if "split_out" in self._parameters:
+            split_out = self.operand("split_out")
+            if split_out is True:
+                return self.frame.npartitions
+            return split_out
+        else:
+            return 1
 
     def _lower(self):
-        # Normalize functions in case not all are defined
-        chunk = self.chunk
-        chunk_kwargs = self.chunk_kwargs
-        if self.aggregate:
-            aggregate = self.aggregate
-            aggregate_kwargs = self.aggregate_kwargs
-        else:
-            aggregate = chunk
-            aggregate_kwargs = chunk_kwargs
+        from dask_expr._repartition import Repartition
+        from dask_expr._shuffle import SetIndexBlockwise, Shuffle, SortValues
 
-        if self.combine:
-            combine = self.combine
-            combine_kwargs = self.combine_kwargs
+        if is_index_like(self.frame._meta):
+            columns = [self.frame._meta.name or "__index__"]
+        elif is_series_like(self.frame._meta):
+            columns = [self.frame._meta.name or "__series__"]
         else:
-            combine = aggregate
-            combine_kwargs = aggregate_kwargs
+            columns = self.frame.columns
 
-        # Decompose ApplyConcatApply into Chunk and TreeReduce
-        aca_type = type(self)
-        return TreeReduce(
-            self._chunk_cls(
-                self.frame, aca_type, chunk, chunk_kwargs, *self._chunk_cls_args
-            ),
-            aca_type,
-            self._meta,
-            combine,
-            aggregate,
-            combine_kwargs,
-            aggregate_kwargs,
-            split_every=getattr(self, "split_every", 0),
+        # Find what columns we are shuffling by
+        split_by = self.split_by or columns
+        split_by_index = bool(set(split_by) - set(columns))
+
+        # Make sure we have dataframe-like data to shuffle
+        if split_by_index:
+            chunked = ResetIndex(self.frame, drop=False)
+        elif is_index_like(self.frame._meta) or is_series_like(self.frame._meta):
+            chunked = ToFrame(self.frame, name=columns[0])
+        else:
+            chunked = self.frame
+
+        # Map Tuple[str] column names to str before the shuffle
+        map_columns = {col: str(col) for col in chunked.columns if col != str(col)}
+        unmap_columns = {v: k for k, v in map_columns.items()}
+        if map_columns:
+            chunked = RenameFrame(chunked, map_columns)
+
+        # Sort or shuffle
+        split_every = getattr(self, "split_every", 0) or chunked.npartitions
+        ignore_index = getattr(self, "ignore_index", True)
+        shuffle_npartitions = max(
+            chunked.npartitions // split_every,
+            self.split_out,
         )
+        if self.sort:
+            shuffled = SortValues(
+                chunked,
+                split_by,
+                npartitions=shuffle_npartitions,
+                ignore_index=ignore_index,
+            )
+        else:
+            shuffled = Shuffle(
+                chunked,
+                split_by,
+                shuffle_npartitions,
+                ignore_index=ignore_index,
+            )
+
+        # Unmap column names if necessary
+        if unmap_columns:
+            shuffled = RenameFrame(shuffled, unmap_columns)
+
+        # Reset the index if we we used it for shuffling
+        if split_by_index:
+            divisions = (None,) * (shuffle_npartitions + 1)
+            shuffled = SetIndexBlockwise(shuffled, split_by, True, divisions)
+
+        # Convert back to Series if necessary
+        if is_series_like(self._meta):
+            shuffled = shuffled[shuffled.columns[0]]
+        elif is_index_like(self._meta):
+            shuffled = Index(
+                SetIndexBlockwise(
+                    shuffled, shuffled.columns[0], True, shuffled.divisions
+                )
+            )
+
+        # Blockwise aggregate
+        result = Aggregate(
+            shuffled,
+            self.kind,
+            self.aggregate,
+            self.aggregate_kwargs,
+        )
+
+        # Repartition and return
+        if self.split_out < result.npartitions:
+            return Repartition(result, new_partitions=self.split_out)
+        return result
+
+    @property
+    def _meta(self):
+        return self.operand("_meta")
+
+    def _divisions(self):
+        return (None,) * (self.split_out + 1)
+
+    def __str__(self):
+        chunked = str(self.frame)
+        split_every = getattr(self, "split_every", 0)
+        return f"{type(self).__name__}({chunked}, kind={funcname(self.kind)}, split_every={split_every})"
 
 
 class TreeReduce(Expr):
@@ -176,7 +260,15 @@ class TreeReduce(Expr):
         "aggregate_kwargs",
         "split_every",
     ]
-    _defaults = {"split_every": 0}
+    _defaults = {"split_every": 8}
+
+    @functools.cached_property
+    def _name(self):
+        if funcname(self.combine) in ("combine", "aggregate"):
+            name = funcname(self.combine.__self__).lower() + "-tree"
+        else:
+            name = funcname(self.combine)
+        return name + "-" + _tokenize_deterministic(*self.operands)
 
     def __dask_postcompute__(self):
         return toolz.first, ()
@@ -238,12 +330,138 @@ class TreeReduce(Expr):
         return lines
 
 
-class Unique(ApplyConcatApply):
+class ApplyConcatApply(Expr):
+    """Perform reduction-like operation on dataframes
+
+    This pattern is commonly used for reductions, groupby-aggregations, and
+    more.  It requires three methods to be implemented:
+
+    -   `chunk`: applied to each input partition
+    -   `combine`: applied to lists of intermediate partitions as they are
+        combined in batches
+    -   `aggregate`: applied at the end to finalize the computation
+
+    These methods should be easy to serialize, and can take in keyword
+    arguments defined in `chunks/combine/aggregate_kwargs`.
+
+    In many cases people don't define all three functions.  In these cases
+    combine takes from aggregate and aggregate takes from chunk.
+    """
+
     _parameters = ["frame"]
-    chunk = staticmethod(lambda x, **kwargs: methods.unique(x, **kwargs))
-    aggregate_func = methods.unique
+    chunk = None
+    combine = None
+    aggregate = None
+    chunk_kwargs = {}
+    combine_kwargs = {}
+    aggregate_kwargs = {}
+    _chunk_cls = Chunk
 
     @property
+    def split_out(self):
+        if "split_out" in self._parameters:
+            split_out = self.operand("split_out")
+            if isinstance(split_out, Callable):
+                split_out = split_out(self.frame.npartitions)
+            return split_out
+        else:
+            return 1
+
+    @property
+    def split_by(self):
+        return None
+
+    def _layer(self):
+        # This is an abstract expression
+        raise NotImplementedError()
+
+    @functools.cached_property
+    def _meta_chunk(self):
+        meta = meta_nonempty(self.frame._meta)
+        return self.chunk(meta, **self.chunk_kwargs)
+
+    @functools.cached_property
+    def _meta(self):
+        meta = self._meta_chunk
+        aggregate = self.aggregate or (lambda x: x)
+        if self.combine:
+            combine = self.combine
+            combine_kwargs = self.combine_kwargs
+        else:
+            combine = aggregate
+            combine_kwargs = self.aggregate_kwargs
+
+        meta = combine([meta], **combine_kwargs)
+        meta = aggregate([meta], **self.aggregate_kwargs)
+        return make_meta(meta)
+
+    def _divisions(self):
+        if self.split_out is True:
+            return (None,) * (self.frame.npartitions + 1)
+        return (None,) * (self.split_out + 1)
+
+    @property
+    def _chunk_cls_args(self):
+        return []
+
+    def _lower(self):
+        # Normalize functions in case not all are defined
+        chunk = self.chunk
+        chunk_kwargs = self.chunk_kwargs
+        if self.aggregate:
+            aggregate = self.aggregate
+            aggregate_kwargs = self.aggregate_kwargs
+        else:
+            aggregate = chunk
+            aggregate_kwargs = chunk_kwargs
+
+        if self.combine:
+            combine = self.combine
+            combine_kwargs = self.combine_kwargs
+        else:
+            combine = aggregate
+            combine_kwargs = aggregate_kwargs
+
+        sort = getattr(self, "sort", False)
+        split_every = getattr(self, "split_every", 0)
+        chunked = self._chunk_cls(
+            self.frame, type(self), chunk, chunk_kwargs, *self._chunk_cls_args
+        )
+        if not isinstance(self.split_out, bool) and self.split_out == 1 or sort:
+            # Lower into TreeReduce(Chunk)
+            return TreeReduce(
+                chunked,
+                type(self),
+                self._meta,
+                combine,
+                aggregate,
+                combine_kwargs,
+                aggregate_kwargs,
+                split_every=split_every,
+            )
+
+        # Lower into ShuffleReduce
+        return ShuffleReduce(
+            chunked,
+            type(self),
+            self._meta,
+            combine,
+            aggregate,
+            combine_kwargs,
+            aggregate_kwargs,
+            split_by=self.split_by,
+            split_out=self.split_out,
+            split_every=split_every,
+            sort=sort,
+        )
+
+
+class Unique(ApplyConcatApply):
+    _parameters = ["frame"]
+    chunk = staticmethod(methods.unique)
+    aggregate_func = staticmethod(methods.unique)
+
+    @functools.cached_property
     def _meta(self):
         return self.chunk(
             meta_nonempty(self.frame._meta), series_name=self.frame._meta.name
@@ -272,38 +490,40 @@ class Unique(ApplyConcatApply):
     def __dask_postcompute__(self):
         return _concat, ()
 
-    def _divisions(self):
-        return [None, None]
-
 
 class DropDuplicates(Unique):
-    _parameters = ["frame", "subset", "ignore_index"]
-    _defaults = {"subset": None, "ignore_index": False}
+    _parameters = ["frame", "subset", "ignore_index", "split_out"]
+    _defaults = {"subset": None, "ignore_index": False, "split_out": 1}
     chunk = M.drop_duplicates
     aggregate_func = M.drop_duplicates
 
     @property
+    def split_by(self):
+        return self.subset
+
+    @functools.cached_property
     def _meta(self):
         return self.chunk(meta_nonempty(self.frame._meta), **self.chunk_kwargs)
 
-    def _subset_kwargs(self):
-        if is_series_like(self.frame._meta):
-            return {}
-        return {"subset": self.subset}
-
     @property
     def chunk_kwargs(self):
-        return {"ignore_index": self.ignore_index, **self._subset_kwargs()}
+        out = {}
+        if is_dataframe_like(self.frame._meta):
+            out["subset"] = self.subset
+        if PANDAS_GE_200 and not is_index_like(self.frame._meta):
+            out["ignore_index"] = self.ignore_index
+        return out
 
     def _simplify_up(self, parent):
-        if self.subset is not None:
+        if self.subset is not None and isinstance(parent, Projection):
             columns = set(parent.columns).union(self.subset)
             if columns == set(self.frame.columns):
                 # Don't add unnecessary Projections, protects against loops
                 return
 
+            columns = [col for col in self.frame.columns if col in columns]
             return type(parent)(
-                type(self)(self.frame[sorted(columns)], *self.operands[1:]),
+                type(self)(self.frame[columns], *self.operands[1:]),
                 *parent.operands[1:],
             )
 
@@ -463,7 +683,7 @@ class Reduction(ApplyConcatApply):
         return toolz.first, ()
 
     def _divisions(self):
-        if self.ndim == 0:
+        if self.ndim == 0 or len(self.frame.columns) == 0:
             return (None, None)
         return (min(self.frame.columns), max(self.frame.columns))
 
@@ -546,16 +766,16 @@ class IdxMin(Reduction):
     reduction_chunk = idxmaxmin_chunk
     reduction_combine = idxmaxmin_combine
     reduction_aggregate = idxmaxmin_agg
-    _fn = "idxmin"
+    _required_attribute = "idxmin"
 
     @property
     def chunk_kwargs(self):
         # TODO: Add numeric_only after Dask release on May 26th
-        return dict(skipna=self.skipna, fn=self._fn)
+        return dict(skipna=self.skipna, fn=self._required_attribute)
 
     @property
     def combine_kwargs(self):
-        return dict(skipna=self.skipna, fn=self._fn)
+        return dict(skipna=self.skipna, fn=self._required_attribute)
 
     @property
     def aggregate_kwargs(self):
@@ -563,7 +783,7 @@ class IdxMin(Reduction):
 
 
 class IdxMax(IdxMin):
-    _fn = "idxmax"
+    _required_attribute = "idxmax"
 
 
 class Len(Reduction):
@@ -598,11 +818,14 @@ class Len(Reduction):
 
 
 class Size(Reduction):
-    reduction_chunk = staticmethod(lambda df: df.size)
     reduction_aggregate = sum
 
+    @staticmethod
+    def reduction_chunk(df):
+        return df.size
+
     def _simplify_down(self):
-        if is_dataframe_like(self.frame) and len(self.frame.columns) > 1:
+        if is_dataframe_like(self.frame._meta) and len(self.frame.columns) > 1:
             return len(self.frame.columns) * Len(self.frame)
         else:
             return Len(self.frame)
@@ -613,9 +836,12 @@ class Size(Reduction):
 
 class NBytes(Reduction):
     # Only supported for Series objects
-    reduction_chunk = lambda ser: ser.nbytes
     reduction_aggregate = sum
     _required_attribute = "nbytes"
+
+    @staticmethod
+    def reduction_chunk(ser):
+        return ser.nbytes
 
 
 class Var(Reduction):
@@ -624,7 +850,7 @@ class Var(Reduction):
     _parameters = ["frame", "skipna", "ddof", "numeric_only"]
     _defaults = {"skipna": True, "ddof": 1, "numeric_only": False}
 
-    @property
+    @functools.cached_property
     def _meta(self):
         return make_meta(
             meta_nonempty(self.frame._meta).var(
@@ -688,7 +914,7 @@ class Mean(Reduction):
     _parameters = ["frame", "skipna", "numeric_only"]
     _defaults = {"skipna": True, "numeric_only": False}
 
-    @property
+    @functools.cached_property
     def _meta(self):
         return (
             self.frame._meta.sum(skipna=self.skipna, numeric_only=self.numeric_only) / 2
@@ -757,7 +983,7 @@ class NuniqueApprox(Reduction):
     reduction_combine = hyperloglog.reduce_state
     reduction_aggregate = hyperloglog.estimate_count
 
-    @property
+    @functools.cached_property
     def _meta(self):
         return 1.0
 
@@ -820,10 +1046,28 @@ class NLargest(ReductionConstantDim):
         return self.chunk_kwargs
 
 
+def _nsmallest_slow(df, columns, n):
+    return df.sort_values(by=columns).head(n)
+
+
+def _nlargest_slow(df, columns, n):
+    return df.sort_values(by=columns).tail(n)
+
+
+class NLargestSlow(NLargest):
+    reduction_chunk = _nlargest_slow
+    reduction_aggregate = _nlargest_slow
+
+
 class NSmallest(NLargest):
     _parameters = ["frame", "n", "_columns"]
     reduction_chunk = M.nsmallest
     reduction_aggregate = M.nsmallest
+
+
+class NSmallestSlow(NLargest):
+    reduction_chunk = _nsmallest_slow
+    reduction_aggregate = _nsmallest_slow
 
 
 class ValueCounts(ReductionConstantDim):
@@ -846,6 +1090,10 @@ class ValueCounts(ReductionConstantDim):
     @property
     def aggregate_kwargs(self):
         return {**self.chunk_kwargs, "normalize": self.normalize}
+
+    @property
+    def combine_kwargs(self):
+        return self.chunk_kwargs
 
     def _simplify_up(self, parent):
         # We are already a Series
@@ -895,3 +1143,15 @@ class TotalMemoryUsageFrame(MemoryUsageFrame):
     @staticmethod
     def reduction_combine(x, is_dataframe):
         return x
+
+
+class IsMonotonicIncreasing(Reduction):
+    reduction_chunk = methods.monotonic_increasing_chunk
+    reduction_combine = methods.monotonic_increasing_combine
+    reduction_aggregate = methods.monotonic_increasing_aggregate
+
+
+class IsMonotonicDecreasing(Reduction):
+    reduction_chunk = methods.monotonic_decreasing_chunk
+    reduction_combine = methods.monotonic_decreasing_combine
+    reduction_aggregate = methods.monotonic_decreasing_aggregate

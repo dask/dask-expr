@@ -2,11 +2,12 @@ import pickle
 import sys
 
 import pytest
-from dask.dataframe.utils import assert_eq
+from dask.dataframe._compat import PANDAS_GE_200
 
 from dask_expr import new_collection
 from dask_expr._expr import Lengths
 from dask_expr.datasets import Timeseries, timeseries
+from dask_expr.tests._util import assert_eq
 
 
 def test_timeseries():
@@ -52,7 +53,6 @@ def test_persist():
     b = a.persist()
 
     assert_eq(a, b)
-    assert len(a.dask) == len(b.dask)
     assert len(b.dask) == b.npartitions
 
 
@@ -103,12 +103,15 @@ def test_timeseries_deterministic_head(seed):
     assert_eq(df.head()["x"], df["x"].partitions[0].compute().head())
 
 
-def test_timeseries_gaph_size():
+@pytest.mark.parametrize("seed", [42, None])
+def test_timeseries_gaph_size(seed):
+    from dask.datasets import timeseries as dd_timeseries
+
     # Check that our graph size is reasonable
-    df = timeseries(end="2000-01-03", seed=42)
+    df = timeseries(seed=seed)
+    ddf = dd_timeseries(seed=seed)
     graph_size = sys.getsizeof(pickle.dumps(df.dask))
-    # This criteria is somewhat arbitrary. The
-    # original `random_state` code was producing
-    # ~5KB here. So, we know the size should
-    # always remain smaller than that.
-    assert graph_size < 1024
+    graph_size_dd = sys.getsizeof(pickle.dumps(dict(ddf.dask)))
+    # Make sure we are close to the dask.dataframe graph size
+    threshold = 1.10 if PANDAS_GE_200 else 1.50
+    assert graph_size < threshold * graph_size_dd

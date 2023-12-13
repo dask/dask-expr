@@ -1,10 +1,14 @@
 Dask Expressions
 ================
 
-Dask Dataframes with query optimization.
+Dask DataFrames with query optimization.
 
-This is a proof-of-concept rewrite of Dask dataframe that includes query
+This is a proof-of-concept rewrite of Dask DataFrame that includes query
 optimization and generally improved organization.
+
+More in our blog posts:
+- [Dask Expressions overview](https://blog.dask.org/2023/08/25/dask-expr-introduction)
+- [TPC-H benchmark results vs. Dask DataFrame](https://blog.coiled.io/blog/dask-expr-tpch-dask.html)
 
 Example
 -------
@@ -61,6 +65,7 @@ API Coverage
 **`dask_expr.DataFrame`**
 
 - `abs`
+- `add`
 - `add_prefix`
 - `add_sufix`
 - `align`
@@ -69,77 +74,119 @@ API Coverage
 - `apply`
 - `assign`
 - `astype`
+- `bfill`
 - `clip`
 - `combine_first`
 - `copy`
 - `count`
+- `cummax`
+- `cummin`
+- `cumprod`
+- `cumsum`
 - `dask`
+- `div`
+- `divide`
 - `drop`
 - `drop_duplicates`
 - `dropna`
+- `dtypes`
 - `eval`
 - `explode`
+- `ffill`
 - `fillna`
+- `floordiv`
 - `groupby`
 - `head`
 - `idxmax`
 - `idxmin`
+- `ìloc`
 - `index`
 - `isin`
 - `isna`
 - `join`
 - `map`
+- `map_overlap`
 - `map_partitions`
+- `mask`
 - `max`
+- `mean`
 - `memory_usage`
+- `memory_usage_per_partition`
 - `merge`
 - `min`
 - `min`
+- `mod`
 - `mode`
+- `mul`
 - `nlargest`
 - `nsmallest`
 - `nunique_approx`
 - `partitions`
 - `pivot_table`
+- `pow`
 - `prod`
+- `query`
+- `radd`
+- `rdiv`
 - `rename`
 - `rename_axis`
 - `repartition`
 - `replace`
 - `reset_index`
+- `rfloordiv`
+- `rmod`
+- `rmul`
 - `round`
+- `rpow`
+- `rsub`
+- `rtruediv`
 - `sample`
-- `sort_values`
 - `select_dtypes`
 - `set_index`
+- `shift`
 - `shuffle`
+- `sort_values`
 - `std`
+- `sub`
 - `sum`
 - `tail`
 - `to_parquet`
 - `to_timestamp`
+- `truediv`
 - `var`
 - `visualize`
+- `where`
 
 
 **`dask_expr.Series`**
 
 - `abs`
+- `add`
 - `align`
 - `all`
 - `any`
 - `apply`
 - `astype`
 - `between`
+- `bfill`
 - `clip`
 - `combine_first`
 - `copy`
 - `count`
+- `cummax`
+- `cummin`
+- `cumprod`
+- `cumsum`
 - `dask`
+- `div`
+- `divide`
 - `drop_duplicates`
 - `dropna`
+- `dtype`
 - `explode`
+- `ffill`
 - `fillna`
+- `floordiv`
 - `groupby`
 - `head`
 - `idxmax`
@@ -149,31 +196,51 @@ API Coverage
 - `isna`
 - `map`
 - `map_partitions`
+- `mask`
 - `max`
+- `mean`
 - `memory_usage`
+- `memory_usage_per_partition`
 - `min`
 - `min`
+- `mod`
 - `mode`
+- `mul`
 - `nlargest`
 - `nsmallest`
 - `nunique_approx`
 - `partitions`
+- `pow`
 - `prod`
+- `product`
+- `radd`
+- `rdiv`
+- `rename`
 - `rename_axis`
 - `repartition`
 - `replace`
 - `reset_index`
+- `rfloordiv`
+- `rmod`
+- `rmul`
 - `round`
+- `rpow`
+- `rsub`
+- `rtruediv`
+- `shift`
 - `shuffle`
 - `std`
+- `sub`
 - `sum`
 - `tail`
 - `to_frame`
 - `to_timestamp`
+- `truediv`
 - `unique`
 - `value_counts`
 - `var`
 - `visualize`
+- `where`
 
 
 **`dask_expr.Index`**
@@ -189,6 +256,7 @@ API Coverage
 - `copy`
 - `count`
 - `dask`
+- `dtype`
 - `fillna`
 - `groupby`
 - `head`
@@ -206,6 +274,7 @@ API Coverage
 - `nunique_approx`
 - `partitions`
 - `prod`
+- `rename`
 - `rename_axis`
 - `repartition`
 - `replace`
@@ -225,18 +294,64 @@ API Coverage
 
 - `agg`
 - `aggregate`
+- `apply`
+- `bfill
+- `count`
+- `ffill`
+- `first`
+- `last`
+- `max`
+- `mean`
+- `median`
+- `min`
+- `nunique`
+- `prod`
+- `shift`
+- `size`
+- `std`
+- `sum`
+- `transform`
+- `value_counts`
+- `var`
+
+Support for ``SeriesGroupBy`` and ``DataFrameGroupBy``.
+
+**`dask_expr._resample.Resampler`**
+
+- `agg`
 - `count`
 - `first`
 - `last`
 - `max`
 - `mean`
+- `median`
 - `min`
+- `nunique`
+- `ohlc`
 - `prod`
+- `quantile`
+- `sem`
 - `size`
 - `std`
 - `sum`
-- `value_counts`
 - `var`
+
+
+**`dask_expr._rolling.Rolling`**
+
+- `agg`
+- `apply`
+- `count`
+- `max`
+- `mean`
+- `median`
+- `min`
+- `quantile`
+- `std`
+- `sum`
+- `var`
+- `skew`
+- `kurt`
 
 
 **Binary operators (`DataFrame`, `Series`, and `Index`)**:
@@ -246,6 +361,7 @@ API Coverage
 - `__sub__`
 - `__rsub__`
 - `__mul__`
+- `__pow__`
 - `__rmul__`
 - `__truediv__`
 - `__rtruediv__`
@@ -276,3 +392,19 @@ API Coverage
 **Accessors**:
 
 - `CategoricalAccessor`
+- `DatetimeAccessor`
+- `StringAccessor`
+
+**Function**
+
+- `concat`
+- `from_pandas`
+- `merge`
+- `pivot_table`
+- `read_csv`
+- `read_parquet`
+- `repartition`
+- `to_datetime`
+- `to_numeric`
+- `to_timedelta`
+- `to_parquet`

@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import functools
 import math
+import operator
 
-from dask.dataframe.core import is_dataframe_like
+import numpy as np
+from dask.dataframe import methods
+from dask.dataframe.core import apply_and_enforce, is_dataframe_like, make_meta
 from dask.dataframe.io.io import sorted_division_locations
+from dask.utils import apply, funcname
 
 from dask_expr._expr import (
     Blockwise,
@@ -13,9 +17,10 @@ from dask_expr._expr import (
     Literal,
     PartitionsFiltered,
     Projection,
+    no_default,
 )
 from dask_expr._reductions import Len
-from dask_expr._util import _convert_to_list
+from dask_expr._util import _BackendData, _convert_to_list, _tokenize_deterministic
 
 
 class IO(Expr):
@@ -49,6 +54,10 @@ class FromGraph(IO):
 
 class BlockwiseIO(Blockwise, IO):
     _absorb_projections = False
+
+    @functools.cached_property
+    def _fusion_compression_factor(self):
+        return 1
 
     def _simplify_up(self, parent):
         if (
@@ -87,7 +96,6 @@ class BlockwiseIO(Blockwise, IO):
                 if columns_operand is None:
                     columns_operand = self.columns
                 columns = set(columns_operand)
-                ops = [self] + alike
                 for op in alike:
                     op_columns = op.operand("columns")
                     if op_columns is None:
@@ -103,13 +111,16 @@ class BlockwiseIO(Blockwise, IO):
                     return
 
                 # Check if we have the operation we want elsewhere in the graph
-                for op in ops:
-                    if op.columns == columns and not op.operand("_series"):
+                for op in alike:
+                    if set(op.columns) == set(columns) and not op.operand("_series"):
                         return (
                             op[columns_operand[0]]
                             if self._series
                             else op[columns_operand]
                         )
+
+                if set(self.columns) == set(columns):
+                    return  # Skip unnecessary projection change
 
                 # Create the "combined" ReadParquet operation
                 subs = {"columns": columns}
@@ -119,6 +130,224 @@ class BlockwiseIO(Blockwise, IO):
                 return new[columns_operand[0]] if self._series else new[columns_operand]
 
         return
+
+    def _tune_up(self, parent):
+        if self._fusion_compression_factor >= 1:
+            return
+        if isinstance(parent, FusedIO):
+            return
+        return parent.substitute(self, FusedIO(self))
+
+
+class FusedIO(BlockwiseIO):
+    _parameters = ["expr"]
+
+    @functools.cached_property
+    def _name(self):
+        return (
+            funcname(type(self.operand("expr"))).lower()
+            + "-fused-"
+            + _tokenize_deterministic(*self.operands)
+        )
+
+    @functools.cached_property
+    def _meta(self):
+        return self.operand("expr")._meta
+
+    def dependencies(self):
+        return []
+
+    @functools.cached_property
+    def npartitions(self):
+        return len(self._fusion_buckets)
+
+    def _divisions(self):
+        divisions = self.operand("expr")._divisions()
+        new_divisions = [divisions[b[0]] for b in self._fusion_buckets]
+        new_divisions.append(self._fusion_buckets[-1][-1])
+        return tuple(new_divisions)
+
+    def _task(self, index: int):
+        expr = self.operand("expr")
+        bucket = self._fusion_buckets[index]
+        return (methods.concat, [expr._filtered_task(i) for i in bucket])
+
+    @functools.cached_property
+    def _fusion_buckets(self):
+        partitions = self.operand("expr")._partitions
+        npartitions = len(partitions)
+
+        step = math.ceil(1 / self.operand("expr")._fusion_compression_factor)
+        step = min(step, math.ceil(math.sqrt(npartitions)), 100)
+
+        buckets = [partitions[i : i + step] for i in range(0, npartitions, step)]
+        return buckets
+
+    def _tune_up(self, parent):
+        return
+
+
+class FromMap(PartitionsFiltered, BlockwiseIO):
+    _parameters = [
+        "func",
+        "iterables",
+        "args",
+        "kwargs",
+        "user_meta",
+        "enforce_metadata",
+        "user_divisions",
+        "label",
+        "_partitions",
+    ]
+    _defaults = {
+        "user_meta": no_default,
+        "enforce_metadata": False,
+        "user_divisions": None,
+        "label": None,
+        "_partitions": None,
+    }
+    _absorb_projections = False
+
+    @functools.cached_property
+    def _name(self):
+        if self.label is None:
+            return (
+                funcname(self.func).lower()
+                + "-"
+                + _tokenize_deterministic(*self.operands)
+            )
+        else:
+            return self.label + "-" + _tokenize_deterministic(*self.operands)
+
+    @functools.cached_property
+    def _meta(self):
+        if self.operand("user_meta") is not no_default:
+            meta = self.operand("user_meta")
+        else:
+            vals = [v[0] for v in self.iterables]
+            meta = self.func(*vals, *self.args, **self.kwargs)
+        return make_meta(meta)
+
+    def _divisions(self):
+        if self.operand("user_divisions"):
+            return self.operand("user_divisions")
+        else:
+            npartitions = len(self.iterables[0])
+            return (None,) * (npartitions + 1)
+
+    @property
+    def apply_func(self):
+        if self.enforce_metadata:
+            return apply_and_enforce
+        return self.func
+
+    @functools.cached_property
+    def apply_kwargs(self):
+        kwargs = self.kwargs
+        if self.enforce_metadata:
+            kwargs = kwargs.copy()
+            kwargs.update(
+                {
+                    "_func": self.func,
+                    "_meta": self._meta,
+                }
+            )
+        return kwargs
+
+    def _filtered_task(self, index: int):
+        vals = [v[index] for v in self.iterables]
+        if self.apply_kwargs:
+            return (apply, self.apply_func, vals + self.args, self.apply_kwargs)
+        else:
+            return (self.func, *vals, *self.args)
+
+
+class FromMapProjectable(FromMap):
+    _parameters = [
+        "func",
+        "iterables",
+        "columns",
+        "args",
+        "kwargs",
+        "user_meta",
+        "enforce_metadata",
+        "user_divisions",
+        "label",
+        "_partitions",
+        "_series",
+    ]
+    _defaults = {
+        "user_meta": no_default,
+        "enforce_metadata": False,
+        "user_divisions": None,
+        "label": None,
+        "_partitions": None,
+        "_series": False,
+    }
+    _absorb_projections = True
+
+    @functools.cached_property
+    def columns_operand(self):
+        return _convert_to_list(self.operand("columns"))
+
+    @property
+    def columns(self):
+        if self.columns_operand is None:
+            return list(self.frame_meta.columns)
+        else:
+            return self.columns_operand
+
+    @functools.cached_property
+    def _series(self):
+        # Only need to convert to _series if func
+        # doesn't produce a Series already
+        return self.operand("_series") and self.frame_meta.ndim > 1
+
+    @functools.cached_property
+    def kwargs(self):
+        options = self.operand("kwargs")
+        if self.columns_operand:
+            options = options.copy()
+            options["columns"] = self.columns_operand
+        return options
+
+    @functools.cached_property
+    def apply_kwargs(self):
+        kwargs = self.kwargs
+        if self.enforce_metadata:
+            kwargs = kwargs.copy()
+            kwargs.update(
+                {
+                    "_func": self.func,
+                    "_meta": self.frame_meta,
+                }
+            )
+        return kwargs
+
+    @functools.cached_property
+    def frame_meta(self):
+        # This is our `_meta` result before possibly
+        # converting to a Series
+        meta = super()._meta
+        if meta.ndim > 1 and self.columns_operand is not None:
+            return meta[self.columns_operand]
+        return meta
+
+    @property
+    def _meta(self):
+        # This is our final `_meta` result
+        # (may need to be a Series)
+        meta = self.frame_meta
+        if self._series:
+            assert len(self.columns_operand) > 0
+            return meta[self.columns_operand[0]]
+        return meta
+
+    def _filtered_task(self, index: int):
+        tsk = super()._filtered_task(index)
+        if self._series:
+            return (operator.getitem, tsk, self.columns[0])
+        return tsk
 
 
 class FromPandas(PartitionsFiltered, BlockwiseIO):
@@ -135,7 +364,15 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
     _pd_length_stats = None
     _absorb_projections = True
 
-    @property
+    @functools.cached_property
+    def frame(self):
+        frame = self.operand("frame")._data
+        if self.sort and not frame.index.is_monotonic_increasing:
+            frame = frame.sort_index()
+            return _BackendData(frame)
+        return self.operand("frame")
+
+    @functools.cached_property
     def _meta(self):
         meta = self.frame.head(0)
         if self.operand("columns") is not None:
@@ -162,21 +399,29 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
 
     @functools.cached_property
     def _divisions_and_locations(self):
-        data = self.frame
-        nrows = len(data)
+        assert isinstance(self.frame, _BackendData)
         npartitions = self.operand("npartitions")
-        if self.sort:
-            data = self._sorted_data
-            divisions, locations = sorted_division_locations(
-                data.index,
-                npartitions=npartitions,
-                chunksize=None,
-            )
-        else:
-            chunksize = int(math.ceil(nrows / npartitions))
-            locations = list(range(0, nrows, chunksize)) + [len(data)]
-            divisions = (None,) * len(locations)
-        return divisions, locations
+        sort = self.sort
+        key = (npartitions, sort)
+        _division_info_cache = self.frame._division_info
+        if key not in _division_info_cache:
+            data = self.frame._data
+            nrows = len(data)
+            if nrows == 0:
+                locations = [0] * (npartitions + 1)
+                divisions = (None,) * len(locations)
+            elif sort:
+                divisions, locations = sorted_division_locations(
+                    data.index,
+                    npartitions=npartitions,
+                    chunksize=None,
+                )
+            else:
+                chunksize = int(math.ceil(nrows / npartitions))
+                locations = list(range(0, nrows, chunksize)) + [len(data)]
+                divisions = (None,) * len(locations)
+            _division_info_cache[key] = divisions, locations
+        return _division_info_cache[key]
 
     def _get_lengths(self) -> tuple | None:
         if self._pd_length_stats is None:
@@ -218,7 +463,7 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
         start, stop = self._locations()[index : index + 2]
         data = self.frame if not self.sort else self._sorted_data
         part = data.iloc[start:stop]
-        if self.columns:
+        if self.operand("columns") is not None:
             return part[self.columns[0]] if self._series else part[self.columns]
         return part
 
@@ -230,3 +475,66 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
         return "df"
 
     __repr__ = __str__
+
+
+class FromPandasDivisions(FromPandas):
+    _parameters = ["frame", "divisions", "columns", "_partitions", "_series"]
+    _defaults = {"columns": None, "_partitions": None, "_series": False}
+    sort = True
+
+    @property
+    def _divisions_and_locations(self):
+        assert isinstance(self.frame, _BackendData)
+        key = tuple(self.operand("divisions"))
+        _division_info_cache = self.frame._division_info
+        if key not in _division_info_cache:
+            data = self.frame._data
+            if data.index.is_unique:
+                indexer = data.index.get_indexer(key, method="bfill")
+            else:
+                # get_indexer for doesn't support method
+                indexer = np.searchsorted(data.index.values, key, side="left")
+            indexer[-1] = len(data)
+            _division_info_cache[key] = key, indexer
+        return _division_info_cache[key]
+
+
+class FromScalars(IO):
+    _parameters = ["meta", "names"]
+
+    @property
+    def _scalars(self):
+        return self.dependencies()
+
+    def _divisions(self):
+        return (None, None)
+
+    @functools.cached_property
+    def _meta(self):
+        return type(self.meta)(
+            [s._meta for s in self._scalars], index=self.names, name=self.meta.name
+        )
+
+    def _layer(self) -> dict:
+        return {
+            (self._name, 0): (
+                type(self.meta),
+                [(s._name, 0) for s in self._scalars],
+                self.names,
+                None,
+                self.meta.name,
+            )
+        }
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            if sorted(parent.columns) == sorted(self.names):
+                return
+            new_names, new_scalars = [], []
+            for n, s in zip(self.names, self._scalars):
+                if n in parent.columns:
+                    new_names.append(n)
+                    new_scalars.append(s)
+            return type(parent)(
+                type(self)(self.meta, new_names, *new_scalars), *parent.operands[1:]
+            )

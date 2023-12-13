@@ -1,20 +1,32 @@
 from __future__ import annotations
 
+import fnmatch
+import io
 import operator
 import pickle
+from datetime import timedelta
 
 import dask
 import numpy as np
 import pytest
-from dask.dataframe._compat import PANDAS_GE_210
-from dask.dataframe.utils import UNKNOWN_CATEGORIES, assert_eq
+from dask.dataframe._compat import PANDAS_GE_200, PANDAS_GE_210
+from dask.dataframe.utils import UNKNOWN_CATEGORIES
 from dask.utils import M
 
-from dask_expr import expr, from_pandas, optimize
+from dask_expr import (
+    expr,
+    from_pandas,
+    is_scalar,
+    optimize,
+    to_datetime,
+    to_numeric,
+    to_timedelta,
+)
 from dask_expr._expr import are_co_aligned
 from dask_expr._reductions import Len
+from dask_expr._shuffle import Shuffle
 from dask_expr.datasets import timeseries
-from dask_expr.tests._util import _backend_library, xfail_gpu
+from dask_expr.tests._util import _backend_library, assert_eq, xfail_gpu
 
 # Set DataFrame backend for this module
 lib = _backend_library()
@@ -23,7 +35,7 @@ lib = _backend_library()
 @pytest.fixture
 def pdf():
     pdf = lib.DataFrame({"x": range(100)})
-    pdf["y"] = pdf.x * 10.0
+    pdf["y"] = pdf.x // 7  # Not unique; duplicates span different partitions
     yield pdf
 
 
@@ -41,6 +53,66 @@ def test_del(pdf, df):
     assert_eq(pdf, df)
 
 
+@pytest.mark.parametrize("verbose", (True, False, None))
+@pytest.mark.parametrize("buf", (None, io.StringIO))
+@pytest.mark.parametrize("memory_usage", (True, False, None))
+def test_info(df, verbose, buf, memory_usage):
+    if buf is not None:
+        buf = buf()
+    kwargs = {
+        k: v
+        for k, v in (("verbose", verbose), ("buf", buf), ("memory_usage", memory_usage))
+        if v is not None
+    }
+
+    ret = df.info(**kwargs)
+
+    if buf and not verbose and not memory_usage:
+        expected = (
+            "<class 'dask_expr.DataFrame'>\n"
+            "Columns: 2 entries, x to y\n"
+            "dtypes: int64(2)"
+        )
+        assert buf.getvalue() == expected
+    elif buf and verbose and not memory_usage:
+        expected = (
+            "<class 'dask_expr.DataFrame'>\n"
+            "RangeIndex: 100 entries, 0 to 99\n"
+            "Data columns (total 2 columns):\n"
+            " #   Column  Non-Null Count  Dtype\n"
+            "---  ------  --------------  -----\n"
+            " 0   x       100 non-null      int64\n"
+            " 1   y       100 non-null      int64\n"
+            "dtypes: int64(2)"
+        )
+        assert buf.getvalue() == expected
+    elif buf and not verbose and memory_usage:
+        expected = (
+            "<class 'dask_expr.DataFrame'>\n"
+            "Columns: 2 entries, x to y\n"
+            "dtypes: int64(2)\n"
+            "memory usage: *\n"
+        )
+        assert fnmatch.fnmatch(buf.getvalue(), expected)
+    elif all((buf, verbose, memory_usage)):
+        expected = (
+            "<class 'dask_expr.DataFrame'>\n"
+            "RangeIndex: 100 entries, 0 to 99\n"
+            "Data columns (total 2 columns):\n"
+            " #   Column  Non-Null Count  Dtype\n"
+            "---  ------  --------------  -----\n"
+            " 0   x       100 non-null      int64\n"
+            " 1   y       100 non-null      int64\n"
+            "dtypes: int64(2)\n"
+            "memory usage: *\n"
+        )
+        assert fnmatch.fnmatch(buf.getvalue(), expected)
+    elif buf is None:
+        assert ret is None
+    else:
+        raise NotImplementedError(f"Case not covered for kwargs: {kwargs}")
+
+
 def test_setitem(pdf, df):
     pdf = pdf.copy()
     pdf["z"] = pdf.x + pdf.y
@@ -49,6 +121,11 @@ def test_setitem(pdf, df):
 
     assert "z" in df.columns
     assert_eq(df, pdf)
+
+
+def test_series_product(pdf, df):
+    assert_eq(pdf.x.product(), df.x.product())
+    assert_eq(pdf.y.product(), df.y.product())
 
 
 @xfail_gpu("https://github.com/rapidsai/cudf/issues/10271")
@@ -137,6 +214,12 @@ def test_reductions(func, pdf, df):
     assert_eq(func(df)["x"], func(pdf)["x"], check_dtype=False)
 
 
+def test_reduction_on_empty_df():
+    pdf = lib.DataFrame()
+    df = from_pandas(pdf)
+    assert_eq(df.sum(), pdf.sum())
+
+
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize(
     "skipna",
@@ -157,6 +240,24 @@ def test_std_kwargs(axis, skipna, ddof):
         pdf.std(axis=axis, skipna=skipna, ddof=ddof, numeric_only=True),
         df.std(axis=axis, skipna=skipna, ddof=ddof, numeric_only=True),
     )
+
+
+@pytest.mark.parametrize("func", ["cumsum", "cumprod", "cummin", "cummax"])
+def test_cumulative_methods(df, pdf, func):
+    assert_eq(getattr(df, func)(), getattr(pdf, func)(), check_dtype=False)
+    assert_eq(getattr(df.x, func)(), getattr(pdf.x, func)())
+
+    q = getattr(df, func)()["x"]
+    assert q.simplify()._name == getattr(df.x, func)()
+
+    pdf.loc[slice(None, None, 2), "x"] = np.nan
+    df = from_pandas(pdf, npartitions=10)
+    assert_eq(
+        getattr(df, func)(skipna=False),
+        getattr(pdf, func)(skipna=False),
+        check_dtype=False,
+    )
+    assert_eq(getattr(df.x, func)(skipna=False), getattr(pdf.x, func)(skipna=False))
 
 
 @xfail_gpu("nbytes not supported by cudf")
@@ -189,11 +290,51 @@ def test_dropna(pdf):
     assert_eq(df.y.dropna(), pdf.y.dropna())
 
 
+def test_value_counts_with_dropna():
+    pdf = lib.DataFrame({"x": [1, 2, 1, 3, np.nan, 1, 4]})
+    df = from_pandas(pdf, npartitions=3)
+    result = df.x.value_counts(dropna=False)
+    expected = pdf.x.value_counts(dropna=False)
+    assert_eq(result, expected)
+
+
 def test_fillna():
     pdf = lib.DataFrame({"x": [1, 2, None, None, 5, 6]})
     df = from_pandas(pdf, npartitions=2)
     actual = df.fillna(value=100)
     expected = pdf.fillna(value=100)
+    assert_eq(actual, expected)
+
+
+@pytest.mark.parametrize("limit", (None, 1, 2))
+@pytest.mark.parametrize("how", ("ffill", "bfill"))
+@pytest.mark.parametrize("axis", ("index", "columns", 0, 1))
+def test_ffill_and_bfill(limit, axis, how):
+    if limit is None:
+        pytest.xfail("Need to determine partition size for Fill.before <= frame size")
+    if axis in (1, "columns"):
+        pytest.xfail("bfill/ffill not implemented for axis 1")
+    pdf = lib.DataFrame({"x": [1, 2, None, None, 5, 6]})
+    df = from_pandas(pdf, npartitions=2)
+    actual = getattr(df, how)(axis=axis, limit=limit)
+    expected = getattr(pdf, how)(axis=axis, limit=limit)
+    assert_eq(actual, expected)
+
+
+@pytest.mark.parametrize("periods", (1, 2))
+@pytest.mark.parametrize("freq", (None, "1h", timedelta(hours=1)))
+@pytest.mark.parametrize("axis", ("index", 0, "columns", 1))
+def test_shift(pdf, df, periods, freq, axis):
+    if freq and axis in ("columns", 1):
+        pytest.skip(reason="Neither dask or pandas supports freq w/ axis 1 shift")
+
+    if freq is not None:
+        pdf["time"] = lib.date_range("2000-01-01", "2000-01-02", periods=len(pdf))
+        pdf = pdf.set_index("time", drop=True)
+        df = from_pandas(pdf, npartitions=df.npartitions)
+
+    actual = df.shift(periods=periods, axis=axis, freq=freq)
+    expected = pdf.shift(periods=periods, axis=axis, freq=freq)
     assert_eq(actual, expected)
 
 
@@ -223,18 +364,50 @@ def test_nlargest_nsmallest(df, pdf, func):
     "func",
     [
         lambda df: df.x > 10,
+        lambda df: df.x.gt(10),
         lambda df: df.x + 20 > df.y,
         lambda df: 10 < df.x,
+        lambda df: df.x.lt(10),
         lambda df: 10 <= df.x,
+        lambda df: df.x.le(10),
         lambda df: 10 == df.x,
+        lambda df: df.x.eq(10),
         lambda df: df.x < df.y,
+        lambda df: df.lt(df),
+        lambda df: df.x.lt(df.y),
         lambda df: df.x > df.y,
+        lambda df: df.gt(df),
+        lambda df: df.x.gt(df.y),
         lambda df: df.x == df.y,
+        lambda df: df.eq(df),
+        lambda df: df.x.eq(df.y),
         lambda df: df.x != df.y,
+        lambda df: df.ne(df),
+        lambda df: df.x.ne(df.y),
     ],
 )
 def test_conditionals(func, pdf, df):
     assert_eq(func(pdf), func(df), check_names=False)
+
+
+@pytest.mark.parametrize("axis", ("index", 0, "columns", 1, None))
+@pytest.mark.parametrize("periods", (1, 2, None))
+def test_diff(pdf, df, axis, periods):
+    kwargs = {k: v for k, v in (("periods", periods), ("axis", axis)) if v}
+
+    actual = df.diff(**kwargs)
+    expected = pdf.diff(**kwargs)
+    assert_eq(expected, actual)
+
+    # Check projections
+    expected = df[["x"]].diff(**kwargs)
+    actual = df.diff(**kwargs)[["x"]]
+
+    # no optimization on axis 1
+    if axis in ("columns", 1):
+        assert actual._name == actual.simplify()._name
+    else:
+        assert actual.simplify()._name == expected.simplify()._name
 
 
 @pytest.mark.parametrize(
@@ -256,6 +429,53 @@ def test_boolean_operators(func):
     assert_eq(func(pdf), func(df))
 
 
+@pytest.mark.parametrize("axis", ("columns", 1, "index", 0))
+@pytest.mark.parametrize("level", (None, 0, "x"))
+@pytest.mark.parametrize("fill_value", (None, 1))
+@pytest.mark.parametrize(
+    "op",
+    (
+        "add",
+        "sub",
+        "mul",
+        "div",
+        "divide",
+        "truediv",
+        "floordiv",
+        "mod",
+        "pow",
+        "radd",
+        "rsub",
+        "rmul",
+        "rdiv",
+        "rtruediv",
+        "rfloordiv",
+        "rmod",
+        "rpow",
+    ),
+)
+@pytest.mark.parametrize("series", (True, False))
+def test_method_operators(pdf, df, axis, level, fill_value, op, series):
+    kwargs = {
+        k: v
+        for k, v in (("axis", axis), ("level", level), ("fill_value", fill_value))
+        if v is not None
+    }
+    if series:
+        kwargs.pop("axis")
+        pdf = pdf.x
+        df = df.x
+
+    if level is not None:
+        with pytest.raises(NotImplementedError, match="level must be None"):
+            getattr(df, op)(other=df, **kwargs)
+        return
+
+    expected = getattr(pdf, op)(other=pdf, **kwargs)
+    actual = getattr(df, op)(other=df, **kwargs)
+    assert_eq(expected, actual)
+
+
 @pytest.mark.parametrize(
     "func",
     [
@@ -272,6 +492,20 @@ def test_unary_operators(func):
         {"x": [True, False, True, False], "y": [True, False, False, False], "z": 1}
     )
     df = from_pandas(pdf)
+    assert_eq(func(pdf), func(df))
+
+
+@pytest.mark.parametrize(
+    "func",
+    [
+        lambda df: df.x + df.y,
+        lambda df: 2 * df.x,
+        lambda df: df.x * df.y,
+        lambda df: df.x - df.y,
+        lambda df: df.x**2,
+    ],
+)
+def test_binary_operator(pdf, df, func):
     assert_eq(func(pdf), func(df))
 
 
@@ -305,28 +539,124 @@ def test_to_timestamp(pdf, how):
         lambda df: df.x.map(lambda x: x + 1),
         lambda df: df[df.x > 5],
         lambda df: df.assign(a=df.x + df.y, b=df.x - df.y),
+        lambda df: df.assign(a=df.x + df.y, b=lambda x: x.a + 1),
         lambda df: df.replace(to_replace=1, value=1000),
         lambda df: df.x.replace(to_replace=1, value=1000),
         lambda df: df.isna(),
         lambda df: df.x.isna(),
         lambda df: df.isnull(),
         lambda df: df.x.isnull(),
+        lambda df: df.mask(df.x == 10, 42),
+        lambda df: df.mask(df.x == 10),
+        lambda df: df.mask(lambda df: df.x % 2 == 0, 42),
+        lambda df: df.mask(df.x == 10, df + 2),
+        lambda df: df.mask(df.x == 10, lambda df: df + 2),
+        lambda df: df.x.mask(df.x == 10, 42),
         lambda df: df.abs(),
         lambda df: df.x.abs(),
+        lambda df: df.where(df.x == 10, 42),
+        lambda df: df.where(df.x == 10),
+        lambda df: df.where(lambda df: df.x % 2 == 0, 42),
+        lambda df: df.where(df.x == 10, df + 2),
+        lambda df: df.where(df.x == 10, lambda df: df + 2),
+        lambda df: df.x.where(df.x == 10, 42),
         lambda df: df.rename(columns={"x": "xx"}),
         lambda df: df.rename(columns={"x": "xx"}).xx,
         lambda df: df.rename(columns={"x": "xx"})[["xx"]],
+        lambda df: df.x.rename(index="hello"),
+        lambda df: df.x.rename(index=("hello",)),
         lambda df: df.x.to_frame(),
         lambda df: df.drop(columns="x"),
+        lambda df: df.drop(axis=1, labels=["x"]),
+        lambda df: df.x.index.to_series(),
         lambda df: df.x.index.to_frame(),
+        lambda df: df.x.index.to_series(name="abc"),
+        lambda df: df.x.index.to_frame(name="abc"),
         lambda df: df.eval("z=x+y"),
         lambda df: df.select_dtypes(include="integer"),
         lambda df: df.add_prefix(prefix="2_"),
         lambda df: df.add_suffix(suffix="_2"),
+        lambda df: df.query("x > 10"),
     ],
 )
 def test_blockwise(func, pdf, df):
     assert_eq(func(pdf), func(df))
+
+
+def test_rename(pdf, df):
+    q = df.x.rename({1: 2})
+    assert q.divisions[0] is None
+    assert_eq(q, pdf.x.rename({1: 2}))
+
+    q = df.x.rename(lambda x: x)
+    assert q.divisions[0] is None
+    assert_eq(q, pdf.x.rename(lambda x: x))
+
+    q = df.x.rename({1: 2}, sorted_index=True)
+    assert q.divisions[0] is not None
+    assert_eq(q, pdf.x.rename({1: 2}))
+
+    q = df.x.rename(lambda x: x, sorted_index=True)
+    assert q.divisions[0] is not None
+    assert_eq(q, pdf.x.rename(lambda x: x))
+
+    with pytest.raises(ValueError, match="non-monotonic"):
+        df.x.rename({0: 200}, sorted_index=True).divisions
+
+
+def test_abs_errors():
+    df = lib.DataFrame(
+        {
+            "A": [1, -2, 3, -4, 5],
+            "C": ["a", "b", "c", "d", "e"],
+        }
+    )
+    ddf = from_pandas(df, npartitions=2)
+    pytest.raises((TypeError, NotImplementedError, ValueError), lambda: ddf.C.abs())
+    pytest.raises((TypeError, NotImplementedError), lambda: ddf.abs())
+
+
+def test_to_datetime():
+    pdf = lib.DataFrame({"year": [2015, 2016], "month": [2, 3], "day": [4, 5]})
+    df = from_pandas(pdf, npartitions=2)
+    expected = lib.to_datetime(pdf)
+    result = to_datetime(df)
+    assert_eq(result, expected)
+
+    ps = lib.Series(["2018-10-26 12:00:00", "2018-10-26 13:00:15"])
+    ds = from_pandas(ps, npartitions=2)
+    expected = lib.to_datetime(ps)
+    result = to_datetime(ds)
+    assert_eq(result, expected)
+
+    with pytest.raises(TypeError, match="arg must be a Series or a DataFrame"):
+        to_datetime(1490195805)
+
+
+def test_to_numeric(pdf, df):
+    pdf.x = pdf.x.astype("str")
+    expected = lib.to_numeric(pdf.x)
+    df.x = df.x.astype("str")
+    result = to_numeric(df.x)
+    assert_eq(result, expected)
+
+    with pytest.raises(TypeError, match="arg must be a Series"):
+        to_numeric("1.0")
+
+
+def test_to_timedelta(pdf, df):
+    expected = lib.to_timedelta(pdf.x)
+    result = to_timedelta(df.x)
+    assert_eq(result, expected)
+
+    with pytest.raises(TypeError, match="arg must be a Series"):
+        to_timedelta("1.0")
+
+
+def test_drop_not_implemented(pdf, df):
+    msg = "Drop currently only works for axis=1 or when columns is not None"
+    with pytest.raises(NotImplementedError, match=msg):
+        df.drop(axis=0, labels=[0])
 
 
 @xfail_gpu("func not supported by cudf")
@@ -347,6 +677,26 @@ def test_blockwise(func, pdf, df):
 )
 def test_blockwise_pandas_only(func, pdf, df):
     assert_eq(func(pdf), func(df))
+
+
+def test_map_meta(pdf, df):
+    expected = pdf.x.map(lambda x: x + 1)
+    result = df.x.map(lambda x: x + 1, meta=expected.iloc[:0])
+    assert_eq(result, expected)
+
+    result = df.x.map(df.x + 1, meta=expected.iloc[:0])
+    assert_eq(result, expected)
+
+    result = df.x.map(df.x + 1, meta=("x", "int64"))
+    assert_eq(result, expected)
+
+    result = df.x.map((df.x + 1).compute(), meta=("x", "int64"))
+    assert_eq(result, expected)
+
+    pdf.index.name = "a"
+    df = from_pandas(pdf, npartitions=10)
+    result = df.x.map(lambda x: x + 1, meta=("x", "int64"))
+    assert_eq(result, expected)
 
 
 def test_simplify_add_suffix_add_prefix(df, pdf):
@@ -371,6 +721,14 @@ def test_rename_axis(pdf):
     assert_eq(df.x.rename_axis(index="dummy"), pdf.x.rename_axis(index="dummy"))
 
 
+def test_series_name(pdf, df):
+    pser = pdf.x
+    ser = df.x
+    assert ser.name == pser.name
+    ser.name = "y"
+    assert ser.name == "y"
+
+
 def test_isin(df, pdf):
     values = [1, 2]
     assert_eq(pdf.isin(values), df.isin(values))
@@ -389,9 +747,9 @@ def test_repr(df):
     assert "+ 1" in repr(df + 1)
 
     s = (df["x"] + 1).sum(skipna=False).expr
-    assert '["x"]' in s or "['x']" in s
-    assert "+ 1" in s
-    assert "sum(skipna=False)" in s
+    assert '["x"]' in str(s) or "['x']" in str(s)
+    assert "+ 1" in str(s)
+    assert "sum(skipna=False)" in str(s)
 
 
 @xfail_gpu("combine_first not supported by cudf")
@@ -512,6 +870,16 @@ def test_head_head(df):
     assert a.optimize()._name == b.optimize()._name
 
 
+def test_head_tail_repartition(df):
+    q = df.head(compute=False).repartition(npartitions=1).optimize()
+    expected = df.head(compute=False).optimize()
+    assert q._name == expected._name
+
+    q = df.tail(compute=False).repartition(npartitions=1).optimize()
+    expected = df.tail(compute=False).optimize()
+    assert q._name == expected._name
+
+
 def test_tail(pdf, df):
     assert_eq(df.tail(compute=False), pdf.tail())
     assert_eq(df.tail(compute=False, n=7), pdf.tail(n=7))
@@ -587,23 +955,23 @@ def test_substitute():
     df = from_pandas(pdf, npartitions=3)
     df = df.expr
 
-    result = (df + 1).substitute({1: 2})
+    result = (df + 1).substitute(1, 2)
     expected = df + 2
     assert result._name == expected._name
 
-    result = df["a"].substitute({df["a"]: df["b"]})
+    result = df["a"].substitute(df["a"], df["b"])
     expected = df["b"]
     assert result._name == expected._name
 
-    result = (df["a"] - df["b"]).substitute({df["b"]: df["c"]})
+    result = (df["a"] - df["b"]).substitute(df["b"], df["c"])
     expected = df["a"] - df["c"]
     assert result._name == expected._name
 
-    result = df["a"].substitute({3: 4})
+    result = df["a"].substitute(3, 4)
     expected = from_pandas(pdf, npartitions=4).a
     assert result._name == expected._name
 
-    result = (df["a"].sum() + 5).substitute({df["a"]: df["b"], 5: 6})
+    result = (df["a"].sum() + 5).substitute(df["a"], df["b"]).substitute(5, 6)
     expected = df["b"].sum() + 6
     assert result._name == expected._name
 
@@ -666,6 +1034,13 @@ def test_partitions(pdf, df):
     assert_eq(out, pdf.iloc[10:20])
 
 
+def test_get_partition(pdf, df):
+    assert_eq(df.get_partition(0), pdf.iloc[:10])
+    assert_eq(df.get_partition(1), pdf.iloc[10:20])
+    assert_eq(df.get_partition(-1), pdf.iloc[90:])
+    assert_eq(df.x.get_partition(0), pdf.x.iloc[:10])
+
+
 def test_column_getattr(df):
     df = df.expr
     assert df.x._name == df["x"]._name
@@ -719,18 +1094,17 @@ def test_tree_repr(fuse):
     assert "Sum:" in s
     assert "Add:" in s
     assert "Mean:" in s
-    assert "AlignPartitions:" in s
+    assert "AlignPartitions:" not in s
     assert str(df.seed) in s.lower()
 
     # Check result after optimization
     optimized = expr.optimize(fuse=fuse)
-    s = optimized.tree_repr()
+    s = str(optimized.tree_repr())
     assert "Sum(Chunk):" in s
     assert "Sum(TreeReduce): split_every=0" in s
     assert "Add:" in s
     assert "Mean:" not in s
     assert "AlignPartitions:" not in s
-    assert "right=1" in s
     assert "True" not in s
     assert "None" not in s
     assert "skipna=False" in s
@@ -785,6 +1159,8 @@ def test_map_partitions_merge(opt):
     # Check result with/without fusion
     expect = pdf1.merge(pdf2, on="x")
     df3 = (df3.optimize() if opt else df3)[list(expect.columns)]
+    if not PANDAS_GE_200:
+        df3 = df3.reset_index(drop=True)
     assert_eq(df3, expect, check_index=False)
 
 
@@ -875,19 +1251,53 @@ def test_astype_simplify(df, pdf):
     assert result._name == expected._name
 
 
-def test_drop_duplicates(df, pdf):
-    assert_eq(df.drop_duplicates(), pdf.drop_duplicates())
-    assert_eq(
-        df.drop_duplicates(ignore_index=True), pdf.drop_duplicates(ignore_index=True)
-    )
-    assert_eq(df.drop_duplicates(subset=["x"]), pdf.drop_duplicates(subset=["x"]))
-    assert_eq(df.x.drop_duplicates(), pdf.x.drop_duplicates())
+@pytest.mark.parametrize("split_out", [1, True])
+def test_drop_duplicates(df, pdf, split_out):
+    with dask.config.set({"dataframe.shuffle.method": "tasks"}):
+        assert_eq(
+            df.drop_duplicates(split_out=split_out),
+            pdf.drop_duplicates(),
+            check_index=split_out is not True,
+        )
+        assert_eq(
+            df.drop_duplicates(ignore_index=True, split_out=split_out),
+            pdf.drop_duplicates(ignore_index=True),
+            check_index=split_out is not True,
+        )
+        assert_eq(
+            df.drop_duplicates(subset=["y"], split_out=split_out),
+            pdf.drop_duplicates(subset=["y"]),
+            check_index=split_out is not True,
+        )
+        assert_eq(
+            df.y.drop_duplicates(split_out=split_out),
+            pdf.y.drop_duplicates(),
+            check_index=split_out is not True,
+        )
+
+        actual = df.set_index("y").index.drop_duplicates(split_out=split_out)
+        if split_out is True:
+            actual = actual.compute().sort_values()  # shuffle is unordered
+        assert_eq(
+            actual,
+            pdf.set_index("y").index.drop_duplicates(),
+        )
 
     with pytest.raises(KeyError, match="'a'"):
-        df.drop_duplicates(subset=["a"])
+        df.drop_duplicates(subset=["a"], split_out=split_out)
 
     with pytest.raises(TypeError, match="got an unexpected keyword argument"):
-        df.x.drop_duplicates(subset=["a"])
+        df.x.drop_duplicates(subset=["a"], split_out=split_out)
+
+
+def test_drop_duplicates_split_out(df, pdf):
+    q = df.drop_duplicates(subset=["x"])
+    assert len(list(q.optimize().find_operations(Shuffle))) > 0
+    assert_eq(q, pdf.drop_duplicates(subset=["x"]))
+
+    q = df.x.drop_duplicates()
+    assert len(list(q.optimize().find_operations(Shuffle))) > 0
+    assert_eq(q, pdf.x.drop_duplicates())
 
 
 def test_unique(df, pdf):
@@ -904,10 +1314,10 @@ def test_unique(df, pdf):
 def test_walk(df):
     df2 = df[df["x"] > 1][["y"]] + 1
     assert all(isinstance(ex, expr.Expr) for ex in df2.walk())
-    exprs = set(df2.walk())
-    assert df.expr in exprs
-    assert df["x"].expr in exprs
-    assert (df["x"] > 1).expr in exprs
+    exprs = {e._name for e in set(df2.walk())}
+    assert df.expr._name in exprs
+    assert df["x"].expr._name in exprs
+    assert (df["x"] > 1).expr._name in exprs
     assert 1 not in exprs
 
 
@@ -937,6 +1347,11 @@ def test_dropna_simplify(pdf, subset):
     expected = df[["x", "y"]].simplify().dropna(subset=subset)["y"]
     assert result._name == expected._name
     assert_eq(q, pdf.dropna(subset=subset)["y"])
+
+
+def test_series_slice_getitem(df, pdf):
+    with pytest.raises(NotImplementedError):
+        df.x[:4]
 
 
 def test_dir(df):
@@ -972,6 +1387,11 @@ def test_simplify_up_blockwise(df, pdf, func, args, indexer):
     result = q.simplify()
     expected = getattr(df.simplify(), func)(*args)
     assert result._name == expected._name
+
+
+def test_isin_as_predicate(df, pdf):
+    result = df[df.x.isin([10])]
+    assert_eq(result, pdf[pdf.x.isin([10])])
 
 
 def test_sample(df):
@@ -1032,10 +1452,52 @@ def test_unknown_partitions_different_root():
         df.align(df2)
 
 
+@pytest.mark.parametrize("dropna", [False, True])
+def test_nunique(pdf, dropna):
+    pdf["z"] = pdf.y.astype(float)
+    pdf.loc[9:12, "z"] = np.nan  # Spans two partitions
+    df = from_pandas(pdf, npartitions=10)
+
+    assert_eq(
+        df.nunique(dropna=dropna),
+        pdf.nunique(dropna=dropna),
+    )
+    assert_eq(
+        df.nunique(axis=1, dropna=dropna),
+        pdf.nunique(axis=1, dropna=dropna),
+    )
+    assert_eq(
+        df.z.nunique(dropna=dropna),
+        pdf.z.nunique(dropna=dropna),
+    )
+    assert_eq(
+        df.set_index("z").index.nunique(dropna=dropna),
+        pdf.set_index("z").index.nunique(dropna=dropna),
+    )
+
+
 @xfail_gpu("compute_hll_array doesn't work for cudf")
-def test_nunique_approx(df):
-    result = df.nunique_approx().compute()
-    assert 99 < result < 101
+def test_nunique_approx(df, pdf):
+    actual = df.nunique_approx().compute()
+    assert 99 < actual < 101
+
+    actual = df.y.nunique_approx().compute()
+    expect = pdf.y.nunique()
+    assert expect * 0.99 < actual < expect * 1.01
+
+    actual = df.set_index("y").index.nunique_approx().compute()
+    expect = pdf.set_index("y").index.nunique()
+    assert expect * 0.99 < actual < expect * 1.01
+
+
+def test_memory_usage_per_partition(df):
+    expected = lib.Series(part.compute().memory_usage().sum() for part in df.partitions)
+    result = df.memory_usage_per_partition()
+    assert_eq(expected, result)
+
+    expected = lib.Series(part.x.compute().memory_usage() for part in df.partitions)
+    result = df.x.memory_usage_per_partition()
+    assert_eq(expected, result)
 
 
 def test_assign_simplify(pdf):
@@ -1100,6 +1562,22 @@ def test_are_co_aligned(pdf, df):
     merged_second = merged.rename(columns={"x": "a"})
     assert are_co_aligned(merged_first.expr, merged_second.expr)
     assert not are_co_aligned(merged_first.expr, df.expr)
+
+
+def test_assign_different_roots():
+    pdf = lib.DataFrame(
+        list(range(100)), index=list(range(1000, 0, -10)), columns=["x"]
+    )
+    pdf2 = lib.DataFrame(list(range(100)), index=list(range(100, 0, -1)), columns=["x"])
+    df = from_pandas(pdf, npartitions=10, sort=False)
+    df2 = from_pandas(pdf2, npartitions=10, sort=False)
+
+    with pytest.raises(NotImplementedError, match="different base"):
+        df["new"] = df2.x
+
+
+def test_assign_pandas_inputs(df, pdf):
+    assert_eq(df.assign(a=pdf.x), pdf.assign(a=pdf.x))
 
 
 @xfail_gpu()
@@ -1177,6 +1655,9 @@ def test_columns_setter(df, pdf):
     expecetd = pdf[["a"]]
     assert_eq(result, expecetd)
 
+    with pytest.raises(ValueError, match="Length mismatch"):
+        df.columns = [1, 2, 3]
+
 
 def test_filter_pushdown(df, pdf):
     indexer = df.x > 5
@@ -1197,3 +1678,239 @@ def test_filter_pushdown(df, pdf):
     df_opt = df[["x", "y"]].simplify().replace(1, 5)
     expected = df_opt[df_opt.x > 5]
     assert result._name == expected._name
+
+
+def test_shape(df, pdf):
+    result = df.shape
+    assert result[0]._name == (df.size / 2)._name
+    assert assert_eq(result[0], pdf.shape[0])
+    assert result[1] == pdf.shape[1]
+
+    result = df.x.shape
+    assert result[0]._name == (df.x.size)._name
+    assert assert_eq(result[0], pdf.shape[0])
+
+    result = df[[]].shape
+    assert assert_eq(result[0], pdf[[]].shape[0])
+    assert assert_eq(result[1], pdf[[]].shape[1])
+
+
+def test_size(df, pdf):
+    assert_eq(df.size, pdf.size)
+
+
+def test_drop_duplicates_groupby(pdf):
+    pdf["z"] = 1
+    df = from_pandas(pdf, npartitions=10)
+    df = df.drop_duplicates(subset="x")
+    query = df.groupby("y").z.count()
+    expected = pdf.drop_duplicates(subset="x").groupby("y").z.count()
+    assert_eq(query, expected)
+
+
+def test_expression_bool_raises(df):
+    with pytest.raises(ValueError, match="The truth value"):
+        bool(df.expr)
+
+
+def test_expr_is_scalar(df):
+    assert not is_scalar(df.expr)
+    with pytest.raises(ValueError, match="The truth value"):
+        df.expr.x in df.expr.columns  # noqa: B015
+
+
+def test_replace_filtered_combine_similar():
+    from dask_expr._expr import Filter, Replace
+
+    pdf = lib.DataFrame({"a": [1, 2, 3, 4, 5, 6], "b": 1, "c": 2})
+
+    df = from_pandas(pdf.copy(), npartitions=2)
+    df = df[df.a > 3]
+    df = df.replace(5, 4)
+    df["new"] = df.a + df.b
+
+    pdf = pdf[pdf.a > 3]
+    pdf = pdf.replace(5, 4)
+    pdf["new"] = pdf.a + pdf.b
+
+    df = df.optimize(fuse=False)
+    assert_eq(df, pdf)  # Check result
+
+    # Check that Replace expressions always operate on
+    # Filter expressions (and not the other way around)
+    similar = list(df.find_operations(Replace))
+    assert all(isinstance(op.frame, Filter) for op in similar)
+
+
+def test_map_overlap():
+    def func(x):
+        x = x + x.sum()
+        return x
+
+    idx = lib.date_range("2020-01-01", periods=5, freq="D")
+    pdf = lib.DataFrame(1, index=idx, columns=["a"])
+    df = from_pandas(pdf, npartitions=2)
+
+    result = df.map_overlap(func, before=0, after="2D")
+    expected = lib.DataFrame([5, 5, 5, 3, 3], index=idx, columns=["a"])
+    assert_eq(result, expected)
+    result = df.map_overlap(func, before=0, after=1)
+    assert_eq(result, expected)
+
+    # Bug in dask/dask
+    # result = df.map_overlap(func, before=0, after="1D")
+    # expected = lib.DataFrame([4, 4, 4, 3, 3], index=idx, columns=["a"])
+    # assert_eq(result, expected)
+
+    result = df.map_overlap(func, before="2D", after=0)
+    expected = lib.DataFrame(4, index=idx, columns=["a"])
+    assert_eq(result, expected, check_index=False)
+
+    result = df.map_overlap(func, before=1, after=0)
+    assert_eq(result, expected, check_index=False)
+
+
+def test_quantile_frame(df, pdf):
+    assert_eq(df.quantile(), lib.Series([49.0, 7.0], index=["x", "y"], name=0.5))
+    assert_eq(df.quantile(q=[0.5]), lib.DataFrame({"x": [49.0], "y": 7.0}, index=[0.5]))
+    assert_eq(
+        df.quantile(q=[0.5], numeric_only=True),
+        lib.DataFrame({"x": [49.0], "y": 7.0}, index=[0.5]),
+    )
+
+    pdf["z"] = 1
+    df = from_pandas(pdf, npartitions=10)
+    q = df.quantile(q=[0.5])[["x", "z"]]
+    assert q.optimize()._name == df[["x", "z"]].quantile(q=[0.5]).optimize()._name
+
+    q = df.quantile(q=0.5)[["x", "z"]]
+    assert (
+        q.optimize()._name
+        == df[["x", "z"]].quantile(q=0.5)[["x", "z"]].optimize()._name
+    )
+
+
+def test_quantile(df):
+    assert_eq(df.x.quantile(), 49.0)
+    assert_eq(df.x.quantile(method="dask"), 49.0)
+    assert_eq(
+        df.x.quantile(q=[0.2, 0.8]),
+        lib.Series([19.0, 79.0], index=[0.2, 0.8], name="x"),
+    )
+    assert_eq(
+        df.x.index.quantile(q=[0.2, 0.8]),
+        lib.Series([19.0, 79.0], index=[0.2, 0.8]),
+    )
+
+    with pytest.raises(AssertionError):
+        df.x.quantile(q=[]).compute()
+
+    ser = from_pandas(lib.Series(["a", "b", "c"]), npartitions=2)
+    with pytest.raises(TypeError, match="on non-numeric"):
+        ser.quantile()
+
+
+def test_map_overlap_raises():
+    def func(x):
+        x = x + x.sum()
+        return x
+
+    idx = lib.date_range("2020-01-01", periods=5, freq="D")
+    pdf = lib.DataFrame(1, index=idx, columns=["a"])
+    df = from_pandas(pdf, npartitions=2)
+
+    with pytest.raises(NotImplementedError, match="is less than"):
+        df.map_overlap(func, before=5, after=0).compute()
+
+    with pytest.raises(NotImplementedError, match="is less than"):
+        df.map_overlap(func, before=0, after=5).compute()
+
+    with pytest.raises(NotImplementedError, match="is less than"):
+        df.map_overlap(func, before="5D", after=0).compute()
+
+    with pytest.raises(NotImplementedError, match="is less than"):
+        df.map_overlap(func, before=0, after="5D").compute()
+
+    with pytest.raises(ValueError, match="positive"):
+        df.map_overlap(func, before=-1, after=5).compute()
+
+    with pytest.raises(ValueError, match="positive"):
+        df.map_overlap(func, before=1, after=-5).compute()
+
+
+def test_dtype(df, pdf):
+    assert df.x.dtype == pdf.x.dtype
+    assert df.index.dtype == pdf.index.dtype
+    assert_eq(df.dtypes, pdf.dtypes)
+
+
+def test_isnull():
+    pdf = lib.DataFrame(
+        {
+            "A": range(10),
+            "B": [None] * 10,
+            "C": [1] * 4 + [None] * 4 + [2] * 2,
+        }
+    )
+    df = from_pandas(pdf, npartitions=2)
+    assert_eq(df.notnull(), pdf.notnull())
+    assert_eq(df.isnull(), pdf.isnull())
+    for c in pdf.columns:
+        assert_eq(df[c].isnull(), pdf[c].isnull())
+
+
+def test_scalar_to_series():
+    sc = from_pandas(lib.Series([1])).sum()
+    ss1 = sc.to_series()
+    ss2 = sc.to_series("xxx")
+    assert_eq(ss1, lib.Series([1]))
+    assert_eq(ss2, lib.Series([1], index=["xxx"]))
+
+
+def test_keys(df, pdf):
+    assert_eq(df.keys(), pdf.keys())  # Alias for DataFrame.columns
+    assert_eq(df.x.keys(), pdf.x.keys())  # Alias for Series.index
+
+
+def test_iter(df, pdf):
+    assert_eq(list(df), list(pdf))  # column names
+
+
+def test_items(df, pdf):
+    expect = list(pdf.items())
+    actual = list(df.items())
+    assert len(expect) == len(actual)
+    for (expect_name, expect_col), (actual_name, actual_col) in zip(expect, actual):
+        assert expect_name == actual_name
+        assert_eq(expect_col, actual_col)
+
+
+def test_index_index(df):
+    with pytest.raises(NotImplementedError, match="has no"):
+        df.index.index
+
+
+def test_axes(df, pdf):
+    assert len(df.axes) == len(pdf.axes)
+    [assert_eq(d, p) for d, p in zip(df.axes, pdf.axes)]
+    assert len(df.x.axes) == len(pdf.x.axes)
+    assert_eq(df.x.axes[0], pdf.x.axes[0])
+
+
+@pytest.mark.parametrize("npartitions", [1, 4])
+def test_map_overlap(npartitions, pdf, df):
+    def shifted_sum(df, before, after, c=0):
+        a = df.shift(before)
+        b = df.shift(-after)
+        return df + a + b + c
+
+    for before, after in [(0, 3), (3, 0), (3, 3), (0, 0)]:
+        # DataFrame
+        res = df.map_overlap(shifted_sum, before, after, before, after, c=2)
+        sol = shifted_sum(pdf, before, after, c=2)
+        assert_eq(res, sol)
+
+        # Series
+        res = df.x.map_overlap(shifted_sum, before, after, before, after, c=2)
+        sol = shifted_sum(pdf.x, before, after, c=2)
+        assert_eq(res, sol)

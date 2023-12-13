@@ -19,13 +19,14 @@ classifiers = [
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering",
     "Topic :: System :: Distributed Computing",
 ]
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
-    "dask >= 2023.07",
+    "dask >= 2023.10.1",
     "pyarrow",
     "pandas >= 2",
 ]

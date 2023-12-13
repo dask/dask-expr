@@ -51,6 +51,7 @@ class Concat(Expr):
                 [meta_nonempty(df._meta) for df in self._frames],
                 join=self.join,
                 filter_warning=False,
+                axis=self.axis,
                 **self._kwargs,
             )
         )
@@ -99,7 +100,7 @@ class Concat(Expr):
             # dtypes of all dfs need to be coherent
             # refer to https://github.com/dask/dask/issues/4685
             # and https://github.com/dask/dask/issues/5968.
-            if is_dataframe_like(df.frame):
+            if is_dataframe_like(df._meta):
                 shared_columns = list(set(df.columns).intersection(self._meta.columns))
                 needs_astype = {
                     col: self._meta[col].dtype
@@ -131,19 +132,25 @@ class Concat(Expr):
 
     def _simplify_up(self, parent):
         if isinstance(parent, Projection):
+
+            def get_columns_or_name(e: Expr):
+                return e.columns if e.ndim == 2 else [e.name]
+
             columns = parent.columns
             columns_frame = [
-                sorted(set(frame.columns).intersection(columns))
+                [col for col in get_columns_or_name(frame) if col in columns]
                 for frame in self._frames
             ]
             if all(
-                cols == sorted(frame.columns)
+                sorted(cols) == sorted(get_columns_or_name(frame))
                 for frame, cols in zip(self._frames, columns_frame)
             ):
                 return
 
             frames = [
-                frame[cols] if cols != sorted(frame.columns) else frame
+                frame[cols]
+                if sorted(cols) != sorted(get_columns_or_name(frame))
+                else frame
                 for frame, cols in zip(self._frames, columns_frame)
                 if len(cols) > 0
             ]
@@ -164,6 +171,10 @@ class StackPartition(Concat):
     _parameters = ["join", "ignore_order", "_kwargs"]
     _defaults = {"join": "outer", "ignore_order": False, "_kwargs": {}}
 
+    @property
+    def axis(self):
+        return 0
+
     def _layer(self):
         dsk, i = {}, 0
         for df in self._frames:
@@ -180,7 +191,7 @@ class StackPartition(Concat):
                     dsk[(self._name, i)] = (
                         apply,
                         methods.concat,
-                        [[self._meta, key], 0, self.join, False, True],
+                        [[self._meta, key], self.axis, self.join, False, True],
                         self._kwargs,
                     )
                 i += 1
@@ -203,5 +214,6 @@ class ConcatUnindexed(Blockwise):
             **self.operand("_kwargs"),
         )
 
-    def operation(self, *args, ignore_order, _kwargs):
+    @staticmethod
+    def operation(*args, ignore_order, _kwargs):
         return concat_and_check(args, ignore_order=ignore_order)
