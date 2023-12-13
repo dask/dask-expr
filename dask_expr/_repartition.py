@@ -55,7 +55,10 @@ class Repartition(Expr):
             "new_partitions" in self._parameters
             and self.operand("new_partitions") is not None
         ):
-            return self.operand("new_partitions")
+            new_partitions = self.operand("new_partitions")
+            if isinstance(new_partitions, Callable):
+                return new_partitions(self.frame.npartitions)
+            return new_partitions
         return super().npartitions
 
     def _lower(self):
