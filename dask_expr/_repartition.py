@@ -49,6 +49,15 @@ class Repartition(Expr):
             return x._divisions()
         return self.new_divisions
 
+    @property
+    def npartitions(self):
+        if (
+            "new_partitions" in self._parameters
+            and self.operand("new_partitions") is not None
+        ):
+            return self.operand("new_partitions")
+        return super().npartitions
+
     def _lower(self):
         if type(self) != Repartition:
             # This lower logic should not be inherited
@@ -56,6 +65,9 @@ class Repartition(Expr):
         if self.operand("new_partitions") is not None:
             if self.new_partitions < self.frame.npartitions:
                 return RepartitionToFewer(self.frame, self.operand("new_partitions"))
+            elif self.new_partitions == self.frame.npartitions:
+                # Remove if partitions are equal
+                return self.frame
             else:
                 original_divisions = divisions = pd.Series(
                     self.frame.divisions
