@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from dask_expr import from_pandas
+from dask_expr import Repartition, from_pandas, repartition
 from dask_expr.tests._util import _backend_library, assert_eq
 
 lib = _backend_library()
@@ -32,6 +32,65 @@ def test_repartition_combine_similar(kwargs):
     expected_pdf = pdf.copy()
     expected_pdf["new"] = expected_pdf.x + expected_pdf.y
     assert_eq(result, expected_pdf)
+
+
+@pytest.mark.parametrize("type_ctor", [lambda o: o, tuple, list])
+def test_repartition_noop(type_ctor):
+    pdf = lib.DataFrame({"x": [1, 2, 4, 5], "y": [6, 7, 8, 9]}, index=[-1, 0, 2, 7])
+    df = from_pandas(pdf, npartitions=2)
+    ds = df.x
+
+    # DataFrame method
+    df2 = df.repartition(divisions=type_ctor(df.divisions))
+    assert (
+        len(
+            [
+                x
+                for x in df2.expr.optimize(fuse=False).walk()
+                if isinstance(x, Repartition)
+            ]
+        )
+        == 0
+    )
+
+    # Top-level dask.dataframe method
+    df3 = repartition(df, divisions=type_ctor(df.divisions))
+    assert (
+        len(
+            [
+                x
+                for x in df3.expr.optimize(fuse=False).walk()
+                if isinstance(x, Repartition)
+            ]
+        )
+        == 0
+    )
+
+    # Series method
+    ds2 = ds.repartition(divisions=type_ctor(ds.divisions))
+    assert (
+        len(
+            [
+                x
+                for x in ds2.expr.optimize(fuse=False).walk()
+                if isinstance(x, Repartition)
+            ]
+        )
+        == 0
+    )
+
+    # Top-level dask.dataframe method applied to a Series
+    ds3 = repartition(ds, divisions=type_ctor(ds.divisions))
+    assert (
+        len(
+            [
+                x
+                for x in ds3.expr.optimize(fuse=False).walk()
+                if isinstance(x, Repartition)
+            ]
+        )
+        == 0
+    )
 
 
 def test_repartition_freq():
