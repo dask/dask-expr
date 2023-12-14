@@ -1000,7 +1000,6 @@ class Mode(ApplyConcatApply):
         [df] = results
         max = df.max(skipna=dropna)
         out = df[df == max].index.to_series().sort_values().reset_index(drop=True)
-        # out.name = results[0].name
         return out
 
     @property
