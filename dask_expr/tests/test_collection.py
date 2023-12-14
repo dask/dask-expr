@@ -1132,6 +1132,22 @@ def test_simple_graphs(df):
     assert graph[(expr._name, 0)] == (operator.add, (df.expr._name, 0), 1)
 
 
+def test_values():
+    from dask.array.utils import assert_eq
+
+    pdf = lib.DataFrame(
+        {"x": ["a", "b", "c", "d"], "y": [2, 3, 4, 5]},
+        index=lib.Index([1.0, 2.0, 3.0, 4.0], name="ind"),
+    )
+
+    df = from_pandas(pdf, 2)
+
+    assert_eq(df.values, pdf.values)
+    assert_eq(df.x.values, pdf.x.values)
+    assert_eq(df.y.values, pdf.y.values)
+    assert_eq(df.index.values, pdf.index.values)
+
+
 def test_depth(df):
     assert df._depth() == 1
     assert (df + 1)._depth() == 2
