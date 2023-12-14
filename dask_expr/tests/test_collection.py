@@ -248,7 +248,7 @@ def test_cumulative_methods(df, pdf, func):
     assert_eq(getattr(df.x, func)(), getattr(pdf.x, func)())
 
     q = getattr(df, func)()["x"]
-    assert q.simplify()._name == getattr(df.x, func)()
+    assert q.simplify()._name == getattr(df.x, func)().simplify()._name
 
     pdf.loc[slice(None, None, 2), "x"] = np.nan
     df = from_pandas(pdf, npartitions=10)
@@ -258,6 +258,13 @@ def test_cumulative_methods(df, pdf, func):
         check_dtype=False,
     )
     assert_eq(getattr(df.x, func)(skipna=False), getattr(pdf.x, func)(skipna=False))
+
+
+def test_bool(df):
+    conditions = [df, df["x"], df == df, df["x"] == df["x"]]
+    for cond in conditions:
+        with pytest.raises(ValueError):
+            bool(cond)
 
 
 @xfail_gpu("nbytes not supported by cudf")
