@@ -23,7 +23,7 @@ from dask.dataframe.core import (
     is_series_like,
     new_dd_object,
 )
-from dask.dataframe.dispatch import meta_nonempty
+from dask.dataframe.dispatch import make_meta, meta_nonempty
 from dask.dataframe.utils import has_known_categories, index_summary
 from dask.utils import (
     IndexCallable,
@@ -79,7 +79,7 @@ from dask_expr._util import (
     _validate_axis,
     is_scalar,
 )
-from dask_expr.io import FromPandasDivisions
+from dask_expr.io import FromPandasDivisions, FromScalars
 
 #
 # Utilities to wrap Expr API
@@ -245,12 +245,21 @@ class FrameBase(DaskMethodsMixin):
             return self.loc[other]
         return new_collection(self.expr.__getitem__(other))
 
+    def __bool__(self):
+        raise ValueError(
+            f"The truth value of a {self.__class__.__name__} is ambiguous. "
+            "Use a.any() or a.all()."
+        )
+
     def persist(self, fuse=True, combine_similar=True, **kwargs):
         out = self.optimize(combine_similar=combine_similar, fuse=fuse)
         return DaskMethodsMixin.persist(out, **kwargs)
 
     def compute(self, fuse=True, combine_similar=True, **kwargs):
-        out = self.optimize(combine_similar=combine_similar, fuse=fuse)
+        out = self
+        if not isinstance(out, Scalar):
+            out = out.repartition(npartitions=1)
+        out = out.optimize(combine_similar=combine_similar, fuse=fuse)
         return DaskMethodsMixin.compute(out, **kwargs)
 
     def __dask_graph__(self):
@@ -509,25 +518,17 @@ class FrameBase(DaskMethodsMixin):
             DataFrame object representing the schema of the expected result.
         """
 
-        if align_dataframes:
-            # TODO: Handle alignment?
-            # Perhaps we only handle the case that all `Expr` operands
-            # have the same number of partitions or can be broadcasted
-            # within `MapPartitions`. If so, the `map_partitions` API
-            # will need to call `Repartition` on operands that are not
-            # aligned with `self.expr`.
-            raise NotImplementedError()
-        new_expr = expr.MapPartitions(
-            self.expr,
+        return map_partitions(
             func,
-            meta,
-            enforce_metadata,
-            transform_divisions,
-            clear_divisions,
-            kwargs,
-            *[arg.expr if isinstance(arg, FrameBase) else arg for arg in args],
+            self,
+            *args,
+            meta=meta,
+            enforce_metadata=enforce_metadata,
+            transform_divisions=transform_divisions,
+            clear_divisions=clear_divisions,
+            align_dataframes=align_dataframes,
+            **kwargs,
         )
-        return new_collection(new_expr)
 
     def map_overlap(
         self,
@@ -615,6 +616,8 @@ class FrameBase(DaskMethodsMixin):
                 "``divisions=`` keyword arguments."
             )
         if freq is not None:
+            if not isinstance(self.divisions[0], pd.Timestamp):
+                raise TypeError("Can only repartition on frequency for timeseries")
             return new_collection(RepartitionFreq(self.expr, freq))
         else:
             return new_collection(
@@ -642,6 +645,10 @@ class FrameBase(DaskMethodsMixin):
         return self.to_dask_dataframe(optimize, **optimize_kwargs).to_dask_array(
             lengths=lengths, meta=meta
         )
+
+    @property
+    def values(self):
+        return self.to_dask_array()
 
     def sum(self, skipna=True, numeric_only=False, min_count=0):
         return new_collection(self.expr.sum(skipna, numeric_only, min_count))
@@ -683,6 +690,8 @@ class FrameBase(DaskMethodsMixin):
         return new_collection(self.expr.count(numeric_only))
 
     def abs(self):
+        # Raise pandas errors
+        meta_nonempty(self._meta).abs()
         return new_collection(self.expr.abs())
 
     def astype(self, dtypes):
@@ -1289,6 +1298,52 @@ class DataFrame(FrameBase):
                 ]
             )
 
+    def quantile(self, q=0.5, axis=0, numeric_only=False, method="default"):
+        """Approximate row-wise and precise column-wise quantiles of DataFrame
+
+        Parameters
+        ----------
+        q : list/array of floats, default 0.5 (50%)
+            Iterable of numbers ranging from 0 to 1 for the desired quantiles
+        axis : {0, 1, 'index', 'columns'} (default 0)
+            0 or 'index' for row-wise, 1 or 'columns' for column-wise
+        method : {'default', 'tdigest', 'dask'}, optional
+            What method to use. By default will use dask's internal custom
+            algorithm (``'dask'``).  If set to ``'tdigest'`` will use tdigest
+            for floats and ints and fallback to the ``'dask'`` otherwise.
+        """
+        allowed_methods = ["default", "dask", "tdigest"]
+        if method not in allowed_methods:
+            raise ValueError("method can only be 'default', 'dask' or 'tdigest'")
+        meta = make_meta(self._meta.quantile(q=q, numeric_only=numeric_only))
+
+        if numeric_only:
+            frame = self.select_dtypes("number")
+        else:
+            frame = self
+
+        collections = []
+        for _, col in frame.items():
+            collections.append(col.quantile(q=q, method=method))
+
+        if len(collections) > 0 and isinstance(collections[0], Scalar):
+            return _from_scalars(collections, meta, frame.expr.columns)
+
+        return concat(collections, axis=1)
+
+    def median(self, axis=0, numeric_only=False):
+        if axis == 1 or self.npartitions == 1:
+            return self.median_approximate(axis=axis, numeric_only=numeric_only)
+        raise NotImplementedError(
+            "Dask doesn't implement an exact median in all cases as this is hard to do in parallel. "
+            "See the `median_approximate` method instead, which uses an approximate algorithm."
+        )
+
+    def median_approximate(self, axis=0, method="default", numeric_only=False):
+        return self.quantile(
+            axis=axis, method=method, numeric_only=numeric_only
+        ).rename(None)
+
     def info(self, buf=None, verbose=False, memory_usage=False):
         """
         Concise summary of a Dask DataFrame
@@ -1412,8 +1467,12 @@ class Series(FrameBase):
         return self.index
 
     def map(self, arg, na_action=None, meta=None):
+        if isinstance(arg, FrameBase):
+            arg = arg.expr
+        if isinstance(meta, FrameBase):
+            meta = meta.expr
         return new_collection(
-            expr.Map(self.expr, arg=arg, na_action=na_action, meta=None)
+            expr.Map(self.expr, arg=arg, na_action=na_action, meta=meta)
         )
 
     def __repr__(self):
@@ -1468,6 +1527,12 @@ class Series(FrameBase):
     def explode(self):
         return new_collection(expr.ExplodeSeries(self.expr))
 
+    def add_prefix(self, prefix):
+        return new_collection(expr.AddPrefixSeries(self.expr, prefix))
+
+    def add_suffix(self, suffix):
+        return new_collection(expr.AddSuffixSeries(self.expr, suffix))
+
     cat = CachedAccessor("cat", CategoricalAccessor)
     dt = CachedAccessor("dt", DatetimeAccessor)
     str = CachedAccessor("str", StringAccessor)
@@ -1503,6 +1568,17 @@ class Series(FrameBase):
         if method not in allowed_methods:
             raise ValueError("method can only be 'default', 'dask' or 'tdigest'")
         return new_collection(SeriesQuantile(self.expr, q, method))
+
+    def median(self):
+        if self.npartitions == 1:
+            return self.median_approximate()
+        raise NotImplementedError(
+            "Dask doesn't implement an exact median in all cases as this is hard to do in parallel. "
+            "See the `median_approximate` method instead, which uses an approximate algorithm."
+        )
+
+    def median_approximate(self, method="default"):
+        return self.quantile(method=method)
 
     @property
     def is_monotonic_increasing(self):
@@ -1564,6 +1640,9 @@ class Index(Series):
             f"{self.__class__.__name__!r} object has no attribute 'index'"
         )
 
+    def shift(self, periods=1, freq=None):
+        return new_collection(expr.ShiftIndex(self.expr, periods, freq))
+
     def __dir__(self):
         o = set(dir(type(self)))
         o.update(self.__dict__)
@@ -1576,6 +1655,15 @@ class Scalar(FrameBase):
 
     def __repr__(self):
         return f"<dask_expr.expr.Scalar: expr={self.expr}>"
+
+    def __bool__(self):
+        raise TypeError(
+            f"Trying to convert {self} to a boolean value. Because Dask objects are "
+            "lazily evaluated, they cannot be converted to a boolean value or used "
+            "in boolean conditions like if statements. Try calling .compute() to "
+            "force computation prior to converting to a boolean value or using in "
+            "a conditional statement."
+        )
 
     def __dask_postcompute__(self):
         return first, ()
@@ -1709,10 +1797,10 @@ def concat(
     if join not in ("inner", "outer"):
         raise ValueError("'join' must be 'inner' or 'outer'")
 
-    dfs = [from_pandas(df) if not is_dask_collection(df) else df for df in dfs]
+    dfs = [from_pandas(df) if not isinstance(df, FrameBase) else df for df in dfs]
 
     if axis == 1:
-        dfs = [df for df in dfs if len(df.columns) > 0]
+        dfs = [df for df in dfs if len(df.columns) > 0 or isinstance(df, Series)]
 
     return new_collection(
         Concat(
@@ -1918,3 +2006,45 @@ def to_timedelta(arg, unit=None, errors="raise"):
     if not isinstance(arg, Series):
         raise TypeError("arg must be a Series")
     return new_collection(ToTimedelta(frame=arg.expr, unit=unit, errors=errors))
+
+
+def _from_scalars(scalars, meta, names):
+    return new_collection(FromScalars(meta, names, *[s.expr for s in scalars]))
+
+
+def map_partitions(
+    func,
+    *args,
+    meta=no_default,
+    enforce_metadata=True,
+    transform_divisions=True,
+    clear_divisions=False,
+    align_dataframes=False,
+    **kwargs,
+):
+    if align_dataframes:
+        # TODO: Handle alignment?
+        # Perhaps we only handle the case that all `Expr` operands
+        # have the same number of partitions or can be broadcasted
+        # within `MapPartitions`. If so, the `map_partitions` API
+        # will need to call `Repartition` on operands that are not
+        # aligned with `self.expr`.
+        raise NotImplementedError()
+    new_expr = expr.MapPartitions(
+        args[0].expr,
+        func,
+        meta,
+        enforce_metadata,
+        transform_divisions,
+        clear_divisions,
+        kwargs,
+        *[arg.expr if isinstance(arg, FrameBase) else arg for arg in args[1:]],
+    )
+    return new_collection(new_expr)
+
+
+def isna(arg):
+    if isinstance(arg, FrameBase):
+        return arg.isna()
+    else:
+        return map_partitions(pd.isna, from_pandas(arg))
