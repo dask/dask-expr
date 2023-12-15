@@ -452,6 +452,18 @@ def test_groupby_projection_split_out(df, pdf):
     assert_eq(result, pdf_result)
 
 
+def test_numeric_column_names():
+    df = lib.DataFrame({0: [0, 1, 0, 1], 1: [1, 2, 3, 4], 2: [0, 1, 0, 1]})
+    ddf = from_pandas(df, npartitions=2)
+    assert_eq(ddf.groupby(0).sum(), df.groupby(0).sum())
+    assert_eq(ddf.groupby([0, 2]).sum(), df.groupby([0, 2]).sum())
+    expected = df.groupby(0).apply(lambda x: x)
+    assert_eq(
+        ddf.groupby(0).apply(lambda x: x, meta=expected),
+        expected,
+    )
+
+
 def test_groupby_co_aligned_grouper(df, pdf):
     assert_eq(
         df[["y"]].groupby(df["x"]).sum(),
