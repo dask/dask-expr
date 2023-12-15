@@ -1208,6 +1208,7 @@ class GroupBy:
                 split_every,
                 split_out,
                 self.sort,
+                self._slice,
                 *self.by,
             )
         )

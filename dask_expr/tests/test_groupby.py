@@ -166,6 +166,16 @@ def test_groupby_agg_grouper_single(pdf):
     assert_eq(result, expected)
 
 
+@pytest.mark.parametrize("slice_", ["a", ["a"], ["a", "b"], ["b"]])
+def test_groupby_agg_grouper_multiple(slice_):
+    d = lib.DataFrame({"a": [1, 2, 3, 4], "b": [1, 2, 3, 4]})
+    a = from_pandas(d, npartitions=2)
+
+    result = a.groupby("a")[slice_].agg(["min", "max"])
+    expected = d.groupby("a")[slice_].agg(["min", "max"])
+    assert_eq(result, expected)
+
+
 def test_groupby_nunique(df, pdf):
     with pytest.raises(AssertionError):
         df.groupby("x").nunique()
