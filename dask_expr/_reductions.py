@@ -163,6 +163,8 @@ class ShuffleReduce(Expr):
         # Make sure we have dataframe-like data to shuffle
         if split_by_index:
             chunked = ResetIndex(self.frame, drop=False)
+            if None in split_by:
+                split_by = [x if x is not None else "index" for x in split_by]
         elif is_index_like(self.frame._meta) or is_series_like(self.frame._meta):
             chunked = ToFrame(self.frame, name=columns[0])
         else:
