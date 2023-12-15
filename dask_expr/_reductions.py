@@ -478,7 +478,7 @@ class Unique(ApplyConcatApply):
 
     @property
     def split_by(self):
-        return self.columns
+        return self.name
 
     @property
     def chunk_kwargs(self):
@@ -852,7 +852,7 @@ class Len(Reduction):
             return sum(Len(obj) for obj in self.frame.dependencies())
 
         # Drop all of the columns, just pass through the index
-        if len(self.frame.columns):
+        if self.frame.ndim == 2 and len(self.frame.columns):
             return Len(self.frame.index)
 
     def _simplify_up(self, parent):
