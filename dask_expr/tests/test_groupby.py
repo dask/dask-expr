@@ -546,6 +546,11 @@ def test_rolling_groupby_projection():
     assert actual.optimize()._name == (optimal.optimize()._name)
 
 
+def test_std_var_slice(pdf, df):
+    assert_eq(df.groupby("x").y.std(), pdf.groupby("x").y.std())
+    assert_eq(df.groupby("x").y.var(), pdf.groupby("x").y.var())
+
+
 def test_groupby_error(df):
     with pytest.raises(KeyError):
         df.groupby("A")
@@ -581,3 +586,19 @@ def test_groupby_udf_user_warning(df, pdf):
     expected = pdf.groupby("x").transform(func)
     with pytest.warns(UserWarning, match="`meta` is not specified"):
         assert_eq(expected, df.groupby("x").transform(func))
+
+
+def test_groupby_index_array(pdf):
+    pdf.index = lib.date_range(start="2020-12-31", freq="D", periods=len(pdf))
+    df = from_pandas(pdf, npartitions=10)
+
+    assert_eq(
+        df.x.groupby(df.index.month).nunique(),
+        pdf.x.groupby(pdf.index.month).nunique(),
+        check_names=False,
+    )
+    assert_eq(
+        df.groupby(df.index.month).x.nunique(),
+        pdf.groupby(pdf.index.month).x.nunique(),
+        check_names=False,
+    )
