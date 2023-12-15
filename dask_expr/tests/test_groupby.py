@@ -388,6 +388,32 @@ def test_groupby_single_agg_split_out(pdf, df, api, sort, split_out):
 
 
 @pytest.mark.parametrize(
+    "func",
+    [
+        lambda grouped: grouped.apply(lambda x: x.sum()),
+        lambda grouped: grouped.transform(lambda x: x.sum()),
+    ],
+)
+def test_apply_or_transform_shuffle_multilevel(pdf, df, func):
+    grouper = lambda df: [df["x"] + 1, df["y"] + 1]
+
+    with pytest.warns(UserWarning):
+        # DataFrameGroupBy
+        assert_eq(func(df.groupby(grouper(df))), func(pdf.groupby(grouper(pdf))))
+
+        # SeriesGroupBy
+        assert_eq(
+            func(df.groupby(grouper(df))["z"]), func(pdf.groupby(grouper(pdf))["z"])
+        )
+
+        # DataFrameGroupBy with column slice
+        assert_eq(
+            func(df.groupby(grouper(df))[["z"]]),
+            func(pdf.groupby(grouper(pdf))[["z"]]),
+        )
+
+
+@pytest.mark.parametrize(
     "spec",
     [
         {"x": "count"},

@@ -626,11 +626,23 @@ class GroupByApply(Expr, GroupByBase):
         if any(div is None for div in self.frame.divisions) or not any(
             _contains_index_name(self.frame._meta.index.name, b) for b in self.by
         ):
-            if isinstance(self.by[0], Expr):
-                df = Assign(df, "_by", self.by[0])
-                df = Shuffle(df, "_by", df.npartitions)
-                by = [RenameSeries(Projection(df, "_by"), index=self.by[0].columns[0])]
-                df = Projection(df, [col for col in df.columns if col != "_by"])
+            if any(isinstance(b, Expr) for b in self.by):
+                # TODO: Simplify after multi column assign
+                cols = []
+                for i, b in enumerate(self.by):
+                    if isinstance(b, Expr):
+                        df = Assign(df, f"_by_{i}", b)
+                        cols.append(f"_by_{i}")
+                df = Shuffle(df, list(cols), df.npartitions)
+                by = [
+                    b
+                    if not isinstance(b, Expr)
+                    else RenameSeries(
+                        Projection(df, f"_by_{i}"), index=self.by[i].columns[0]
+                    )
+                    for i, b in enumerate(self.by)
+                ]
+                df = Projection(df, [col for col in df.columns if col not in cols])
             else:
                 df = Shuffle(df, self.by[0], df.npartitions)
 
