@@ -270,6 +270,7 @@ class GroupbyAggregation(GroupByApplyConcatApply, GroupByBase):
         "split_out": None,
         "sort": None,
     }
+    chunk = staticmethod(_groupby_apply_funcs)
 
     @functools.cached_property
     def spec(self):
@@ -305,10 +306,6 @@ class GroupbyAggregation(GroupByApplyConcatApply, GroupByBase):
 
         keys = ["chunk_funcs", "aggregate_funcs", "finalizers"]
         return dict(zip(keys, _build_agg_args(spec)))
-
-    @classmethod
-    def chunk(cls, df, *by, **kwargs):
-        return _groupby_apply_funcs(df, *by, **kwargs)
 
     @classmethod
     def combine(cls, inputs, **kwargs):
