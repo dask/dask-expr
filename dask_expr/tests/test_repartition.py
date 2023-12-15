@@ -40,57 +40,27 @@ def test_repartition_noop(type_ctor):
     df = from_pandas(pdf, npartitions=2)
     ds = df.x
 
+    def assert_not_repartitions(expr, fuse=False):
+        repartitions = [
+            x for x in expr.optimize(fuse=fuse).walk() if isinstance(x, Repartition)
+        ]
+        assert len(repartitions) == 0
+
     # DataFrame method
     df2 = df.repartition(divisions=type_ctor(df.divisions))
-    assert (
-        len(
-            [
-                x
-                for x in df2.expr.optimize(fuse=False).walk()
-                if isinstance(x, Repartition)
-            ]
-        )
-        == 0
-    )
+    assert_not_repartitions(df2.expr)
 
     # Top-level dask.dataframe method
     df3 = repartition(df, divisions=type_ctor(df.divisions))
-    assert (
-        len(
-            [
-                x
-                for x in df3.expr.optimize(fuse=False).walk()
-                if isinstance(x, Repartition)
-            ]
-        )
-        == 0
-    )
+    assert_not_repartitions(df3.expr)
 
     # Series method
     ds2 = ds.repartition(divisions=type_ctor(ds.divisions))
-    assert (
-        len(
-            [
-                x
-                for x in ds2.expr.optimize(fuse=False).walk()
-                if isinstance(x, Repartition)
-            ]
-        )
-        == 0
-    )
+    assert_not_repartitions(ds2.expr)
 
     # Top-level dask.dataframe method applied to a Series
     ds3 = repartition(ds, divisions=type_ctor(ds.divisions))
-    assert (
-        len(
-            [
-                x
-                for x in ds3.expr.optimize(fuse=False).walk()
-                if isinstance(x, Repartition)
-            ]
-        )
-        == 0
-    )
+    assert_not_repartitions(ds3.expr)
 
 
 def test_repartition_freq():
