@@ -1,3 +1,4 @@
+import re
 from collections import OrderedDict
 
 import dask
@@ -516,3 +517,23 @@ def test_rolling_groupby_projection():
     )
 
     assert actual.optimize()._name == (optimal.optimize()._name)
+
+
+def test_groupby_error(df):
+    with pytest.raises(KeyError):
+        df.groupby("A")
+
+    dp = df.groupby("y")
+
+    msg = "Column not found: "
+    with pytest.raises(KeyError, match=msg):
+        dp["A"]
+
+    msg = re.escape(
+        "DataFrameGroupBy does not allow compute method."
+        "Please chain it with an aggregation method (like ``.mean()``) or get a "
+        "specific group using ``.get_group()`` before calling ``compute()``"
+    )
+
+    with pytest.raises(NotImplementedError, match=msg):
+        dp.compute()

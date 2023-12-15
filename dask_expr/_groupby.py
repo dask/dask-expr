@@ -977,6 +977,14 @@ class GroupBy:
         self.dropna = dropna
         self.group_keys = group_keys
         self.by = [by] if np.isscalar(by) or isinstance(by, Expr) else list(by)
+        # surface pandas errors
+        self._meta = self.obj._meta.groupby(
+            by, group_keys=group_keys, sort=sort, observed=observed, dropna=dropna
+        )
+        if slice is not None:
+            if isinstance(slice, tuple):
+                slice = list(slice)
+            self._meta = self._meta[slice]
 
     def _numeric_only_kwargs(self, numeric_only):
         kwargs = {"numeric_only": numeric_only}
@@ -1010,6 +1018,13 @@ class GroupBy:
             return self[key]
         except KeyError as e:
             raise AttributeError(e) from e
+
+    def compute(self, **kwargs):
+        raise NotImplementedError(
+            "DataFrameGroupBy does not allow compute method."
+            "Please chain it with an aggregation method (like ``.mean()``) or get a "
+            "specific group using ``.get_group()`` before calling ``compute()``"
+        )
 
     def __getitem__(self, key):
         g = GroupBy(
