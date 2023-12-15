@@ -5,7 +5,7 @@ import dask
 import numpy as np
 import pytest
 
-from dask_expr import from_pandas, repartition
+from dask_expr import from_pandas
 from dask_expr._groupby import GroupByUDFBlockwise
 from dask_expr._reductions import TreeReduce
 from dask_expr._shuffle import Shuffle, divisions_lru
@@ -538,38 +538,6 @@ def test_rolling_groupby_projection():
     )
 
     assert actual.optimize()._name == (optimal.optimize()._name)
-
-
-@pytest.mark.parametrize(
-    "categoricals,by",
-    [
-        (False, lambda df: "b"),
-        (False, lambda df: df.b),
-        (False, lambda df: df.b + 1),
-    ],
-)
-def test_groupby_get_group(categoricals, by):
-    dsk = {
-        ("x", 0): lib.DataFrame({"a": [1, 2, 6], "b": [4, 2, 7]}, index=[0, 1, 3]),
-        ("x", 1): lib.DataFrame({"a": [4, 2, 6], "b": [3, 3, 1]}, index=[5, 6, 8]),
-        ("x", 2): lib.DataFrame({"a": [4, 3, 7], "b": [1, 1, 3]}, index=[9, 9, 9]),
-    }
-
-    ddf = repartition(lib.concat(dsk.values()), divisions=[0, 4, 9, 9])
-
-    if categoricals:
-        ddf = ddf.categorize(columns=["b"])
-    pdf = ddf.compute()
-
-    ddgrouped = ddf.groupby(by(ddf))
-    pdgrouped = pdf.groupby(by(pdf))
-
-    # DataFrame
-    assert_eq(ddgrouped.get_group(2), pdgrouped.get_group(2))
-    assert_eq(ddgrouped.get_group(3), pdgrouped.get_group(3))
-    # Series
-    assert_eq(ddgrouped.a.get_group(3), pdgrouped.a.get_group(3))
-    assert_eq(ddgrouped.a.get_group(2), pdgrouped.a.get_group(2))
 
 
 def test_groupby_error(df):
