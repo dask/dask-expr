@@ -475,6 +475,10 @@ class Unique(ApplyConcatApply):
         )
 
     @property
+    def split_by(self):
+        return self.columns
+
+    @property
     def chunk_kwargs(self):
         return {"series_name": self._meta.name}
 
