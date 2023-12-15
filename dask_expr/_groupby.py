@@ -560,15 +560,8 @@ class NUnique(SingleAggregation):
         return {"levels": self.levels}
 
 
-def nunique_series_chunk(df, by, **kwargs):
-    if not is_series_like(by) and not is_index_like(by):
-        return _nunique_series_chunk(df, *by, **kwargs)
-    else:
-        return _nunique_series_chunk(df, by, **kwargs)
-
-
 class NUniqueSeries(NUnique):
-    chunk = staticmethod(nunique_series_chunk)
+    chunk = staticmethod(_nunique_series_chunk)
     combine = staticmethod(nunique_df_combine)
     aggregate = staticmethod(nunique_df_aggregate)
 

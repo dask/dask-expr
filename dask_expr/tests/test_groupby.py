@@ -167,6 +167,7 @@ def test_groupby_nunique(df, pdf):
     pdf = pdf.add_prefix("x")
     df = from_pandas(pdf, npartitions=10)
     assert_eq(df.groupby("xx").xy.nunique(), pdf.groupby("xx").xy.nunique())
+    assert_eq(df.xx.groupby(df.xy).nunique(), pdf.xx.groupby(pdf.xy).nunique())
 
 
 def test_groupby_series(pdf, df):
