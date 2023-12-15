@@ -535,12 +535,18 @@ class HashJoinP2P(Merge, PartitionsFiltered):
 
         dsk = {}
         token_left = _tokenize_deterministic(
+            # Include self._name to ensure that shuffle IDs are unique for individual
+            # merge operations. Reusing shuffles between merges is dangerous because of
+            # required coordination and complexity introduced through dynamic clusters.
             self._name,
             self.left._name,
             self.shuffle_left_on,
             self.left_index,
         )
         token_right = _tokenize_deterministic(
+            # Include self._name to ensure that shuffle IDs are unique for individual
+            # merge operations. Reusing shuffles between merges is dangerous because of
+            # required coordination and complexity introduced through dynamic clusters.
             self._name,
             self.right._name,
             self.shuffle_right_on,
