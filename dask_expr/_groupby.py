@@ -1,5 +1,6 @@
 import functools
 import math
+import warnings
 
 import numpy as np
 from dask import is_dask_collection
@@ -1019,6 +1020,15 @@ class GroupBy:
         except KeyError as e:
             raise AttributeError(e) from e
 
+    def __dir__(self):
+        return sorted(
+            set(
+                dir(type(self))
+                + list(self.__dict__)
+                + list(filter(M.isidentifier, self.obj.columns))
+            )
+        )
+
     def compute(self, **kwargs):
         raise NotImplementedError(
             "DataFrameGroupBy does not allow compute method."
@@ -1171,7 +1181,19 @@ class GroupBy:
     def agg(self, *args, **kwargs):
         return self.aggregate(*args, **kwargs)
 
+    def _warn_if_no_meta(self, meta):
+        if meta is no_default:
+            msg = (
+                "`meta` is not specified, inferred from partial data. "
+                "Please provide `meta` if the result is unexpected.\n"
+                "  Before: .apply(func)\n"
+                "  After:  .apply(func, meta={'x': 'f8', 'y': 'f8'}) for dataframe result\n"
+                "  or:     .apply(func, meta=('x', 'f8'))            for series result"
+            )
+            warnings.warn(msg, stacklevel=3)
+
     def apply(self, func, meta=no_default, *args, **kwargs):
+        self._warn_if_no_meta(meta)
         return new_collection(
             GroupByApply(
                 self.obj.expr,
@@ -1204,9 +1226,11 @@ class GroupBy:
         )
 
     def transform(self, func, meta=no_default, *args, **kwargs):
+        self._warn_if_no_meta(meta)
         return self._transform_like_op(GroupByTransform, func, meta, *args, **kwargs)
 
     def shift(self, periods=1, meta=no_default, *args, **kwargs):
+        self._warn_if_no_meta(meta)
         kwargs = {"periods": periods, **kwargs}
         return self._transform_like_op(GroupByShift, None, meta, *args, **kwargs)
 

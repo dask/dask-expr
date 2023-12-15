@@ -537,3 +537,20 @@ def test_groupby_error(df):
 
     with pytest.raises(NotImplementedError, match=msg):
         dp.compute()
+
+
+def test_groupby_dir(df):
+    assert "y" in dir(df.groupby("x"))
+
+
+def test_groupby_udf_user_warning(df, pdf):
+    def func(df):
+        return df + 1
+
+    expected = pdf.groupby("x").apply(func)
+    with pytest.warns(UserWarning, match="`meta` is not specified"):
+        assert_eq(expected, df.groupby("x").apply(func))
+
+    expected = pdf.groupby("x").transform(func)
+    with pytest.warns(UserWarning, match="`meta` is not specified"):
+        assert_eq(expected, df.groupby("x").transform(func))
