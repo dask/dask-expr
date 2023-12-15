@@ -1323,7 +1323,11 @@ class Map(Elemwise):
     @functools.cached_property
     def _meta(self):
         if self.operand("meta") is None:
-            return self.frame._meta
+            args = [
+                meta_nonempty(op._meta) if isinstance(op, Expr) else op
+                for op in self._args
+            ]
+            return self.operation(*args, **self._kwargs)
         return make_meta(
             self.operand("meta"),
             parent_meta=self.frame._meta,
@@ -2042,12 +2046,15 @@ def is_broadcastable(s):
 
 def non_blockwise_ancestors(expr):
     """Traverse through tree to find ancestors that are not blockwise or are IO"""
+    from dask_expr._cumulative import CumulativeAggregations
+
     stack = [expr]
     while stack:
         e = stack.pop()
         if isinstance(e, IO):
             yield e
-        elif isinstance(e, Blockwise):
+        elif isinstance(e, (Blockwise, CumulativeAggregations)):
+            # TODO: Capture this in inheritance logic
             dependencies = e.dependencies()
             stack.extend([expr for expr in dependencies if not is_broadcastable(expr)])
         else:
