@@ -307,9 +307,7 @@ class GroupbyAggregation(GroupByApplyConcatApply, GroupByBase):
         return dict(zip(keys, _build_agg_args(spec)))
 
     @classmethod
-    def chunk(cls, df, by=None, **kwargs):
-        if hasattr(by, "dtype"):
-            by = [by]
+    def chunk(cls, df, *by, **kwargs):
         return _groupby_apply_funcs(df, *by, **kwargs)
 
     @classmethod
