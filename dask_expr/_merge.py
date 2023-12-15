@@ -537,10 +537,12 @@ class HashJoinP2P(Merge, PartitionsFiltered):
         token_left = _tokenize_deterministic(
             self._name,
             self.left._name,
+            self.shuffle_left_on,
         )
         token_right = _tokenize_deterministic(
             self._name,
             self.right._name,
+            self.shuffle_right_on,
         )
         _barrier_key_left = barrier_key(ShuffleId(token_left))
         _barrier_key_right = barrier_key(ShuffleId(token_right))
