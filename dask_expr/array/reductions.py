@@ -4,18 +4,20 @@ import builtins
 import math
 from functools import partial
 from itertools import product
-from numbers import Integral
+from numbers import Integral, Number
 
 import numpy as np
 from dask import config
 from dask.array import chunk
-from dask.array.core import _concatenate2, asanyarray, broadcast_to
+from dask.array.core import _concatenate2, asanyarray, broadcast_to, implements
 from dask.array.dispatch import divide_lookup, nannumel_lookup, numel_lookup
+from dask.array.reductions import array_safe
 from dask.array.utils import compute_meta, is_arraylike, validate_axis
 from dask.base import tokenize
 from dask.blockwise import lol_tuples
 from dask.utils import (
     cached_property,
+    deepmap,
     derived_from,
     funcname,
     getargspec,
@@ -398,6 +400,118 @@ def sum(a, axis=None, dtype=None, keepdims=False, split_every=None, out=None):
     return result
 
 
+@derived_from(np)
+def prod(a, axis=None, dtype=None, keepdims=False, split_every=None, out=None):
+    if dtype is not None:
+        dt = dtype
+    else:
+        dt = getattr(np.ones((1,), dtype=a.dtype).prod(), "dtype", object)
+    return reduction(
+        a,
+        chunk.prod,
+        chunk.prod,
+        axis=axis,
+        keepdims=keepdims,
+        dtype=dt,
+        split_every=split_every,
+        out=out,
+    )
+
+
+@implements(np.min, np.amin)
+@derived_from(np)
+def min(a, axis=None, keepdims=False, split_every=None, out=None):
+    return reduction(
+        a,
+        chunk_min,
+        chunk.min,
+        combine=chunk_min,
+        axis=axis,
+        keepdims=keepdims,
+        dtype=a.dtype,
+        split_every=split_every,
+        out=out,
+    )
+
+
+def chunk_min(x, axis=None, keepdims=None):
+    """Version of np.min which ignores size 0 arrays"""
+    if x.size == 0:
+        return array_safe([], x, ndmin=x.ndim, dtype=x.dtype)
+    else:
+        return np.min(x, axis=axis, keepdims=keepdims)
+
+
+@implements(np.max, np.amax)
+@derived_from(np)
+def max(a, axis=None, keepdims=False, split_every=None, out=None):
+    return reduction(
+        a,
+        chunk_max,
+        chunk.max,
+        combine=chunk_max,
+        axis=axis,
+        keepdims=keepdims,
+        dtype=a.dtype,
+        split_every=split_every,
+        out=out,
+    )
+
+
+def chunk_max(x, axis=None, keepdims=None):
+    """Version of np.max which ignores size 0 arrays"""
+    if x.size == 0:
+        return array_safe([], x, ndmin=x.ndim, dtype=x.dtype)
+    else:
+        return np.max(x, axis=axis, keepdims=keepdims)
+
+
+@derived_from(np)
+def any(a, axis=None, keepdims=False, split_every=None, out=None):
+    return reduction(
+        a,
+        chunk.any,
+        chunk.any,
+        axis=axis,
+        keepdims=keepdims,
+        dtype="bool",
+        split_every=split_every,
+        out=out,
+    )
+
+
+@derived_from(np)
+def all(a, axis=None, keepdims=False, split_every=None, out=None):
+    return reduction(
+        a,
+        chunk.all,
+        chunk.all,
+        axis=axis,
+        keepdims=keepdims,
+        dtype="bool",
+        split_every=split_every,
+        out=out,
+    )
+
+
+@derived_from(np)
+def nansum(a, axis=None, dtype=None, keepdims=False, split_every=None, out=None):
+    if dtype is not None:
+        dt = dtype
+    else:
+        dt = getattr(chunk.nansum(np.ones((1,), dtype=a.dtype)), "dtype", object)
+    return reduction(
+        a,
+        chunk.nansum,
+        chunk.sum,
+        axis=axis,
+        keepdims=keepdims,
+        dtype=dt,
+        split_every=split_every,
+        out=out,
+    )
+
+
 def divide(a, b, dtype=None):
     key = lambda x: getattr(x, "__array_priority__", float("-inf"))
     f = divide_lookup.dispatch(type(builtins.max(a, b, key=key)))
@@ -410,6 +524,426 @@ def numel(x, **kwargs):
 
 def nannumel(x, **kwargs):
     return nannumel_lookup(x, **kwargs)
+
+
+def mean_chunk(
+    x, sum=chunk.sum, numel=numel, dtype="f8", computing_meta=False, **kwargs
+):
+    if computing_meta:
+        return x
+    n = numel(x, dtype=dtype, **kwargs)
+
+    total = sum(x, dtype=dtype, **kwargs)
+
+    return {"n": n, "total": total}
+
+
+def mean_combine(
+    pairs,
+    sum=chunk.sum,
+    numel=numel,
+    dtype="f8",
+    axis=None,
+    computing_meta=False,
+    **kwargs,
+):
+    if not isinstance(pairs, list):
+        pairs = [pairs]
+
+    ns = deepmap(lambda pair: pair["n"], pairs) if not computing_meta else pairs
+    n = _concatenate2(ns, axes=axis).sum(axis=axis, **kwargs)
+
+    if computing_meta:
+        return n
+
+    totals = deepmap(lambda pair: pair["total"], pairs)
+    total = _concatenate2(totals, axes=axis).sum(axis=axis, **kwargs)
+
+    return {"n": n, "total": total}
+
+
+def mean_agg(pairs, dtype="f8", axis=None, computing_meta=False, **kwargs):
+    ns = deepmap(lambda pair: pair["n"], pairs) if not computing_meta else pairs
+    n = _concatenate2(ns, axes=axis)
+    n = np.sum(n, axis=axis, dtype=dtype, **kwargs)
+
+    if computing_meta:
+        return n
+
+    totals = deepmap(lambda pair: pair["total"], pairs)
+    total = _concatenate2(totals, axes=axis).sum(axis=axis, dtype=dtype, **kwargs)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return divide(total, n, dtype=dtype)
+
+
+@derived_from(np)
+def mean(a, axis=None, dtype=None, keepdims=False, split_every=None, out=None):
+    if dtype is not None:
+        dt = dtype
+    elif a.dtype == object:
+        dt = object
+    else:
+        dt = getattr(np.mean(np.zeros(shape=(1,), dtype=a.dtype)), "dtype", object)
+    return reduction(
+        a,
+        mean_chunk,
+        mean_agg,
+        axis=axis,
+        keepdims=keepdims,
+        dtype=dt,
+        split_every=split_every,
+        combine=mean_combine,
+        out=out,
+        concatenate=False,
+    )
+
+
+@derived_from(np)
+def nanmean(a, axis=None, dtype=None, keepdims=False, split_every=None, out=None):
+    if dtype is not None:
+        dt = dtype
+    else:
+        dt = getattr(np.mean(np.ones(shape=(1,), dtype=a.dtype)), "dtype", object)
+    return reduction(
+        a,
+        partial(mean_chunk, sum=chunk.nansum, numel=nannumel),
+        mean_agg,
+        axis=axis,
+        keepdims=keepdims,
+        dtype=dt,
+        split_every=split_every,
+        out=out,
+        concatenate=False,
+        combine=partial(mean_combine, sum=chunk.nansum, numel=nannumel),
+    )
+
+
+def moment_chunk(
+    A,
+    order=2,
+    sum=chunk.sum,
+    numel=numel,
+    dtype="f8",
+    computing_meta=False,
+    implicit_complex_dtype=False,
+    **kwargs,
+):
+    if computing_meta:
+        return A
+    n = numel(A, **kwargs)
+
+    n = n.astype(np.int64)
+    if implicit_complex_dtype:
+        total = sum(A, **kwargs)
+    else:
+        total = sum(A, dtype=dtype, **kwargs)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        u = total / n
+    d = A - u
+    if np.issubdtype(A.dtype, np.complexfloating):
+        d = np.abs(d)
+    xs = [sum(d**i, dtype=dtype, **kwargs) for i in range(2, order + 1)]
+    M = np.stack(xs, axis=-1)
+    return {"total": total, "n": n, "M": M}
+
+
+def _moment_helper(Ms, ns, inner_term, order, sum, axis, kwargs):
+    M = Ms[..., order - 2].sum(axis=axis, **kwargs) + sum(
+        ns * inner_term**order, axis=axis, **kwargs
+    )
+    for k in range(1, order - 1):
+        coeff = math.factorial(order) / (math.factorial(k) * math.factorial(order - k))
+        M += coeff * sum(Ms[..., order - k - 2] * inner_term**k, axis=axis, **kwargs)
+    return M
+
+
+def moment_combine(
+    pairs,
+    order=2,
+    ddof=0,
+    dtype="f8",
+    sum=np.sum,
+    axis=None,
+    computing_meta=False,
+    **kwargs,
+):
+    if not isinstance(pairs, list):
+        pairs = [pairs]
+
+    kwargs["dtype"] = None
+    kwargs["keepdims"] = True
+
+    ns = deepmap(lambda pair: pair["n"], pairs) if not computing_meta else pairs
+    ns = _concatenate2(ns, axes=axis)
+    n = ns.sum(axis=axis, **kwargs)
+
+    if computing_meta:
+        return n
+
+    totals = _concatenate2(deepmap(lambda pair: pair["total"], pairs), axes=axis)
+    Ms = _concatenate2(deepmap(lambda pair: pair["M"], pairs), axes=axis)
+
+    total = totals.sum(axis=axis, **kwargs)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        if np.issubdtype(total.dtype, np.complexfloating):
+            mu = divide(total, n)
+            inner_term = np.abs(divide(totals, ns) - mu)
+        else:
+            mu = divide(total, n, dtype=dtype)
+            inner_term = divide(totals, ns, dtype=dtype) - mu
+
+    xs = [
+        _moment_helper(Ms, ns, inner_term, o, sum, axis, kwargs)
+        for o in range(2, order + 1)
+    ]
+    M = np.stack(xs, axis=-1)
+    return {"total": total, "n": n, "M": M}
+
+
+def moment_agg(
+    pairs,
+    order=2,
+    ddof=0,
+    dtype="f8",
+    sum=np.sum,
+    axis=None,
+    computing_meta=False,
+    **kwargs,
+):
+    if not isinstance(pairs, list):
+        pairs = [pairs]
+
+    kwargs["dtype"] = dtype
+    # To properly handle ndarrays, the original dimensions need to be kept for
+    # part of the calculation.
+    keepdim_kw = kwargs.copy()
+    keepdim_kw["keepdims"] = True
+    keepdim_kw["dtype"] = None
+
+    ns = deepmap(lambda pair: pair["n"], pairs) if not computing_meta else pairs
+    ns = _concatenate2(ns, axes=axis)
+    n = ns.sum(axis=axis, **keepdim_kw)
+
+    if computing_meta:
+        return n
+
+    totals = _concatenate2(deepmap(lambda pair: pair["total"], pairs), axes=axis)
+    Ms = _concatenate2(deepmap(lambda pair: pair["M"], pairs), axes=axis)
+
+    mu = divide(totals.sum(axis=axis, **keepdim_kw), n)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        if np.issubdtype(totals.dtype, np.complexfloating):
+            inner_term = np.abs(divide(totals, ns) - mu)
+        else:
+            inner_term = divide(totals, ns, dtype=dtype) - mu
+
+    M = _moment_helper(Ms, ns, inner_term, order, sum, axis, kwargs)
+
+    denominator = n.sum(axis=axis, **kwargs) - ddof
+
+    # taking care of the edge case with empty or all-nans array with ddof > 0
+    if isinstance(denominator, Number):
+        if denominator < 0:
+            denominator = np.nan
+    elif denominator is not np.ma.masked:
+        denominator[denominator < 0] = np.nan
+
+    return divide(M, denominator, dtype=dtype)
+
+
+def moment(
+    a, order, axis=None, dtype=None, keepdims=False, ddof=0, split_every=None, out=None
+):
+    """Calculate the nth centralized moment.
+
+    Parameters
+    ----------
+    a : Array
+        Data over which to compute moment
+    order : int
+        Order of the moment that is returned, must be >= 2.
+    axis : int, optional
+        Axis along which the central moment is computed. The default is to
+        compute the moment of the flattened array.
+    dtype : data-type, optional
+        Type to use in computing the moment. For arrays of integer type the
+        default is float64; for arrays of float types it is the same as the
+        array type.
+    keepdims : bool, optional
+        If this is set to True, the axes which are reduced are left in the
+        result as dimensions with size one. With this option, the result
+        will broadcast correctly against the original array.
+    ddof : int, optional
+        "Delta Degrees of Freedom": the divisor used in the calculation is
+        N - ddof, where N represents the number of elements. By default
+        ddof is zero.
+
+    Returns
+    -------
+    moment : Array
+
+    References
+    ----------
+    .. [1] Pebay, Philippe (2008), "Formulas for Robust, One-Pass Parallel
+        Computation of Covariances and Arbitrary-Order Statistical Moments",
+        Technical Report SAND2008-6212, Sandia National Laboratories.
+
+    """
+    if not isinstance(order, Integral) or order < 0:
+        raise ValueError("Order must be an integer >= 0")
+
+    if order < 2:
+        # reduced = a.sum(axis=axis)  # get reduced shape and chunks
+        if order == 0:
+            raise NotImplementedError("need to implement ones")  # TODO
+            # When order equals 0, the result is 1, by definition.
+            # return ones(
+            #     reduced.shape, chunks=reduced.chunks, dtype="f8", meta=reduced._meta
+            # )
+        # By definition the first order about the mean is 0.
+        raise NotImplementedError("need to implement zeros")  # TODO
+        # return zeros(
+        #     reduced.shape, chunks=reduced.chunks, dtype="f8", meta=reduced._meta
+        # )
+
+    if dtype is not None:
+        dt = dtype
+    else:
+        dt = getattr(np.var(np.ones(shape=(1,), dtype=a.dtype)), "dtype", object)
+
+    implicit_complex_dtype = dtype is None and np.iscomplexobj(a)
+
+    return reduction(
+        a,
+        partial(
+            moment_chunk, order=order, implicit_complex_dtype=implicit_complex_dtype
+        ),
+        partial(moment_agg, order=order, ddof=ddof),
+        axis=axis,
+        keepdims=keepdims,
+        dtype=dt,
+        split_every=split_every,
+        out=out,
+        concatenate=False,
+        combine=partial(moment_combine, order=order),
+    )
+
+
+@derived_from(np)
+def var(a, axis=None, dtype=None, keepdims=False, ddof=0, split_every=None, out=None):
+    if dtype is not None:
+        dt = dtype
+    else:
+        dt = getattr(np.var(np.ones(shape=(1,), dtype=a.dtype)), "dtype", object)
+
+    implicit_complex_dtype = dtype is None and np.iscomplexobj(a._meta)
+
+    return reduction(
+        a,
+        partial(moment_chunk, implicit_complex_dtype=implicit_complex_dtype),
+        partial(moment_agg, ddof=ddof),
+        axis=axis,
+        keepdims=keepdims,
+        dtype=dt,
+        split_every=split_every,
+        combine=moment_combine,
+        name="var",
+        out=out,
+        concatenate=False,
+    )
+
+
+@derived_from(np)
+def nanvar(
+    a, axis=None, dtype=None, keepdims=False, ddof=0, split_every=None, out=None
+):
+    if dtype is not None:
+        dt = dtype
+    else:
+        dt = getattr(np.var(np.ones(shape=(1,), dtype=a.dtype)), "dtype", object)
+
+    implicit_complex_dtype = dtype is None and np.iscomplexobj(a)
+
+    return reduction(
+        a,
+        partial(
+            moment_chunk,
+            sum=chunk.nansum,
+            numel=nannumel,
+            implicit_complex_dtype=implicit_complex_dtype,
+        ),
+        partial(moment_agg, sum=np.nansum, ddof=ddof),
+        axis=axis,
+        keepdims=keepdims,
+        dtype=dt,
+        split_every=split_every,
+        combine=partial(moment_combine, sum=np.nansum),
+        out=out,
+        concatenate=False,
+    )
+
+
+def _sqrt(a):
+    o = np.sqrt(a)
+    if isinstance(o, np.ma.masked_array) and not o.shape and o.mask.all():
+        return np.ma.masked
+    return o
+
+
+def safe_sqrt(a):
+    """A version of sqrt that properly handles scalar masked arrays.
+
+    To mimic ``np.ma`` reductions, we need to convert scalar masked arrays that
+    have an active mask to the ``np.ma.masked`` singleton. This is properly
+    handled automatically for reduction code, but not for ufuncs. We implement
+    a simple version here, since calling `np.ma.sqrt` everywhere is
+    significantly more expensive.
+    """
+    if hasattr(a, "_elemwise"):
+        return a._elemwise(_sqrt, a)
+    return _sqrt(a)
+
+
+@derived_from(np)
+def std(a, axis=None, dtype=None, keepdims=False, ddof=0, split_every=None, out=None):
+    result = safe_sqrt(
+        var(
+            a,
+            axis=axis,
+            dtype=dtype,
+            keepdims=keepdims,
+            ddof=ddof,
+            split_every=split_every,
+            out=out,
+        )
+    )
+    if dtype and dtype != result.dtype:
+        result = result.astype(dtype)
+    return result
+
+
+@derived_from(np)
+def nanstd(
+    a, axis=None, dtype=None, keepdims=False, ddof=0, split_every=None, out=None
+):
+    result = safe_sqrt(
+        nanvar(
+            a,
+            axis=axis,
+            dtype=dtype,
+            keepdims=keepdims,
+            ddof=ddof,
+            split_every=split_every,
+            out=out,
+        )
+    )
+    if dtype and dtype != result.dtype:
+        result = result.astype(dtype)
+    return result
 
 
 from dask_expr.array.blockwise import blockwise

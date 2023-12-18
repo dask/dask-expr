@@ -876,8 +876,6 @@ def _choice_validate_params(state, a, size, replace, p, axis, chunks):
 
     if size is None:
         size = ()
-    elif not isinstance(size, (tuple, list)):
-        size = (size,)
 
     if axis != 0:
         raise ValueError("axis must be 0 since a is one dimensinal")
@@ -897,6 +895,8 @@ def _choice_validate_params(state, a, size, replace, p, axis, chunks):
 def _wrap_func(
     rng, funcname, *args, size=None, chunks="auto", extra_chunks=(), **kwargs
 ):
+    if size is not None and not isinstance(size, (tuple, list)):
+        size = (size,)
     return Random(rng, funcname, size, chunks, extra_chunks, args, kwargs)
 
 
@@ -914,11 +914,8 @@ class Random(IO):
 
     @property
     def chunks(self):
-        size = self.size
+        size = self.operand("size")
         chunks = self.operand("chunks")
-
-        if size is not None and not isinstance(size, (tuple, list)):
-            size = (size,)
 
         # shapes = list(
         #     {
@@ -1001,7 +998,7 @@ class Random(IO):
             gen,
             self.distribution,
             bitgens[0],  # TODO: not sure about this
-            (0,) * len(self.size),
+            (0,) * len(self.operand("size")),
             self.args,
             self.kwargs,
             # small_args,

@@ -2,6 +2,7 @@ import operator
 from typing import Union
 
 import dask.array as da
+import numpy as np
 from dask.base import DaskMethodsMixin, named_schedulers
 from dask.utils import cached_cumsum, cached_property
 from toolz import reduce
@@ -149,6 +150,137 @@ class Array(core.Expr, DaskMethodsMixin):
     def __rmul__(self, other):
         return elemwise(operator.mul, other, self)
 
+    def __sub__(self, other):
+        return elemwise(operator.sub, self, other)
+
+    def __rsub__(self, other):
+        return elemwise(operator.sub, other, self)
+
+    def __pow__(self, other):
+        return elemwise(operator.pow, self, other)
+
+    def __rpow__(self, other):
+        return elemwise(operator.pow, other, self)
+
+    def __truediv__(self, other):
+        return elemwise(operator.truediv, self, other)
+
+    def __rtruediv__(self, other):
+        return elemwise(operator.truediv, other, self)
+
+    def __floordiv__(self, other):
+        return elemwise(operator.floordiv, self, other)
+
+    def __rfloordiv__(self, other):
+        return elemwise(operator.floordiv, other, self)
+
+    def __array_ufunc__(self, numpy_ufunc, method, *inputs, **kwargs):
+        out = kwargs.get("out", ())
+        for x in inputs + out:
+            if da.core._should_delegate(self, x):
+                return NotImplemented
+
+        if method == "__call__":
+            if numpy_ufunc is np.matmul:
+                return NotImplemented
+            if numpy_ufunc.signature is not None:
+                return NotImplemented
+            if numpy_ufunc.nout > 1:
+                return NotImplemented
+            else:
+                return elemwise(numpy_ufunc, *inputs, **kwargs)
+        elif method == "outer":
+            return NotImplemented
+        else:
+            return NotImplemented
+
+    @cached_property
+    def size(self):
+        """Number of elements in array"""
+        return reduce(operator.mul, self.shape, 1)
+
+    def any(self, axis=None, keepdims=False, split_every=None, out=None):
+        """Returns True if any of the elements evaluate to True.
+
+        Refer to :func:`dask.array.any` for full documentation.
+
+        See Also
+        --------
+        dask.array.any : equivalent function
+        """
+        from dask_expr.array.reductions import any
+
+        return any(self, axis=axis, keepdims=keepdims, split_every=split_every, out=out)
+
+    def all(self, axis=None, keepdims=False, split_every=None, out=None):
+        """Returns True if all elements evaluate to True.
+
+        Refer to :func:`dask.array.all` for full documentation.
+
+        See Also
+        --------
+        dask.array.all : equivalent function
+        """
+        from dask_expr.array.reductions import all
+
+        return all(self, axis=axis, keepdims=keepdims, split_every=split_every, out=out)
+
+    def min(self, axis=None, keepdims=False, split_every=None, out=None):
+        """Return the minimum along a given axis.
+
+        Refer to :func:`dask.array.min` for full documentation.
+
+        See Also
+        --------
+        dask.array.min : equivalent function
+        """
+        from dask_expr.array.reductions import min
+
+        return min(self, axis=axis, keepdims=keepdims, split_every=split_every, out=out)
+
+    def max(self, axis=None, keepdims=False, split_every=None, out=None):
+        """Return the maximum along a given axis.
+
+        Refer to :func:`dask.array.max` for full documentation.
+
+        See Also
+        --------
+        dask.array.max : equivalent function
+        """
+        from dask_expr.array.reductions import max
+
+        return max(self, axis=axis, keepdims=keepdims, split_every=split_every, out=out)
+
+    def argmin(self, axis=None, *, keepdims=False, split_every=None, out=None):
+        """Return indices of the minimum values along the given axis.
+
+        Refer to :func:`dask.array.argmin` for full documentation.
+
+        See Also
+        --------
+        dask.array.argmin : equivalent function
+        """
+        from dask_expr.array.reductions import argmin
+
+        return argmin(
+            self, axis=axis, keepdims=keepdims, split_every=split_every, out=out
+        )
+
+    def argmax(self, axis=None, *, keepdims=False, split_every=None, out=None):
+        """Return indices of the maximum values along the given axis.
+
+        Refer to :func:`dask.array.argmax` for full documentation.
+
+        See Also
+        --------
+        dask.array.argmax : equivalent function
+        """
+        from dask_expr.array.reductions import argmax
+
+        return argmax(
+            self, axis=axis, keepdims=keepdims, split_every=split_every, out=out
+        )
+
     def sum(self, axis=None, dtype=None, keepdims=False, split_every=None, out=None):
         """
         Return the sum of the array elements over the given axis.
@@ -162,6 +294,123 @@ class Array(core.Expr, DaskMethodsMixin):
         from dask_expr.array.reductions import sum
 
         return sum(
+            self,
+            axis=axis,
+            dtype=dtype,
+            keepdims=keepdims,
+            split_every=split_every,
+            out=out,
+        )
+
+    def mean(self, axis=None, dtype=None, keepdims=False, split_every=None, out=None):
+        """Returns the average of the array elements along given axis.
+
+        Refer to :func:`dask.array.mean` for full documentation.
+
+        See Also
+        --------
+        dask.array.mean : equivalent function
+        """
+        from dask_expr.array.reductions import mean
+
+        return mean(
+            self,
+            axis=axis,
+            dtype=dtype,
+            keepdims=keepdims,
+            split_every=split_every,
+            out=out,
+        )
+
+    def std(
+        self, axis=None, dtype=None, keepdims=False, ddof=0, split_every=None, out=None
+    ):
+        """Returns the standard deviation of the array elements along given axis.
+
+        Refer to :func:`dask.array.std` for full documentation.
+
+        See Also
+        --------
+        dask.array.std : equivalent function
+        """
+        from dask_expr.array.reductions import std
+
+        return std(
+            self,
+            axis=axis,
+            dtype=dtype,
+            keepdims=keepdims,
+            ddof=ddof,
+            split_every=split_every,
+            out=out,
+        )
+
+    def var(
+        self, axis=None, dtype=None, keepdims=False, ddof=0, split_every=None, out=None
+    ):
+        """Returns the variance of the array elements, along given axis.
+
+        Refer to :func:`dask.array.var` for full documentation.
+
+        See Also
+        --------
+        dask.array.var : equivalent function
+        """
+        from dask_expr.array.reductions import var
+
+        return var(
+            self,
+            axis=axis,
+            dtype=dtype,
+            keepdims=keepdims,
+            ddof=ddof,
+            split_every=split_every,
+            out=out,
+        )
+
+    def moment(
+        self,
+        order,
+        axis=None,
+        dtype=None,
+        keepdims=False,
+        ddof=0,
+        split_every=None,
+        out=None,
+    ):
+        """Calculate the nth centralized moment.
+
+        Refer to :func:`dask.array.moment` for the full documentation.
+
+        See Also
+        --------
+        dask.array.moment : equivalent function
+        """
+        from dask_expr.array.reductions import moment
+
+        return moment(
+            self,
+            order,
+            axis=axis,
+            dtype=dtype,
+            keepdims=keepdims,
+            ddof=ddof,
+            split_every=split_every,
+            out=out,
+        )
+
+    def prod(self, axis=None, dtype=None, keepdims=False, split_every=None, out=None):
+        """Return the product of the array elements over the given axis
+
+        Refer to :func:`dask.array.prod` for full documentation.
+
+        See Also
+        --------
+        dask.array.prod : equivalent function
+        """
+        from dask_expr.array.reductions import prod
+
+        return prod(
             self,
             axis=axis,
             dtype=dtype,

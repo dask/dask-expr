@@ -1,3 +1,5 @@
+import operator
+
 import numpy as np
 import pytest
 from dask.array.utils import assert_eq
@@ -145,9 +147,59 @@ def test_random():
     assert_eq(x, x)
 
 
-def test_reductions():
+@pytest.mark.parametrize(
+    "reduction",
+    ["sum", "mean", "var", "std", "any", "all", "prod", "min", "max"],
+)
+def test_reductions(reduction):
     a = np.random.random((10, 20))
     b = da.from_array(a, chunks=(2, 5))
 
-    assert_eq(b.sum(), a.sum())
-    assert_eq(b.sum(axis=1), a.sum(axis=1))
+    def func(x, **kwargs):
+        return getattr(x, reduction)(**kwargs)
+
+    assert_eq(func(a), func(b))
+    assert_eq(func(a, axis=1), func(b, axis=1))
+
+
+@pytest.mark.parametrize(
+    "reduction",
+    ["nanmean", "nansum"],
+)
+def test_reduction_functions(reduction):
+    a = np.random.random((10, 20))
+    b = da.from_array(a, chunks=(2, 5))
+
+    def func(x, **kwargs):
+        if isinstance(x, np.ndarray):
+            return getattr(np, reduction)(x, **kwargs)
+        else:
+            return getattr(da, reduction)(x, **kwargs)
+
+    func(b).chunks
+
+    assert_eq(func(a), func(b))
+    assert_eq(func(a, axis=1), func(b, axis=1))
+
+
+@pytest.mark.parametrize(
+    "ufunc",
+    [np.sqrt, np.sin, np.exp],
+)
+def test_ufunc(ufunc):
+    a = np.random.random((10, 20))
+    b = da.from_array(a, chunks=(2, 5))
+    assert_eq(ufunc(a), ufunc(b))
+
+
+@pytest.mark.parametrize(
+    "op",
+    [operator.add, operator.sub, operator.pow, operator.floordiv, operator.truediv],
+)
+def test_binop(op):
+    a = np.random.random((10, 20))
+    b = np.random.random(20)
+    aa = da.from_array(a, chunks=(2, 5))
+    bb = da.from_array(b, chunks=5)
+
+    assert_eq(op(a, b), op(aa, bb))
