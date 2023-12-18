@@ -5,7 +5,7 @@ import inspect
 import warnings
 from collections.abc import Callable, Hashable, Mapping
 from numbers import Integral, Number
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 import numpy as np
 import pandas as pd
@@ -860,6 +860,9 @@ for op in [
 class DataFrame(FrameBase):
     """DataFrame-like Expr Collection"""
 
+    _accessors: ClassVar[set[str]] = set()
+    _partition_type = pd.DataFrame
+
     @property
     def shape(self):
         return self.size / max(len(self.columns), 1), len(self.columns)
@@ -1021,7 +1024,7 @@ class DataFrame(FrameBase):
         )
 
     def groupby(
-        self, by, group_keys=None, sort=None, observed=None, dropna=None, **kwargs
+        self, by, group_keys=True, sort=None, observed=None, dropna=None, **kwargs
     ):
         from dask_expr._groupby import GroupBy
 
@@ -1449,6 +1452,9 @@ class DataFrame(FrameBase):
 class Series(FrameBase):
     """Series-like Expr Collection"""
 
+    _accessors: ClassVar[set[str]] = set()
+    _partition_type = pd.Series
+
     @property
     def shape(self):
         return (self.size,)
@@ -1461,6 +1467,9 @@ class Series(FrameBase):
         o = set(dir(type(self)))
         o.update(self.__dict__)
         o.update(set(dir(expr.Expr)))
+        for accessor in ["cat", "str"]:
+            if not hasattr(self._meta, accessor):
+                o.remove(accessor)
         return list(o)
 
     @property
@@ -1654,6 +1663,9 @@ for name in [
 class Index(Series):
     """Index-like Expr Collection"""
 
+    _accessors: ClassVar[set[str]] = set()
+    _partition_type = pd.Index
+
     _dt_attributes = {
         "nanosecond",
         "microsecond",
@@ -1736,6 +1748,9 @@ class Index(Series):
         o = set(dir(type(self)))
         o.update(self.__dict__)
         o.update(set(dir(expr.Expr)))
+        o.update(self._dt_attributes)
+        if isinstance(self.dtype, pd.CategoricalDtype):
+            o.update(self._cat_attributes)
         return list(o)
 
 

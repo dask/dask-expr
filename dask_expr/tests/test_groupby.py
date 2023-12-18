@@ -34,7 +34,8 @@ def test_groupby_unsupported_by(pdf, df):
 
 @pytest.mark.parametrize("split_every", [None, 5])
 @pytest.mark.parametrize(
-    "api", ["sum", "mean", "min", "max", "prod", "first", "last", "var", "std"]
+    "api",
+    ["sum", "mean", "min", "max", "prod", "first", "last", "var", "std", "idxmin"],
 )
 @pytest.mark.parametrize(
     "numeric_only",
@@ -156,6 +157,19 @@ def test_groupby_mean_slice(pdf, df):
     assert_eq(agg, expect)
 
 
+def test_groupby_agg_grouper_single(pdf):
+    pdf = pdf[["x"]]
+    df = from_pandas(pdf, npartitions=2)
+
+    result = df.groupby("x")["x"].agg(["min", "max"])
+    expected = pdf.groupby("x")["x"].agg(["min", "max"])
+    assert_eq(result, expected)
+
+    result = df.groupby("x")[["x"]].agg(["min", "max"])
+    expected = pdf.groupby("x")[["x"]].agg(["min", "max"])
+    assert_eq(result, expected)
+
+
 def test_groupby_slice_agg_reduces(df, pdf):
     result = df.groupby("x")["y"].agg(["min", "max"])
     expected = pdf.groupby("x")["y"].agg(["min", "max"])
@@ -190,6 +204,21 @@ def test_groupby_series(pdf, df):
         df.groupby(df2.a)
 
 
+@pytest.mark.parametrize("group_keys", [True, False, None])
+def test_groupby_group_keys(group_keys, pdf):
+    pdf = pdf.set_index("x")
+    df = from_pandas(pdf, npartitions=10)
+
+    func = lambda g: g.copy()
+    expected = pdf.groupby("x").apply(func)
+    assert_eq(expected, df.groupby("x").apply(func, meta=expected))
+
+    expected = pdf.groupby("x", group_keys=group_keys).apply(func)
+    assert_eq(
+        expected, df.groupby("x", group_keys=group_keys).apply(func, meta=expected)
+    )
+
+
 @pytest.mark.parametrize(
     "spec",
     [
@@ -212,6 +241,16 @@ def test_groupby_agg(pdf, df, spec):
     agg = g.agg(spec)
 
     expect = pdf.groupby(["x", "y"]).agg(spec)
+    assert_eq(agg, expect)
+
+
+@pytest.mark.parametrize("numeric_only", [True, False])
+@pytest.mark.parametrize("api", ["cov", "corr"])
+def test_groupby_cov(api, df, pdf, numeric_only):
+    g = df.groupby("x")
+    agg = getattr(g, api)(numeric_only=numeric_only)
+
+    expect = getattr(pdf.groupby("x"), api)(numeric_only=numeric_only)
     assert_eq(agg, expect)
 
 
@@ -380,6 +419,10 @@ def test_groupby_shift(df, pdf):
     assert_eq(query, pdf.groupby("x")[["y"]].shift(periods=1))
 
 
+def test_size(pdf, df):
+    assert_eq(df.groupby("x").agg("size"), pdf.groupby("x").agg("size"))
+
+
 @pytest.mark.parametrize(
     "api", ["sum", "mean", "min", "max", "prod", "var", "std", "size"]
 )
@@ -480,6 +523,14 @@ def test_numeric_column_names():
     )
 
 
+def test_apply_divisions(pdf):
+    pdf = pdf.set_index("x")
+    df = from_pandas(pdf, npartitions=10)
+    result = df.groupby(["x", "y"]).apply(lambda x: x)
+    assert df.divisions == result.divisions
+    assert_eq(result, pdf.groupby(["x", "y"]).apply(lambda x: x))
+
+
 def test_groupby_co_aligned_grouper(df, pdf):
     assert_eq(
         df[["y"]].groupby(df["x"]).sum(),
@@ -572,6 +623,27 @@ def test_groupby_rolling():
     actual = ddf.groupby("group1").column1.rolling("1D").mean()
 
     assert_eq(expected, actual, check_divisions=False)
+
+    # Integer window w/ DateTimeIndex
+    expected = df.groupby("group1").rolling(1).sum()
+    actual = ddf.groupby("group1").rolling(1).sum()
+    assert_eq(expected, actual, check_divisions=False)
+
+    # Integer window w/o DateTimeIndex
+    expected = df.reset_index(drop=True).groupby("group1").rolling(1).sum()
+    actual = (
+        from_pandas(df.reset_index(drop=True), npartitions=10)
+        .groupby("group1")
+        .rolling(1)
+        .sum()
+    )
+    assert_eq(expected, actual, check_divisions=False)
+
+    # Integer window fails w/ datetime in groupby
+    with pytest.raises(lib.errors.DataError, match="Cannot aggregate non-numeric type"):
+        df.reset_index().groupby("group1").rolling(1).sum()
+    with pytest.raises(lib.errors.DataError, match="Cannot aggregate non-numeric type"):
+        from_pandas(df.reset_index(), npartitions=10).groupby("group1").rolling(1).sum()
 
 
 def test_rolling_groupby_projection():
