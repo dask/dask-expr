@@ -1423,8 +1423,8 @@ class SeriesGroupBy(GroupBy):
         if isinstance(obj, Series):
             if isinstance(by, FrameBase):
                 obj._meta.groupby(by._meta, **_as_dict("observed", observed))
-            elif isinstance(
-                by, (list, tuple) and any(isinstance(x, FrameBase) for x in by)
+            elif isinstance(by, (list, tuple)) and any(
+                isinstance(x, FrameBase) for x in by
             ):
                 metas = [x._meta if isinstance(x, FrameBase) else x for x in by]
                 obj._meta.groupby(metas, **_as_dict("observed", observed))
