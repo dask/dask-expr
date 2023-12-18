@@ -588,9 +588,9 @@ def nunique_df_aggregate(dfs, levels, name, sort=False):
     df = concat(dfs)
     if df.ndim == 1:
         # split out reduces to a Series
-        return df.groupby(level=levels, sort=sort).nunique()
+        return df.groupby(level=levels, sort=sort, observed=True).nunique()
     else:
-        return df.groupby(level=levels, sort=sort)[name].nunique()
+        return df.groupby(level=levels, sort=sort, observed=True)[name].nunique()
 
 
 class NUnique(SingleAggregation):
@@ -1034,7 +1034,7 @@ class GroupBy:
 
         self.obj = obj[projection] if projection is not None else obj
         self.sort = sort
-        self.observed = observed
+        self.observed = observed if observed is not None else False
         self.dropna = dropna
         self.group_keys = group_keys
         self.by = [by] if np.isscalar(by) or isinstance(by, Expr) else list(by)
@@ -1426,7 +1426,7 @@ class SeriesGroupBy(GroupBy):
                 or isinstance(by, (list, tuple))
                 and any(isinstance(x, FrameBase) for x in by)
             ):
-                pass
+                obj._meta.groupby(by._meta, **_as_dict("observed", observed))
             elif isinstance(by, list):
                 if len(by) == 0:
                     raise ValueError("No group keys passed!")
