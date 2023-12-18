@@ -27,6 +27,7 @@ from dask_expr._expr import (
     Index,
     Projection,
     RenameFrame,
+    RenameSeries,
     ResetIndex,
     ToFrame,
 )
@@ -161,7 +162,12 @@ class ShuffleReduce(Expr):
 
         # Make sure we have dataframe-like data to shuffle
         if split_by_index:
-            chunked = ResetIndex(self.frame, drop=False)
+            if self.frame.ndim == 1:
+                chunked = ResetIndex(self.frame, drop=False, name=self.frame.name)
+            else:
+                chunked = ResetIndex(self.frame, drop=False)
+            if split_by == [None]:
+                split_by = ["index"]
         elif is_index_like(self.frame._meta) or is_series_like(self.frame._meta):
             chunked = ToFrame(self.frame, name=columns[0])
         else:
@@ -208,7 +214,12 @@ class ShuffleReduce(Expr):
         if is_series_like(self._meta):
             shuffled = shuffled[shuffled.columns[0]]
         elif is_index_like(self._meta):
-            shuffled = shuffled.index
+            column = shuffled.columns[0]
+            shuffled = Index(
+                SetIndexBlockwise(shuffled, column, True, shuffled.divisions)
+            )
+            if column == "__index__":
+                shuffled = RenameSeries(shuffled, self.frame._meta.name)
 
         # Blockwise aggregate
         result = Aggregate(
@@ -269,12 +280,18 @@ class TreeReduce(Expr):
     def __dask_postcompute__(self):
         return toolz.first, ()
 
+    @functools.cached_property
+    def split_every(self):
+        if self.operand("split_every") is None:
+            return 8
+        return self.operand("split_every")
+
     def _layer(self):
         # apply combine to batches of intermediate results
         j = 1
         d = {}
         keys = self.frame.__dask_keys__()
-        split_every = getattr(self, "split_every", 0)
+        split_every = self.split_every
         while len(keys) > 1:
             new_keys = []
             for i, batch in enumerate(
@@ -363,10 +380,6 @@ class ApplyConcatApply(Expr):
         else:
             return 1
 
-    @property
-    def split_by(self):
-        return None
-
     def _layer(self):
         # This is an abstract expression
         raise NotImplementedError()
@@ -392,6 +405,8 @@ class ApplyConcatApply(Expr):
         return make_meta(meta)
 
     def _divisions(self):
+        if getattr(self, "sort", False):
+            return (None, None)
         if self.split_out is True:
             return (None,) * (self.frame.npartitions + 1)
         return (None,) * (self.split_out + 1)
@@ -419,7 +434,7 @@ class ApplyConcatApply(Expr):
             combine_kwargs = aggregate_kwargs
 
         sort = getattr(self, "sort", False)
-        split_every = getattr(self, "split_every", 0)
+        split_every = getattr(self, "split_every", None)
         chunked = self._chunk_cls(
             self.frame, type(self), chunk, chunk_kwargs, *self._chunk_cls_args
         )
@@ -453,7 +468,8 @@ class ApplyConcatApply(Expr):
 
 
 class Unique(ApplyConcatApply):
-    _parameters = ["frame"]
+    _parameters = ["frame", "split_every", "split_out"]
+    _defaults = {"split_every": None, "split_out": True}
     chunk = staticmethod(methods.unique)
     aggregate_func = staticmethod(methods.unique)
 
@@ -462,6 +478,10 @@ class Unique(ApplyConcatApply):
         return self.chunk(
             meta_nonempty(self.frame._meta), series_name=self.frame._meta.name
         )
+
+    @property
+    def split_by(self):
+        return self.name
 
     @property
     def chunk_kwargs(self):
@@ -488,8 +508,13 @@ class Unique(ApplyConcatApply):
 
 
 class DropDuplicates(Unique):
-    _parameters = ["frame", "subset", "ignore_index", "split_out"]
-    _defaults = {"subset": None, "ignore_index": False, "split_out": 1}
+    _parameters = ["frame", "subset", "ignore_index", "split_every", "split_out"]
+    _defaults = {
+        "subset": None,
+        "ignore_index": False,
+        "split_every": None,
+        "split_out": 1,
+    }
     chunk = M.drop_duplicates
     aggregate_func = M.drop_duplicates
 
@@ -699,7 +724,13 @@ class Reduction(ApplyConcatApply):
 
 
 class Sum(Reduction):
-    _parameters = ["frame", "skipna", "numeric_only", "min_count"]
+    _parameters = ["frame", "skipna", "numeric_only", "min_count", "split_every"]
+    _defaults = {
+        "split_every": False,
+        "numeric_only": False,
+        "min_count": 0,
+        "skipna": True,
+    }
     reduction_chunk = M.sum
 
     @property
@@ -712,7 +743,13 @@ class Sum(Reduction):
 
 
 class Prod(Reduction):
-    _parameters = ["frame", "skipna", "numeric_only", "min_count"]
+    _parameters = ["frame", "skipna", "numeric_only", "min_count", "split_every"]
+    _defaults = {
+        "split_every": False,
+        "numeric_only": False,
+        "min_count": 0,
+        "skipna": True,
+    }
     reduction_chunk = M.prod
 
     @property
@@ -725,7 +762,13 @@ class Prod(Reduction):
 
 
 class Max(Reduction):
-    _parameters = ["frame", "skipna"]
+    _parameters = ["frame", "skipna", "numeric_only", "min_count", "split_every"]
+    _defaults = {
+        "split_every": False,
+        "numeric_only": False,
+        "min_count": 0,
+        "skipna": True,
+    }
     reduction_chunk = M.max
 
     @property
@@ -735,8 +778,13 @@ class Max(Reduction):
         )
 
 
+class Min(Max):
+    reduction_chunk = M.min
+
+
 class Any(Reduction):
-    _parameters = ["frame", "skipna"]
+    _parameters = ["frame", "skipna", "split_every"]
+    _defaults = {"skipna": True, "split_every": False}
     reduction_chunk = M.any
 
     @property
@@ -747,7 +795,8 @@ class Any(Reduction):
 
 
 class All(Reduction):
-    _parameters = ["frame", "skipna"]
+    _parameters = ["frame", "skipna", "split_every"]
+    _defaults = {"split_every": False}
     reduction_chunk = M.all
 
     @property
@@ -806,7 +855,7 @@ class Len(Reduction):
             return sum(Len(obj) for obj in self.frame.dependencies())
 
         # Drop all of the columns, just pass through the index
-        if len(self.frame.columns):
+        if self.frame.ndim == 2 and len(self.frame.columns):
             return Len(self.frame.index)
 
     def _simplify_up(self, parent):
@@ -924,17 +973,13 @@ class Mean(Reduction):
 
 
 class Count(Reduction):
-    _parameters = ["frame", "numeric_only"]
-    split_every = 16
+    _parameters = ["frame", "numeric_only", "split_every"]
+    _defaults = {"split_every": False}
     reduction_chunk = M.count
 
     @classmethod
     def reduction_aggregate(cls, df):
         return df.sum().astype("int64")
-
-
-class Min(Max):
-    reduction_chunk = M.min
 
 
 class Mode(ApplyConcatApply):
@@ -944,10 +989,9 @@ class Mode(ApplyConcatApply):
     to ApplyConcatApply
     """
 
-    _parameters = ["frame", "dropna"]
-    _defaults = {"dropna": True}
+    _parameters = ["frame", "dropna", "split_every"]
+    _defaults = {"dropna": True, "split_every": False}
     chunk = M.value_counts
-    split_every = 16
 
     @classmethod
     def combine(cls, results: list[pd.Series]):
@@ -961,7 +1005,6 @@ class Mode(ApplyConcatApply):
         [df] = results
         max = df.max(skipna=dropna)
         out = df[df == max].index.to_series().sort_values().reset_index(drop=True)
-        out.name = results[0].name
         return out
 
     @property
@@ -1072,9 +1115,19 @@ class ValueCounts(ReductionConstantDim):
         "ascending": False,
         "dropna": True,
         "normalize": False,
+        "split_every": None,
+        "split_out": 1,
     }
 
-    _parameters = ["frame", "sort", "ascending", "dropna", "normalize"]
+    _parameters = [
+        "frame",
+        "sort",
+        "ascending",
+        "dropna",
+        "normalize",
+        "split_every",
+        "split_out",
+    ]
     reduction_chunk = M.value_counts
     reduction_aggregate = methods.value_counts_aggregate
     reduction_combine = methods.value_counts_combine
@@ -1087,6 +1140,10 @@ class ValueCounts(ReductionConstantDim):
     def aggregate_kwargs(self):
         return {**self.chunk_kwargs, "normalize": self.normalize}
 
+    @property
+    def combine_kwargs(self):
+        return self.chunk_kwargs
+
     def _simplify_up(self, parent):
         # We are already a Series
         return
@@ -1095,6 +1152,7 @@ class ValueCounts(ReductionConstantDim):
 class MemoryUsage(Reduction):
     reduction_chunk = M.memory_usage
     reduction_aggregate = M.sum
+    split_every = 0
 
     def _divisions(self):
         # TODO: We can do better, but not high priority

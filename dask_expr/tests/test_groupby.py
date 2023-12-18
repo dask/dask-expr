@@ -1,10 +1,15 @@
+import re
+from collections import OrderedDict
+
+import dask
 import numpy as np
 import pytest
 
 from dask_expr import from_pandas
 from dask_expr._groupby import GroupByUDFBlockwise
 from dask_expr._reductions import TreeReduce
-from dask_expr._shuffle import Shuffle
+from dask_expr._shuffle import Shuffle, divisions_lru
+from dask_expr.io import FromPandas
 from dask_expr.tests._util import _backend_library, assert_eq, xfail_gpu
 
 # Set DataFrame backend for this module
@@ -27,6 +32,7 @@ def test_groupby_unsupported_by(pdf, df):
     assert_eq(df.groupby(df.x).sum(), pdf.groupby(pdf.x).sum())
 
 
+@pytest.mark.parametrize("split_every", [None, 5])
 @pytest.mark.parametrize(
     "api", ["sum", "mean", "min", "max", "prod", "first", "last", "var", "std"]
 )
@@ -37,11 +43,11 @@ def test_groupby_unsupported_by(pdf, df):
         False,
     ],
 )
-def test_groupby_numeric(pdf, df, api, numeric_only):
+def test_groupby_numeric(pdf, df, api, numeric_only, split_every):
     if not numeric_only and api in {"var", "std"}:
         pytest.xfail("not implemented")
     g = df.groupby("x")
-    agg = getattr(g, api)(numeric_only=numeric_only)
+    agg = getattr(g, api)(numeric_only=numeric_only, split_every=split_every)
 
     expect = getattr(pdf.groupby("x"), api)(numeric_only=numeric_only)
     assert_eq(agg, expect)
@@ -58,6 +64,22 @@ def test_groupby_numeric(pdf, df, api, numeric_only):
     expect = getattr(pdf.groupby("x"), api)(numeric_only=numeric_only)["y"]
     assert_eq(agg, expect)
 
+    g = df.groupby([df.x])
+    agg = getattr(g, api)(numeric_only=numeric_only)["y"]
+
+    expect = getattr(pdf.groupby([pdf.x]), api)(numeric_only=numeric_only)["y"]
+    assert_eq(agg, expect)
+
+    g = df.groupby([df.x, df.z])
+    agg = getattr(g, api)()
+    expect = getattr(pdf.groupby([pdf.x, pdf.z]), api)(numeric_only=numeric_only)
+    assert_eq(agg, expect)
+
+    g = df.groupby([df.x, "z"])
+    agg = getattr(g, api)()
+    expect = getattr(pdf.groupby([pdf.x, "z"]), api)(numeric_only=numeric_only)
+    assert_eq(agg, expect)
+
     pdf = pdf.set_index("x")
     df = from_pandas(pdf, npartitions=10, sort=False)
     g = df.groupby("x")
@@ -69,6 +91,33 @@ def test_groupby_numeric(pdf, df, api, numeric_only):
     agg = getattr(g, api)()
     expect = getattr(pdf.groupby(["x", "z"]), api)(numeric_only=numeric_only)
     assert_eq(agg, expect)
+
+
+def test_groupby_reduction_optimize(pdf, df):
+    df = df.replace(1, 5)
+    agg = df.groupby(df.x).y.sum()
+    expected_query = df[["x", "y"]]
+    expected_query = expected_query.groupby(expected_query.x).y.sum()
+    assert agg.optimize()._name == expected_query.optimize()._name
+    expect = pdf.replace(1, 5).groupby(["x"]).y.sum()
+    assert_eq(agg, expect)
+
+    df2 = df[["y"]]
+    agg = df2.groupby(df.x).y.sum()
+    ops = [
+        op for op in agg.expr.optimize(fuse=False).walk() if isinstance(op, FromPandas)
+    ]
+    assert len(ops) == 1
+    assert ops[0].columns == ["x", "y"]
+
+    df2 = df[["y"]]
+    agg = df2.groupby(df.x).y.apply(lambda x: x)
+    ops = [
+        op for op in agg.expr.optimize(fuse=False).walk() if isinstance(op, FromPandas)
+    ]
+    assert len(ops) == 1
+    assert ops[0].columns == ["x", "y"]
+    assert_eq(agg, pdf.replace(1, 5).groupby(pdf.replace(1, 5).x).y.apply(lambda x: x))
 
 
 @pytest.mark.parametrize(
@@ -107,14 +156,25 @@ def test_groupby_mean_slice(pdf, df):
     assert_eq(agg, expect)
 
 
+def test_groupby_slice_agg_reduces(df, pdf):
+    result = df.groupby("x")["y"].agg(["min", "max"])
+    expected = pdf.groupby("x")["y"].agg(["min", "max"])
+    assert_eq(result, expected)
+
+
 def test_groupby_nunique(df, pdf):
-    with pytest.raises(AssertionError):
+    with pytest.raises(AttributeError):
         df.groupby("x").nunique()
 
     assert_eq(df.groupby("x").y.nunique(split_out=1), pdf.groupby("x").y.nunique())
     assert_eq(df.groupby("x").y.nunique(split_out=True), pdf.groupby("x").y.nunique())
     assert df.groupby("x").y.nunique().npartitions == df.npartitions
     assert_eq(df.y.groupby(df.x).nunique(split_out=1), pdf.y.groupby(pdf.x).nunique())
+
+    pdf = pdf.add_prefix("x")
+    df = from_pandas(pdf, npartitions=10)
+    assert_eq(df.groupby("xx").xy.nunique(), pdf.groupby("xx").xy.nunique())
+    assert_eq(df.xx.groupby(df.xy).nunique(), pdf.xx.groupby(pdf.xy).nunique())
 
 
 def test_groupby_series(pdf, df):
@@ -126,7 +186,7 @@ def test_groupby_series(pdf, df):
 
     df2 = from_pandas(lib.DataFrame({"a": [1, 2, 3]}), npartitions=2)
 
-    with pytest.raises(ValueError, match="DataFrames columns"):
+    with pytest.raises(NotImplementedError, match="DataFrames columns"):
         df.groupby(df2.a)
 
 
@@ -146,6 +206,12 @@ def test_groupby_agg(pdf, df, spec):
     agg = g.agg(spec)
 
     expect = pdf.groupby("x").agg(spec)
+    assert_eq(agg, expect)
+
+    g = df.groupby(["x", "y"])
+    agg = g.agg(spec)
+
+    expect = pdf.groupby(["x", "y"]).agg(spec)
     assert_eq(agg, expect)
 
 
@@ -229,6 +295,23 @@ def test_split_out_automatically():
     assert_eq(q, expected)
 
 
+def test_split_out_sort_values_compute(pdf, df):
+    divisions_lru.data = OrderedDict()
+    result = df.groupby("x").sum(split_out=2).sort_values(by="y").compute()
+    assert len(divisions_lru.data) == 0
+    expected = pdf.groupby("x").sum().sort_values(by="y")
+    assert_eq(result, expected)
+
+
+def test_groupby_repartition_to_one(pdf, df):
+    df = from_pandas(pdf, npartitions=25)
+    result = (
+        df.groupby("x", sort=True).sum(split_out=2).repartition(npartitions=1).compute()
+    )
+    expected = pdf.groupby("x").sum()
+    assert_eq(result, expected)
+
+
 def test_groupby_apply(df, pdf):
     def test(x):
         x["new"] = x.sum().sum()
@@ -244,6 +327,7 @@ def test_groupby_apply(df, pdf):
         df.groupby("x").apply(test, meta=pdf.groupby("x").apply(test).head(0)),
         pdf.groupby("x").apply(test),
     )
+    assert_eq(df.groupby(["x", "y"]).apply(test), pdf.groupby(["x", "y"]).apply(test))
 
     query = df.groupby("x").apply(test).optimize(fuse=False)
     assert query.expr.find_operations(Shuffle)
@@ -296,7 +380,9 @@ def test_groupby_shift(df, pdf):
     assert_eq(query, pdf.groupby("x")[["y"]].shift(periods=1))
 
 
-@pytest.mark.parametrize("api", ["sum", "mean", "min", "max", "prod", "var", "std"])
+@pytest.mark.parametrize(
+    "api", ["sum", "mean", "min", "max", "prod", "var", "std", "size"]
+)
 @pytest.mark.parametrize("sort", [True, False])
 @pytest.mark.parametrize("split_out", [1, 2])
 def test_groupby_single_agg_split_out(pdf, df, api, sort, split_out):
@@ -310,6 +396,37 @@ def test_groupby_single_agg_split_out(pdf, df, api, sort, split_out):
     agg = getattr(g, api)(split_out=split_out)
     expect = getattr(pdf.y.groupby(pdf.x, sort=sort), api)()
     assert_eq(agg, expect, sort_results=not sort)
+
+    g = df.y.groupby([df.x, df.z], sort=sort)
+    agg = getattr(g, api)(split_out=split_out)
+    expect = getattr(pdf.y.groupby([pdf.x, pdf.z], sort=sort), api)()
+    assert_eq(agg, expect, sort_results=not sort)
+
+
+@pytest.mark.parametrize(
+    "func",
+    [
+        lambda grouped: grouped.apply(lambda x: x.sum()),
+        lambda grouped: grouped.transform(lambda x: x.sum()),
+    ],
+)
+def test_apply_or_transform_shuffle_multilevel(pdf, df, func):
+    grouper = lambda df: [df["x"] + 1, df["y"] + 1]
+
+    with pytest.warns(UserWarning):
+        # DataFrameGroupBy
+        assert_eq(func(df.groupby(grouper(df))), func(pdf.groupby(grouper(pdf))))
+
+        # SeriesGroupBy
+        assert_eq(
+            func(df.groupby(grouper(df))["z"]), func(pdf.groupby(grouper(pdf))["z"])
+        )
+
+        # DataFrameGroupBy with column slice
+        assert_eq(
+            func(df.groupby(grouper(df))[["z"]]),
+            func(pdf.groupby(grouper(pdf))[["z"]]),
+        )
 
 
 @pytest.mark.parametrize(
@@ -351,6 +468,18 @@ def test_groupby_projection_split_out(df, pdf):
     assert_eq(result, pdf_result)
 
 
+def test_numeric_column_names():
+    df = lib.DataFrame({0: [0, 1, 0, 1], 1: [1, 2, 3, 4], 2: [0, 1, 0, 1]})
+    ddf = from_pandas(df, npartitions=2)
+    assert_eq(ddf.groupby(0).sum(), df.groupby(0).sum())
+    assert_eq(ddf.groupby([0, 2]).sum(), df.groupby([0, 2]).sum())
+    expected = df.groupby(0).apply(lambda x: x)
+    assert_eq(
+        ddf.groupby(0).apply(lambda x: x, meta=expected),
+        expected,
+    )
+
+
 def test_groupby_co_aligned_grouper(df, pdf):
     assert_eq(
         df[["y"]].groupby(df["x"]).sum(),
@@ -381,6 +510,46 @@ def test_groupby_median(df, pdf):
     assert_eq(q, pdf.groupby("x").median())
     assert_eq(df.groupby("x")["y"].median(), pdf.groupby("x")["y"].median())
     assert_eq(df.groupby("x").median()["y"], pdf.groupby("x").median()["y"])
+
+
+def test_groupby_ffill_bfill(pdf):
+    pdf["y"] = pdf["y"].astype("float64")
+
+    pdf.iloc[np.arange(0, len(pdf) - 1, 3), 1] = np.nan
+    df = from_pandas(pdf, npartitions=10)
+    with dask.config.set({"dataframe.shuffle.method": "tasks"}):
+        assert_eq(df.groupby("x").ffill(), pdf.groupby("x").ffill())
+        assert_eq(df.groupby("x").bfill(), pdf.groupby("x").bfill())
+
+        actual = df.groupby("x")["y"].ffill()
+        expect = df[["x", "y"]].groupby("x")["y"].ffill()
+        assert actual.optimize()._name == expect.optimize()._name
+        assert_eq(actual, pdf.groupby("x")["y"].ffill())
+
+        actual = df.groupby("x").ffill()["y"]
+        expect = df[["x", "y"]].groupby("x").ffill()["y"]
+        assert actual.optimize()._name == expect.optimize()._name
+        assert_eq(actual, pdf.groupby("x")["y"].ffill())
+
+
+@pytest.mark.parametrize(
+    "by",
+    [
+        lambda df: "x",
+        lambda df: df.x,
+        lambda df: df.x + 1,
+    ],
+)
+def test_get_group(df, pdf, by):
+    ddgrouped = df.groupby(by(df))
+    pdgrouped = pdf.groupby(by(pdf))
+
+    # DataFrame
+    assert_eq(ddgrouped.get_group(2), pdgrouped.get_group(2))
+    assert_eq(ddgrouped.get_group(3), pdgrouped.get_group(3))
+    # Series
+    assert_eq(ddgrouped.y.get_group(3), pdgrouped.y.get_group(3))
+    assert_eq(ddgrouped.y.get_group(2), pdgrouped.y.get_group(2))
 
 
 def test_groupby_rolling():
@@ -427,3 +596,61 @@ def test_rolling_groupby_projection():
     )
 
     assert actual.optimize()._name == (optimal.optimize()._name)
+
+
+def test_std_var_slice(pdf, df):
+    assert_eq(df.groupby("x").y.std(), pdf.groupby("x").y.std())
+    assert_eq(df.groupby("x").y.var(), pdf.groupby("x").y.var())
+
+
+def test_groupby_error(df):
+    with pytest.raises(KeyError):
+        df.groupby("A")
+
+    dp = df.groupby("y")
+
+    msg = "Column not found: "
+    with pytest.raises(KeyError, match=msg):
+        dp["A"]
+
+    msg = re.escape(
+        "DataFrameGroupBy does not allow compute method."
+        "Please chain it with an aggregation method (like ``.mean()``) or get a "
+        "specific group using ``.get_group()`` before calling ``compute()``"
+    )
+
+    with pytest.raises(NotImplementedError, match=msg):
+        dp.compute()
+
+
+def test_groupby_dir(df):
+    assert "y" in dir(df.groupby("x"))
+
+
+def test_groupby_udf_user_warning(df, pdf):
+    def func(df):
+        return df + 1
+
+    expected = pdf.groupby("x").apply(func)
+    with pytest.warns(UserWarning, match="`meta` is not specified"):
+        assert_eq(expected, df.groupby("x").apply(func))
+
+    expected = pdf.groupby("x").transform(func)
+    with pytest.warns(UserWarning, match="`meta` is not specified"):
+        assert_eq(expected, df.groupby("x").transform(func))
+
+
+def test_groupby_index_array(pdf):
+    pdf.index = lib.date_range(start="2020-12-31", freq="D", periods=len(pdf))
+    df = from_pandas(pdf, npartitions=10)
+
+    assert_eq(
+        df.x.groupby(df.index.month).nunique(),
+        pdf.x.groupby(pdf.index.month).nunique(),
+        check_names=False,
+    )
+    assert_eq(
+        df.groupby(df.index.month).x.nunique(),
+        pdf.groupby(pdf.index.month).x.nunique(),
+        check_names=False,
+    )
