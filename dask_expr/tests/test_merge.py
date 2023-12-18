@@ -435,10 +435,13 @@ def test_merge_known_to_single(how, shuffle_method):
 
     expected = pdf1.merge(pdf2, on="idx", how=how)
     result = df1.merge(df2, on="idx", how=how, shuffle_backend=shuffle_method)
-
-    # Assertions
     assert_eq(result, expected)
     assert result.divisions == df1.divisions
+
+    expected = pdf1.merge(pdf2, on="k", how=how)
+    result = df1.merge(df2, on="k", how=how, shuffle_backend=shuffle_method)
+    assert_eq(result, expected, check_index=False)
+    assert all(d is None for d in result.divisions)
 
 
 def test_merge_npartitions():
