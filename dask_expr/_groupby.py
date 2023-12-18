@@ -1158,7 +1158,9 @@ class GroupBy:
 
     def var(self, ddof=1, split_every=None, split_out=1, numeric_only=True):
         if not numeric_only:
-            raise NotImplementedError("numeric_only=False is not implemented")
+            raise NotImplementedError(
+                "'numeric_only=False' is not implemented in Dask."
+            )
         result = new_collection(
             Var(
                 self.obj.expr,
@@ -1182,7 +1184,9 @@ class GroupBy:
 
     def std(self, ddof=1, split_every=None, split_out=1, numeric_only=True):
         if not numeric_only:
-            raise NotImplementedError("numeric_only=False is not implemented")
+            raise NotImplementedError(
+                "'numeric_only=False' is not implemented in Dask."
+            )
         result = new_collection(
             Std(
                 self.obj.expr,
