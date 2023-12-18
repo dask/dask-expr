@@ -114,7 +114,9 @@ class Merge(Expr):
             return self.left._divisions()
 
         if self._is_single_partition_broadcast:
-            _npartitions = max(self.left.npartitions, self.right.npartitions)
+            if self.left.npartitions == 1 and self.how in ("right", "inner"):
+                return self.right.divisions
+            return self.left.divisions
         else:
             _npartitions = self._npartitions
 
