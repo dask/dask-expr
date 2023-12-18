@@ -25,11 +25,20 @@ class Array(core.Expr, DaskMethodsMixin):
     def __dask_postpersist__(self):
         return FromGraph, (self._meta, self.chunks, self._name)
 
+    def compute(self, **kwargs):
+        return DaskMethodsMixin.compute(self.simplify(), **kwargs)
+
+    def persist(self, **kwargs):
+        return DaskMethodsMixin.persist(self.simplify(), **kwargs)
+
     def __array_ufunc__(self, numpy_ufunc, method, *inputs, **kwargs):
         raise NotImplementedError()
 
     def __array_function__(self, *args, **kwargs):
         raise NotImplementedError()
+
+    def __array__(self):
+        return self.compute()
 
     def __getitem__(self, index):
         from dask.array.slicing import normalize_index
