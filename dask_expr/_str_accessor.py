@@ -84,15 +84,16 @@ class StringAccessor(Accessor):
                     "expected splits with the n= parameter. Usually n splits "
                     "result in n+1 output columns."
                 )
-        return new_collection(
-            SplitMap(
-                self._series.expr,
-                self._accessor_name,
-                method,
-                (),
-                {"pat": pat, "n": n, "expand": expand},
+            return new_collection(
+                SplitMap(
+                    self._series.expr,
+                    self._accessor_name,
+                    method,
+                    (),
+                    {"pat": pat, "n": n, "expand": expand},
+                )
             )
-        )
+        return self._function_map(method, pat=pat, n=n, expand=expand)
 
     def split(self, pat=None, n=-1, expand=False):
         """Known inconsistencies: ``expand=True`` with unknown ``n`` will raise a ``NotImplementedError``."""
