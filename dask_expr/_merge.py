@@ -131,9 +131,18 @@ class Merge(Expr):
                 _npartitions = max(self.left.npartitions, self.right.npartitions)
 
         elif self.is_broadcast_join:
-            if self.broadcast_side == "left":
+            meta_index_names = set(self._meta.index.names)
+            if (
+                self.broadcast_side == "left"
+                and set(self.right._meta.index.names) == meta_index_names
+            ):
                 return self.right._divisions()
-            return self.left._divisions()
+            elif (
+                self.broadcast_side == "right"
+                and set(self.left._meta.index.names) == meta_index_names
+            ):
+                return self.left._divisions()
+            _npartitions = max(self.left.npartitions, self.right.npartitions)
 
         else:
             _npartitions = self._npartitions
@@ -260,7 +269,7 @@ class Merge(Expr):
                         left = Shuffle(
                             left,
                             shuffle_left_on,
-                            npartitions_out=right.npartitions,
+                            npartitions_out=left.npartitions,
                         )
                     else:
                         right = Shuffle(
