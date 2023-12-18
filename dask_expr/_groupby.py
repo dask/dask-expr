@@ -1,6 +1,7 @@
 import functools
 import math
 import warnings
+from numbers import Integral
 
 import numpy as np
 from dask import is_dask_collection
@@ -1302,6 +1303,12 @@ class GroupBy:
 
     def rolling(self, window, min_periods=None, center=False, win_type=None, axis=0):
         from dask_expr._rolling import Rolling
+
+        if isinstance(window, Integral):
+            raise ValueError(
+                "Only time indexes are supported for rolling groupbys in dask dataframe. "
+                "``window`` must be a ``freq`` (e.g. '1H')."
+            )
 
         return Rolling(
             self.obj,

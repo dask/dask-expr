@@ -588,6 +588,9 @@ def test_groupby_rolling():
 
     ddf = from_pandas(df, npartitions=8)
 
+    with pytest.raises(ValueError, match="``window`` must be a ``freq``"):
+        ddf.groupby("group1").rolling(1).sum()
+
     expected = df.groupby("group1").rolling("1D").sum()
     actual = ddf.groupby("group1").rolling("1D").sum()
 
