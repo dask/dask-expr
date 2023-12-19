@@ -953,9 +953,8 @@ def _extract_meta(x, nonempty=False):
 
 def groupby_projection(expr, parent, dependents):
     if isinstance(parent, Projection):
-        by_columns = expr.by if not isinstance(expr.by, Expr) else []
         columns = determine_column_projection(
-            expr, parent, dependents, additional_columns=by_columns
+            expr, parent, dependents, additional_columns=expr._by_columns
         )
         if columns == expr.frame.columns:
             return

@@ -18,7 +18,7 @@ from dask_expr._expr import (
 )
 from dask_expr._repartition import Repartition
 from dask_expr._shuffle import Shuffle, _contains_index_name, _select_columns_or_index
-from dask_expr._util import _convert_to_list, _tokenize_deterministic
+from dask_expr._util import _convert_to_list, _tokenize_deterministic, is_scalar
 
 _HASH_COLUMN_NAME = "__hash_partition"
 _PARTITION_COLUMN = "_partitions"
@@ -334,8 +334,8 @@ class Merge(Expr):
                 projection, parent_columns = columns, None
             else:
                 projection, parent_columns = columns, parent.operand("columns")
-                if isinstance(projection, (str, int)):
-                    projection = [projection]
+            if is_scalar(projection):
+                projection = [projection]
 
             left, right = self.left, self.right
             left_on = _convert_to_list(self.left_on)

@@ -2380,6 +2380,13 @@ class Fused(Blockwise):
         return dask.core.get(graph, name)
 
 
+# Used for sorting with None
+@functools.total_ordering
+class MinType:
+    def __le__(self, other):
+        return True
+
+
 def determine_column_projection(expr, parent, dependents, additional_columns=None):
     column_union = parent.columns.copy()
     parents = [x() for x in dependents[expr._name] if x() is not None]
@@ -2392,10 +2399,10 @@ def determine_column_projection(expr, parent, dependents, additional_columns=Non
         column_union.append(additional_columns)
 
     # We can end up with MultiIndex columns from groupby ops, needs to be
-    # account for in the sort
+    # accounted for in the sort
     column_union = sorted(
         set(flatten(column_union, container=list)),
-        key=lambda x: x[0] if isinstance(x, tuple) else x,
+        key=lambda x: x[0] if isinstance(x, tuple) else x or MinType(),
     )
     if (
         len(column_union) == 1
