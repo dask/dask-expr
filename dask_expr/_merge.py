@@ -98,13 +98,42 @@ class Merge(Expr):
         if self.merge_indexed_left and self.merge_indexed_right:
             return list(unique(merge_sorted(self.left.divisions, self.right.divisions)))
 
-        if self.is_broadcast_join:
-            if self.broadcast_side == "left":
-                return self.right._divisions()
-            return self.left._divisions()
-
         if self._is_single_partition_broadcast:
+            use_left = self.right_index or _contains_index_name(
+                self.right._meta, self.right_on
+            )
+            use_right = self.left_index or _contains_index_name(
+                self.left._meta, self.left_on
+            )
+            if (
+                use_right
+                and self.left.npartitions == 1
+                and self.how in ("right", "inner")
+            ):
+                return self.right.divisions
+            elif (
+                use_left
+                and self.right.npartitions == 1
+                and self.how in ("inner", "left")
+            ):
+                return self.left.divisions
+            else:
+                _npartitions = max(self.left.npartitions, self.right.npartitions)
+
+        elif self.is_broadcast_join:
+            meta_index_names = set(self._meta.index.names)
+            if (
+                self.broadcast_side == "left"
+                and set(self.right._meta.index.names) == meta_index_names
+            ):
+                return self.right._divisions()
+            elif (
+                self.broadcast_side == "right"
+                and set(self.left._meta.index.names) == meta_index_names
+            ):
+                return self.left._divisions()
             _npartitions = max(self.left.npartitions, self.right.npartitions)
+
         else:
             _npartitions = self._npartitions
 
@@ -207,16 +236,16 @@ class Merge(Expr):
         #   - Need 'rearrange_by_divisions' equivalent
         #     to avoid shuffle when we are merging on known
         #     divisions on one side only.
-        #   - Need mechanism to shuffle by an un-named index.
         else:
             if left_index:
                 shuffle_left_on = left.index._meta.name
                 if shuffle_left_on is None:
-                    raise NotImplementedError("Cannot shuffle unnamed index")
+                    # placeholder for unnamed index merge
+                    shuffle_left_on = "_index"
             if right_index:
                 shuffle_right_on = right.index._meta.name
                 if shuffle_right_on is None:
-                    raise NotImplementedError("Cannot shuffle unnamed index")
+                    shuffle_right_on = "_index"
 
             if self.is_broadcast_join:
                 if self.operand("_npartitions") is not None:
@@ -230,7 +259,7 @@ class Merge(Expr):
                         left = Shuffle(
                             left,
                             shuffle_left_on,
-                            npartitions_out=right.npartitions,
+                            npartitions_out=left.npartitions,
                         )
                     else:
                         right = Shuffle(
@@ -394,18 +423,22 @@ class HashJoinP2P(Merge, PartitionsFiltered):
 
         dsk = {}
         token_left = _tokenize_deterministic(
-            "hash-join",
+            # Include self._name to ensure that shuffle IDs are unique for individual
+            # merge operations. Reusing shuffles between merges is dangerous because of
+            # required coordination and complexity introduced through dynamic clusters.
+            self._name,
             self.left._name,
             self.shuffle_left_on,
-            self.npartitions,
-            self._partitions,
+            self.left_index,
         )
         token_right = _tokenize_deterministic(
-            "hash-join",
+            # Include self._name to ensure that shuffle IDs are unique for individual
+            # merge operations. Reusing shuffles between merges is dangerous because of
+            # required coordination and complexity introduced through dynamic clusters.
+            self._name,
             self.right._name,
             self.shuffle_right_on,
-            self.npartitions,
-            self._partitions,
+            self.right_index,
         )
         _barrier_key_left = barrier_key(ShuffleId(token_left))
         _barrier_key_right = barrier_key(ShuffleId(token_right))

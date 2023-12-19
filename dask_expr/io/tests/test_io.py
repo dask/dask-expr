@@ -1,8 +1,10 @@
 import glob
 import os
 
+import dask.array as da
 import dask.dataframe as dd
 import pytest
+from dask.array.utils import assert_eq as array_assert_eq
 from dask.dataframe.utils import assert_eq
 
 from dask_expr import (
@@ -315,6 +317,15 @@ def test_to_dask_dataframe(optimize):
     assert_eq(df, ddf)
 
 
+@pytest.mark.parametrize("optimize", [True, False])
+def test_to_dask_array(optimize):
+    pdf = lib.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
+    df = from_pandas(pdf, npartitions=2)
+    darr = df.to_dask_array(optimize=optimize)
+    assert isinstance(darr, da.Array)
+    array_assert_eq(darr, pdf.values)
+
+
 @pytest.mark.parametrize("write_metadata_file", [True, False])
 def test_to_parquet(tmpdir, write_metadata_file):
     pdf = lib.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
@@ -390,6 +401,16 @@ def test_combine_similar_no_projection_on_one_branch(tmpdir):
 
     pdf["xx"] = pdf.x != 0
     assert_eq(df, pdf)
+
+
+def test_from_pandas_sort_and_different_partitions():
+    pdf = lib.DataFrame({"a": [1, 2, 3] * 3, "b": 1}).set_index("a")
+    df = from_pandas(pdf, npartitions=4, sort=True)
+    assert_eq(pdf.sort_index(), df, sort_results=False)
+
+    pdf = lib.DataFrame({"a": [1, 2, 3] * 3, "b": 1}).set_index("a")
+    df = from_pandas(pdf, npartitions=4, sort=False)
+    assert_eq(pdf, df, sort_results=False)
 
 
 @pytest.mark.parametrize("meta", [True, False])

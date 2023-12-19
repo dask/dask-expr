@@ -53,11 +53,17 @@ class Concat(Expr):
 
     @functools.cached_property
     def _meta(self):
+        # ignore DataFrame without columns to avoid dtype upcasting
         meta = make_meta(
             methods.concat(
-                [meta_nonempty(df._meta) for df in self._frames],
+                [
+                    meta_nonempty(df._meta)
+                    for df in self._frames
+                    if df.ndim < 2 or len(df._meta.columns) > 0
+                ],
                 join=self.join,
                 filter_warning=False,
+                axis=self.axis,
                 **self._kwargs,
             )
         )
@@ -65,6 +71,10 @@ class Concat(Expr):
 
     def _divisions(self):
         dfs = self._frames
+
+        if self.axis == 1:
+            return (None,) * (max(df.npartitions for df in dfs) + 1)
+
         if all(df.known_divisions for df in dfs):
             # each DataFrame's division must be greater than previous one
             if all(
@@ -83,8 +93,8 @@ class Concat(Expr):
     def _lower(self):
         dfs = self._frames
         if self.axis == 1:
-            if are_co_aligned(*self._frames):
-                return ConcatUnindexed(self.ignore_order, self._kwargs, *dfs)
+            if are_co_aligned(*self._frames) or {df.npartitions for df in dfs} == {1}:
+                return ConcatIndexed(self.ignore_order, self._kwargs, self.axis, *dfs)
 
             elif (
                 all(not df.known_divisions for df in dfs)
@@ -97,7 +107,7 @@ class Concat(Expr):
                         " are \n aligned. This assumption is not generally "
                         "safe."
                     )
-                return ConcatUnindexed(self.ignore_order, self._kwargs, *dfs)
+                return ConcatUnindexed(self.ignore_order, self._kwargs, self.axis, *dfs)
             else:
                 raise NotImplementedError
 
@@ -138,19 +148,25 @@ class Concat(Expr):
 
     def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
+
+            def get_columns_or_name(e: Expr):
+                return e.columns if e.ndim == 2 else [e.name]
+
             columns = determine_column_projection(self, parent, dependents)
             columns_frame = [
-                [col for col in frame.columns if col in columns]
+                [col for col in get_columns_or_name(frame) if col in columns]
                 for frame in self._frames
             ]
             if all(
-                sorted(cols) == sorted(frame.columns)
+                sorted(cols) == sorted(get_columns_or_name(frame))
                 for frame, cols in zip(self._frames, columns_frame)
             ):
                 return
 
             frames = [
-                frame[cols] if sorted(cols) != sorted(frame.columns) else frame
+                frame[cols]
+                if sorted(cols) != sorted(get_columns_or_name(frame))
+                else frame
                 for frame, cols in zip(self._frames, columns_frame)
                 if len(cols) > 0
             ]
@@ -171,6 +187,10 @@ class StackPartition(Concat):
     _parameters = ["join", "ignore_order", "_kwargs"]
     _defaults = {"join": "outer", "ignore_order": False, "_kwargs": {}}
 
+    @property
+    def axis(self):
+        return 0
+
     def _layer(self):
         dsk, i = {}, 0
         for df in self._frames:
@@ -187,7 +207,7 @@ class StackPartition(Concat):
                     dsk[(self._name, i)] = (
                         apply,
                         methods.concat,
-                        [[self._meta, key], 0, self.join, False, True],
+                        [[self._meta, key], self.axis, self.join, False, True],
                         self._kwargs,
                     )
                 i += 1
@@ -198,18 +218,25 @@ class StackPartition(Concat):
 
 
 class ConcatUnindexed(Blockwise):
-    _parameters = ["ignore_order", "_kwargs"]
-    _defaults = {"ignore_order": False, "_kwargs": {}}
-    _keyword_only = ["ignore_order", "_kwargs"]
+    _parameters = ["ignore_order", "_kwargs", "axis"]
+    _defaults = {"ignore_order": False, "_kwargs": {}, "axis": 1}
+    _keyword_only = ["ignore_order", "_kwargs", "axis"]
 
     @functools.cached_property
     def _meta(self):
         return methods.concat(
             [df._meta for df in self.dependencies()],
             ignore_order=self.ignore_order,
+            axis=self.axis,
             **self.operand("_kwargs"),
         )
 
     @staticmethod
-    def operation(*args, ignore_order, _kwargs):
+    def operation(*args, ignore_order, _kwargs, axis):
         return concat_and_check(args, ignore_order=ignore_order)
+
+
+class ConcatIndexed(ConcatUnindexed):
+    @staticmethod
+    def operation(*args, ignore_order, _kwargs, axis):
+        return methods.concat(args, ignore_order=ignore_order, axis=axis)

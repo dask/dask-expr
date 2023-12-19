@@ -74,13 +74,14 @@ async def test_self_merge_p2p_shuffle(c, s, a, b):
 
 
 @gen_cluster(client=True)
+@pytest.mark.parametrize("name", ["a", None])
 @pytest.mark.parametrize("shuffle", ["tasks", "disk", "p2p"])
-async def test_merge_index_precedence(c, s, a, b, shuffle):
+async def test_merge_index_precedence(c, s, a, b, shuffle, name):
     pdf = lib.DataFrame(
-        {"a": [1, 2, 3, 4, 5, 6]}, index=lib.Index([6, 5, 4, 3, 2, 1], name="a")
+        {"a": [1, 2, 3, 4, 5, 6]}, index=lib.Index([6, 5, 4, 3, 2, 1], name=name)
     )
     pdf2 = lib.DataFrame(
-        {"b": [1, 2, 3, 4, 5, 6]}, index=lib.Index([1, 2, 7, 4, 5, 6], name="a")
+        {"b": [1, 2, 3, 4, 5, 6]}, index=lib.Index([1, 2, 7, 4, 5, 6], name=name)
     )
     df = from_pandas(pdf, npartitions=2, sort=False)
     df2 = from_pandas(pdf2, npartitions=3, sort=False)
@@ -131,9 +132,13 @@ async def test_merge_p2p_shuffle_reused_dataframe_with_different_parameters(c, s
     out = (
         ddf1.merge(ddf2, left_on="a", right_on="x", shuffle_backend="p2p")
         # Vary the number of output partitions for the shuffles of dd2
-        .repartition(20).merge(ddf2, left_on="b", right_on="x", shuffle_backend="p2p")
+        .repartition(npartitions=20).merge(
+            ddf2, left_on="b", right_on="x", shuffle_backend="p2p"
+        )
     )
-    # Generate unique shuffle IDs if the input frame is the same but parameters differ
+    # Generate unique shuffle IDs if the input frame is the same but
+    # parameters differ. Reusing shuffles in merges is dangerous because of the
+    # required coordination and complexity introduced through dynamic clusters.
     assert sum(id_from_key(k) is not None for k in out.dask) == 4
     x = await c.compute(out)
     expected = pdf1.merge(pdf2, left_on="a", right_on="x").merge(
@@ -166,8 +171,10 @@ async def test_merge_p2p_shuffle_reused_dataframe_with_same_parameters(c, s, a, 
         right_on="b",
         shuffle_backend="p2p",
     )
-    # Generate the same shuffle IDs if the input frame is the same and all its parameters match
-    assert sum(id_from_key(k) is not None for k in out.dask) == 3
+    # Generate unique shuffle IDs if the input frame is the same and all its
+    # parameters match. Reusing shuffles in merges is dangerous because of the
+    # required coordination and complexity introduced through dynamic clusters.
+    assert sum(id_from_key(k) is not None for k in out.dask) == 4
     x = await c.compute(out)
     expected = pdf2.merge(
         pdf1.merge(pdf2, left_on="a", right_on="x"), left_on="x", right_on="b"
@@ -271,12 +278,12 @@ def test_merge_combine_similar_squash_merges(add_repartition):
             df2 = df2[df2.m > 1]
             df3 = df3[df3.x > 1]
             if add_repartition:
-                df = df.repartition(df.npartitions // 2)
-                df2 = df2.repartition(df2.npartitions // 2)
+                df = df.repartition(npartitions=df.npartitions // 2)
+                df2 = df2.repartition(npartitions=df2.npartitions // 2)
             q = df.merge(df2, left_on="a", right_on="m")
             if add_repartition:
-                df3 = df3.repartition(df3.npartitions // 2)
-                q = q.repartition(q.npartitions // 2)
+                df3 = df3.repartition(npartitions=df3.npartitions // 2)
+                q = q.repartition(npartitions=q.npartitions // 2)
             q = q.merge(df3, left_on="n", right_on="x")
             q["revenue"] = q.y * (1 - q.z)
             result = q[["x", "n", "o", "revenue"]]

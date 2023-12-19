@@ -467,7 +467,7 @@ class DiskShuffle(SimpleShuffle):
         }
 
         # Barrier
-        barrier_token = "barrier-" + always_new_token
+        barrier_token = ("barrier-" + always_new_token,)
         dsk3 = {barrier_token: (barrier, list(dsk2))}
 
         # Collect groups
@@ -635,8 +635,9 @@ class AssignPartitioningIndex(Blockwise):
         if assign_index:
             # columns take precedence over index in _select_columns_or_index, so
             # circumvent that, to_frame doesn't work because it loses the index
+            names = index
             index = df[[]]
-            index["_index"] = df.index
+            index[names] = df.index.to_frame()
         else:
             index = _select_columns_or_index(df, index)
 
@@ -653,12 +654,15 @@ class BaseSetIndexSortValues(Expr):
     _is_length_preserving = True
 
     def _divisions(self):
-        if self.user_divisions is not None:
+        if "user_divisions" in self._parameters and self.user_divisions is not None:
             return self.user_divisions
+        if self._npartitions_input == 1:
+            return (None, None)
+
         divisions, mins, maxes, presorted = _get_divisions(
             self.frame,
-            self.other,
-            self.npartitions,
+            self._divisions_column,
+            self._npartitions_input,
             self.ascending,
             upsample=self.upsample,
         )
@@ -667,8 +671,12 @@ class BaseSetIndexSortValues(Expr):
         return divisions
 
     @property
-    def npartitions(self):
+    def _npartitions_input(self):
         return self.operand("npartitions") or self.frame.npartitions
+
+    @property
+    def npartitions(self):
+        return self.operand("npartitions") or len(self._divisions()) - 1
 
 
 class SetIndex(BaseSetIndexSortValues):
@@ -712,29 +720,6 @@ class SetIndex(BaseSetIndexSortValues):
         "upsample": 1.0,
     }
 
-    def _divisions(self):
-        if self.user_divisions is not None:
-            return self.user_divisions
-        if self.npartitions == 1:
-            return (None, None)
-
-        divisions, mins, maxes, presorted = _get_divisions(
-            self.frame,
-            self.other,
-            self.npartitions,
-            self.ascending,
-            upsample=self.upsample,
-        )
-        if presorted:
-            divisions = mins.copy() + [maxes[-1]]
-        return divisions
-
-    @property
-    def npartitions(self):
-        if self.operand("npartitions") is not None:
-            return self.operand("npartitions")
-        return self.frame.npartitions
-
     @property
     def _projection_columns(self):
         return self.columns + (
@@ -748,6 +733,10 @@ class SetIndex(BaseSetIndexSortValues):
         else:
             other = self._other
         return self.frame._meta.set_index(other, drop=self.drop)
+
+    @property
+    def _divisions_column(self):
+        return self.other
 
     @property
     def other(self):
@@ -769,7 +758,7 @@ class SetIndex(BaseSetIndexSortValues):
             presorted = _get_divisions(
                 self.frame,
                 self.other,
-                self.npartitions,
+                self._npartitions_input,
                 self.ascending,
                 upsample=self.upsample,
             )[3]
@@ -780,10 +769,14 @@ class SetIndex(BaseSetIndexSortValues):
                 )
                 return SortIndexBlockwise(index_set)
 
-        else:
-            divisions = self.user_divisions
-
-        return SetPartition(self.frame, self._other, self.drop, divisions)
+        return SetPartition(
+            self.frame,
+            self._other,
+            self.drop,
+            self._npartitions_input,
+            self.ascending,
+            self.upsample,
+        )
 
     def _simplify_up(self, parent, dependents):
         from dask_expr._expr import Filter, Head, Index, Tail
@@ -869,7 +862,7 @@ class SortValues(BaseSetIndexSortValues):
         divisions, mins, maxes, presorted = _get_divisions(
             self.frame,
             self.frame[self.by[0]],
-            self.npartitions,
+            self._npartitions_input,
             self.ascending,
             upsample=self.upsample,
         )
@@ -914,7 +907,11 @@ class SortValues(BaseSetIndexSortValues):
 
         by = self.frame[self.by[0]]
         divisions, _, _, presorted = _get_divisions(
-            self.frame, by, self.npartitions, self.ascending, upsample=self.upsample
+            self.frame,
+            by,
+            self._npartitions_input,
+            self.ascending,
+            upsample=self.upsample,
         )
         if presorted and self.npartitions == self.frame.npartitions:
             return SortValuesBlockwise(
@@ -979,6 +976,13 @@ class SortValues(BaseSetIndexSortValues):
                 type(self)(self.frame[columns], *self.operands[1:]),
                 parent.operand("columns"),
             )
+        if (
+            isinstance(parent, Repartition)
+            and parent.operand("new_partitions") is not None
+        ):
+            return type(self)(
+                type(parent)(self.frame, *parent.operands[1:]), *self.operands[1:]
+            )
 
 
 class SetPartition(SetIndex):
@@ -999,25 +1003,18 @@ class SetPartition(SetIndex):
         Divisions of the resulting expression.
     """
 
-    _parameters = ["frame", "_other", "drop", "new_divisions"]
-
-    def _divisions(self):
-        return self.new_divisions
-
-    @functools.cached_property
-    def new_divisions(self):
-        # TODO: Adjust for categoricals and NA values
-        return self.other._meta._constructor(self.operand("new_divisions"))
+    _parameters = ["frame", "_other", "drop", "npartitions", "ascending", "upsample"]
 
     def _lower(self):
-        partitions = _SetPartitionsPreSetIndex(self.other, self.new_divisions)
+        divisions = self.other._meta._constructor(self._divisions())
+        partitions = _SetPartitionsPreSetIndex(self.other, divisions)
         assigned = Assign(self.frame, "_partitions", partitions)
         if isinstance(self._other, Expr):
             assigned = Assign(assigned, "_index", self._other)
         shuffled = Shuffle(
             assigned,
             "_partitions",
-            npartitions_out=len(self.new_divisions) - 1,
+            npartitions_out=len(self._divisions()) - 1,
             ignore_index=True,
         )
 
@@ -1025,14 +1022,16 @@ class SetPartition(SetIndex):
             drop, set_name = True, "_index"
         else:
             drop, set_name = self.drop, self.other._meta.name
+        kwargs = {
+            "other": self.other._name,
+            "partitions": self._npartitions_input,
+            "ascending": self.ascending,
+            "upsample": self.upsample,
+        }
         index_set = _SetIndexPost(
-            shuffled, self.other._meta.name, drop=drop, set_name=set_name
+            shuffled, self.other._meta.name, drop, set_name, kwargs
         )
         return SortIndexBlockwise(index_set)
-
-    @property
-    def npartitions(self):
-        return len(self.new_divisions)
 
 
 class _SetPartitionsPreSetIndex(Blockwise):
@@ -1047,12 +1046,31 @@ class _SetPartitionsPreSetIndex(Blockwise):
 
 
 class _SetIndexPost(Blockwise):
-    _parameters = ["frame", "index_name", "drop", "set_name"]
+    _parameters = ["frame", "index_name", "drop", "set_name", "key_kwargs"]
     _is_length_preserving = True
+
+    @property
+    def _args(self) -> list:
+        return self.operands[:4]
 
     @staticmethod
     def operation(df, index_name, drop, set_name):
         return df.set_index(set_name, drop=drop).rename_axis(index=index_name)
+
+    def _divisions(self):
+        kwargs = self.key_kwargs
+        key = (
+            kwargs["other"],
+            kwargs["partitions"],
+            kwargs["ascending"],
+            128e6,
+            kwargs["upsample"],
+        )
+        assert key in divisions_lru
+        if self.frame.npartitions < len(divisions_lru[key][0]) - 1:
+            # TODO: Culling, figure out a more efficient solution here
+            return self.frame.divisions
+        return divisions_lru[key][0]
 
 
 class SortIndexBlockwise(Blockwise):
@@ -1141,11 +1159,28 @@ def _calculate_divisions(
 ):
     from dask_expr import RepartitionQuantiles, new_collection
 
-    divisions, mins, maxes = compute(
-        new_collection(RepartitionQuantiles(other, npartitions, upsample=upsample)),
-        new_collection(other).map_partitions(M.min),
-        new_collection(other).map_partitions(M.max),
-    )
+    try:
+        divisions, mins, maxes = compute(
+            new_collection(RepartitionQuantiles(other, npartitions, upsample=upsample)),
+            new_collection(other).map_partitions(M.min),
+            new_collection(other).map_partitions(M.max),
+        )
+    except TypeError as e:
+        # When there are nulls and a column is non-numeric, a TypeError is sometimes raised as a result of
+        # 1) computing mins/maxes above, 2) every null being switched to NaN, and 3) NaN being a float.
+        # Also, Pandas ExtensionDtypes may cause TypeErrors when dealing with special nulls such as pd.NaT or pd.NA.
+        # If this happens, we hint the user about eliminating nulls beforehand.
+        if not pd.api.types.is_numeric_dtype(other._meta.dtype):
+            obj, suggested_method = (
+                ("column", f"`.dropna(subset=['{other.name}'])`")
+                if any(other._name == frame[c]._name for c in frame.columns)
+                else ("series", "`.loc[series[~series.isna()]]`")
+            )
+            raise NotImplementedError(
+                f"Divisions calculation failed for non-numeric {obj} '{other.name}'.\n"
+                f"This is probably due to the presence of nulls, which Dask does not entirely support in the index.\n"
+                f"We suggest you try with {suggested_method}."
+            ) from e
     sizes = []
 
     empty_dataframe_detected = pd.isna(divisions).all()

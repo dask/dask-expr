@@ -221,14 +221,27 @@ class RollingApply(RollingReduction):
     how = "apply"
 
 
+class RollingCov(RollingReduction):
+    how = "cov"
+
+
 class Rolling:
     """Aggregate using one or more operations
 
     The purpose of this class is to expose an API similar
-    to Pandas' `Rollingr` for dask-expr
+    to Pandas' `Rolling` for dask-expr
     """
 
-    def __init__(self, obj, window, groupby_kwargs=None, groupby_slice=None, **kwargs):
+    def __init__(
+        self,
+        obj,
+        window,
+        groupby_kwargs=None,
+        groupby_slice=None,
+        min_periods=None,
+        center=False,
+        win_type=None,
+    ):
         if obj.divisions[0] is None:
             msg = (
                 "Can only rolling dataframes with known divisions\n"
@@ -238,9 +251,20 @@ class Rolling:
             raise ValueError(msg)
         self.obj = obj
         self.window = window
-        self.kwargs = kwargs
         self.groupby_kwargs = groupby_kwargs
         self.groupby_slice = groupby_slice
+        self.min_periods = min_periods
+        self.center = center
+        self.win_type = win_type
+
+        # Allow pandas to raise if appropriate
+        obj._meta.rolling(window, **self.kwargs)
+
+    @functools.cached_property
+    def kwargs(self):
+        return dict(
+            min_periods=self.min_periods, center=self.center, win_type=self.win_type
+        )
 
     def _single_agg(self, expr_cls, how_args=(), how_kwargs=None):
         return new_collection(
@@ -254,6 +278,9 @@ class Rolling:
                 groupby_slice=self.groupby_slice,
             )
         )
+
+    def cov(self):
+        return self._single_agg(RollingCov)
 
     def apply(self, func, *args, **kwargs):
         return self._single_agg(RollingApply, how_args=(func, *args), how_kwargs=kwargs)

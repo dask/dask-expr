@@ -3,15 +3,13 @@ from __future__ import annotations
 import functools
 import numbers
 import operator
-import os
 import weakref
 from collections import defaultdict
-from collections.abc import Generator, Mapping
+from collections.abc import Callable, Mapping
 
 import dask
 import numpy as np
 import pandas as pd
-import toolz
 from dask.base import normalize_token
 from dask.core import flatten
 from dask.dataframe import methods
@@ -29,51 +27,27 @@ from dask.dataframe.dispatch import meta_nonempty
 from dask.dataframe.rolling import CombinedOutput, _head_timedelta, overlap_chunk
 from dask.dataframe.utils import clear_known_categories, drop_by_shallow_copy
 from dask.typing import no_default
-from dask.utils import M, apply, funcname, import_required, is_arraylike
+from dask.utils import M, apply, funcname
 from tlz import merge_sorted, unique
 
+from dask_expr import _core as core
 from dask_expr._util import (
-    _BackendData,
+    _calc_maybe_new_divisions,
     _convert_to_list,
     _tokenize_deterministic,
     _tokenize_partial,
+    is_scalar,
 )
 
-replacement_rules = []
 
-
-class Expr:
+class Expr(core.Expr):
     """Primary class for all Expressions
 
     This mostly includes Dask protocols and various Pandas-like method
     definitions to make us look more like a DataFrame.
     """
 
-    _parameters = []
-    _defaults = {}
     _is_length_preserving = False
-
-    def __init__(self, *args, **kwargs):
-        operands = list(args)
-        for parameter in type(self)._parameters[len(operands) :]:
-            try:
-                operands.append(kwargs.pop(parameter))
-            except KeyError:
-                operands.append(type(self)._defaults[parameter])
-        assert not kwargs, kwargs
-        self.operands = operands
-        if self._required_attribute:
-            dep = next(iter(self.dependencies()))._meta
-            if not hasattr(dep, self._required_attribute):
-                # Raise a ValueError instead of AttributeError to
-                # avoid infinite recursion
-                raise ValueError(f"{dep} has no attribute {self._required_attribute}")
-
-    @property
-    def _required_attribute(self) -> str:
-        # Specify if the first `dependency` must support
-        # a specific attribute for valid behavior.
-        return None
 
     @functools.cached_property
     def ndim(self):
@@ -83,82 +57,14 @@ class Expr:
         except AttributeError:
             return 0
 
-    def __str__(self):
-        s = ", ".join(
-            str(param) + "=" + str(operand)
-            for param, operand in zip(self._parameters, self.operands)
-            if isinstance(operand, Expr) or operand != self._defaults.get(param)
-        )
-        return f"{type(self).__name__}({s})"
+    def __dask_keys__(self):
+        return [(self._name, i) for i in range(self.npartitions)]
 
-    def __repr__(self):
-        return str(self)
-
-    def _tree_repr_lines(self, indent=0, recursive=True):
-        header = funcname(type(self)) + ":"
-        lines = []
-        for i, op in enumerate(self.operands):
-            if isinstance(op, Expr):
-                if recursive:
-                    lines.extend(op._tree_repr_lines(2))
-            else:
-                try:
-                    param = self._parameters[i]
-                    default = self._defaults[param]
-                except (IndexError, KeyError):
-                    param = self._parameters[i] if i < len(self._parameters) else ""
-                    default = "--no-default--"
-
-                if isinstance(op, _BackendData):
-                    op = op._data
-
-                if isinstance(op, pd.core.base.PandasObject):
-                    op = "<pandas>"
-                elif is_dataframe_like(op):
-                    op = "<dataframe>"
-                elif is_index_like(op):
-                    op = "<index>"
-                elif is_series_like(op):
-                    op = "<series>"
-                elif is_arraylike(op):
-                    op = "<array>"
-
-                if repr(op) != repr(default):
-                    if param:
-                        header += f" {param}={repr(op)}"
-                    else:
-                        header += repr(op)
-        lines = [header] + lines
-        lines = [" " * indent + line for line in lines]
-
-        return lines
-
-    def tree_repr(self):
-        return os.linesep.join(self._tree_repr_lines())
-
-    def pprint(self):
-        for line in self._tree_repr_lines():
-            print(line)
+    def optimize(self, **kwargs):
+        return optimize(self, **kwargs)
 
     def __hash__(self):
         return hash(self._name)
-
-    def __reduce__(self):
-        if dask.config.get("dask-expr-no-serialize", False):
-            raise RuntimeError(f"Serializing a {type(self)} object")
-        return type(self), tuple(self.operands)
-
-    def _depth(self):
-        """Depth of the expression tree
-
-        Returns
-        -------
-        depth: int
-        """
-        if not self.dependencies():
-            return 1
-        else:
-            return max(expr._depth() for expr in self.dependencies()) + 1
 
     def __getattr__(self, key):
         try:
@@ -493,6 +399,9 @@ class Expr:
     def __rmul__(self, other):
         return Mul(other, self)
 
+    def __pow__(self, power):
+        return Pow(self, power)
+
     def __truediv__(self, other):
         return Div(self, other)
 
@@ -556,11 +465,11 @@ class Expr:
     def __pos__(self):
         return Pos(self)
 
-    def sum(self, skipna=True, numeric_only=False, min_count=0):
-        return Sum(self, skipna, numeric_only, min_count)
+    def sum(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
+        return Sum(self, skipna, numeric_only, min_count, split_every)
 
-    def prod(self, skipna=True, numeric_only=False, min_count=0):
-        return Prod(self, skipna, numeric_only, min_count)
+    def prod(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
+        return Prod(self, skipna, numeric_only, min_count, split_every)
 
     def var(self, axis=0, skipna=True, ddof=1, numeric_only=False):
         if axis == 0:
@@ -576,14 +485,14 @@ class Expr:
     def mean(self, skipna=True, numeric_only=False, min_count=0):
         return Mean(self, skipna=skipna, numeric_only=numeric_only)
 
-    def max(self, skipna=True, numeric_only=False, min_count=0):
-        return Max(self, skipna, numeric_only, min_count)
+    def max(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
+        return Max(self, skipna, numeric_only, min_count, split_every)
 
-    def any(self, skipna=True):
-        return Any(self, skipna=skipna)
+    def any(self, skipna=True, split_every=False):
+        return Any(self, skipna=skipna, split_every=split_every)
 
-    def all(self, skipna=True):
-        return All(self, skipna=skipna)
+    def all(self, skipna=True, split_every=False):
+        return All(self, skipna=skipna, split_every=split_every)
 
     def idxmin(self, skipna=True, numeric_only=False):
         return IdxMin(self, skipna=skipna, numeric_only=numeric_only)
@@ -591,14 +500,34 @@ class Expr:
     def idxmax(self, skipna=True, numeric_only=False):
         return IdxMax(self, skipna=skipna, numeric_only=numeric_only)
 
-    def mode(self, dropna=True):
-        return Mode(self, dropna=dropna)
+    def mode(self, dropna=True, split_every=False):
+        return Mode(self, dropna=dropna, split_every=split_every)
 
-    def min(self, skipna=True, numeric_only=False, min_count=0):
-        return Min(self, skipna, numeric_only, min_count)
+    def min(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
+        return Min(self, skipna, numeric_only, min_count, split_every=split_every)
 
-    def count(self, numeric_only=False):
-        return Count(self, numeric_only)
+    def count(self, numeric_only=False, split_every=False):
+        return Count(self, numeric_only, split_every)
+
+    def cumsum(self, skipna=True):
+        from dask_expr._cumulative import CumSum
+
+        return CumSum(self, skipna=skipna)
+
+    def cumprod(self, skipna=True):
+        from dask_expr._cumulative import CumProd
+
+        return CumProd(self, skipna=skipna)
+
+    def cummax(self, skipna=True):
+        from dask_expr._cumulative import CumMax
+
+        return CumMax(self, skipna=skipna)
+
+    def cummin(self, skipna=True):
+        from dask_expr._cumulative import CumMin
+
+        return CumMin(self, skipna=skipna)
 
     def abs(self):
         return Abs(self)
@@ -673,8 +602,8 @@ class Expr:
             AlignGetitem(aligned, position=1)
         )
 
-    def nunique_approx(self):
-        return NuniqueApprox(self, b=16)
+    def nunique_approx(self, split_every=None):
+        return NuniqueApprox(self, b=16, split_every=split_every)
 
     def memory_usage_per_partition(self, index=True, deep=False):
         return MemoryUsagePerPartition(self, index, deep)
@@ -699,17 +628,13 @@ class Expr:
         else:
             return len(self.divisions) - 1
 
-    @functools.cached_property
-    def _name(self):
-        return (
-            funcname(type(self)).lower() + "-" + _tokenize_deterministic(*self.operands)
-        )
-
     @property
     def columns(self) -> list:
         try:
             return list(self._meta.columns)
         except AttributeError:
+            if self.ndim == 1:
+                return [self.name]
             return []
         except Exception:
             raise
@@ -719,285 +644,12 @@ class Expr:
         return self.columns
 
     @property
-    def dtypes(self):
-        return self._meta.dtypes
+    def name(self):
+        return self._meta.name
 
     @property
-    def _meta(self):
-        raise NotImplementedError()
-
-    def __dask_graph__(self):
-        """Traverse expression tree, collect layers"""
-        stack = [self]
-        seen = set()
-        layers = []
-        while stack:
-            expr = stack.pop()
-
-            if expr._name in seen:
-                continue
-            seen.add(expr._name)
-
-            layers.append(expr._layer())
-            for operand in expr.dependencies():
-                stack.append(operand)
-
-        return toolz.merge(layers)
-
-    def __dask_keys__(self):
-        return [(self._name, i) for i in range(self.npartitions)]
-
-    def substitute(self, old, new) -> Expr:
-        """Substitute a specific term within the expression
-
-        Note that replacing non-`Expr` terms may produce
-        unexpected results, and is not recommended.
-        Substituting boolean values is not allowed.
-
-        Parameters
-        ----------
-        old:
-            Old term to find and replace.
-        new:
-            New term to replace instances of `old` with.
-
-        Examples
-        --------
-        >>> (df + 10).substitute(10, 20)
-        df + 20
-        """
-
-        # Check if we are replacing a literal
-        if isinstance(old, Expr):
-            substitute_literal = False
-            if self._name == old._name:
-                return new
-        else:
-            substitute_literal = True
-            if isinstance(old, bool):
-                raise TypeError("Arguments to `substitute` cannot be bool.")
-
-        new_exprs = []
-        update = False
-        for operand in self.operands:
-            if isinstance(operand, Expr):
-                val = operand.substitute(old, new)
-                if operand._name != val._name:
-                    update = True
-                new_exprs.append(val)
-            elif (
-                isinstance(self, Fused)
-                and isinstance(operand, list)
-                and all(isinstance(op, Expr) for op in operand)
-            ):
-                # Special handling for `Fused`.
-                # We make no promise to dive through a
-                # list operand in general, but NEED to
-                # do so for the `Fused.exprs` operand.
-                val = []
-                for op in operand:
-                    val.append(op.substitute(old, new))
-                    if val[-1]._name != op._name:
-                        update = True
-                new_exprs.append(val)
-            elif (
-                substitute_literal
-                and not isinstance(operand, bool)
-                and isinstance(operand, type(old))
-                and operand == old
-            ):
-                new_exprs.append(new)
-                update = True
-            else:
-                new_exprs.append(operand)
-
-        if update:  # Only recreate if something changed
-            return type(self)(*new_exprs)
-        return self
-
-    def substitute_parameters(self, substitutions: dict) -> Expr:
-        """Substitute specific `Expr` parameters
-
-        Parameters
-        ----------
-        substitutions:
-            Mapping of parameter keys to new values. Keys that
-            are not found in ``self._parameters`` will be ignored.
-        """
-        if not substitutions:
-            return self
-
-        changed = False
-        new_operands = []
-        for i, operand in enumerate(self.operands):
-            if i < len(self._parameters) and self._parameters[i] in substitutions:
-                new_operands.append(substitutions[self._parameters[i]])
-                changed = True
-            else:
-                new_operands.append(operand)
-        if changed:
-            return type(self)(*new_operands)
-        return self
-
-    def _find_similar_operations(self, root: Expr, ignore: list | None = None):
-        # Find operations with the same type and operands.
-        # Parameter keys specified by `ignore` will not be
-        # included in the operand comparison
-        alike = [
-            op for op in root.find_operations(type(self)) if op._name != self._name
-        ]
-        if not alike:
-            # No other operations of the same type. Early return
-            return []
-
-        # Return subset of `alike` with the same "token"
-        token = _tokenize_partial(self, ignore)
-        return [item for item in alike if _tokenize_partial(item, ignore) == token]
-
-    def _node_label_args(self):
-        """Operands to include in the node label by `visualize`"""
-        return self.dependencies()
-
-    def _to_graphviz(
-        self,
-        rankdir="BT",
-        graph_attr=None,
-        node_attr=None,
-        edge_attr=None,
-        **kwargs,
-    ):
-        from dask.dot import label, name
-
-        graphviz = import_required(
-            "graphviz",
-            "Drawing dask graphs with the graphviz visualization engine requires the `graphviz` "
-            "python library and the `graphviz` system library.\n\n"
-            "Please either conda or pip install as follows:\n\n"
-            "  conda install python-graphviz     # either conda install\n"
-            "  python -m pip install graphviz    # or pip install and follow installation instructions",
-        )
-
-        graph_attr = graph_attr or {}
-        node_attr = node_attr or {}
-        edge_attr = edge_attr or {}
-
-        graph_attr["rankdir"] = rankdir
-        node_attr["shape"] = "box"
-        node_attr["fontname"] = "helvetica"
-
-        graph_attr.update(kwargs)
-        g = graphviz.Digraph(
-            graph_attr=graph_attr,
-            node_attr=node_attr,
-            edge_attr=edge_attr,
-        )
-
-        stack = [self]
-        seen = set()
-        dependencies = {}
-        while stack:
-            expr = stack.pop()
-
-            if expr._name in seen:
-                continue
-            seen.add(expr._name)
-
-            dependencies[expr] = set(expr.dependencies())
-            for dep in expr.dependencies():
-                stack.append(dep)
-
-        cache = {}
-        for expr in dependencies:
-            expr_name = name(expr)
-            attrs = {}
-
-            # Make node label
-            deps = [
-                funcname(type(dep)) if isinstance(dep, Expr) else str(dep)
-                for dep in expr._node_label_args()
-            ]
-            _label = funcname(type(expr))
-            if deps:
-                _label = f"{_label}({', '.join(deps)})" if deps else _label
-            node_label = label(_label, cache=cache)
-
-            attrs.setdefault("label", str(node_label))
-            attrs.setdefault("fontsize", "20")
-            g.node(expr_name, **attrs)
-
-        for expr, deps in dependencies.items():
-            expr_name = name(expr)
-            for dep in deps:
-                dep_name = name(dep)
-                g.edge(dep_name, expr_name)
-
-        return g
-
-    def visualize(self, filename="dask-expr.svg", format=None, **kwargs):
-        """
-        Visualize the expression graph.
-        Requires ``graphviz`` to be installed.
-
-        Parameters
-        ----------
-        filename : str or None, optional
-            The name of the file to write to disk. If the provided `filename`
-            doesn't include an extension, '.png' will be used by default.
-            If `filename` is None, no file will be written, and the graph is
-            rendered in the Jupyter notebook only.
-        format : {'png', 'pdf', 'dot', 'svg', 'jpeg', 'jpg'}, optional
-            Format in which to write output file. Default is 'svg'.
-        **kwargs
-           Additional keyword arguments to forward to ``to_graphviz``.
-        """
-        from dask.dot import graphviz_to_file
-
-        g = self._to_graphviz(**kwargs)
-        graphviz_to_file(g, filename, format)
-        return g
-
-    def walk(self) -> Generator[Expr]:
-        """Iterate through all expressions in the tree
-
-        Returns
-        -------
-        nodes
-            Generator of Expr instances in the graph.
-            Ordering is a depth-first search of the expression tree
-        """
-        stack = [self]
-        seen = set()
-        while stack:
-            node = stack.pop()
-            if node._name in seen:
-                continue
-            seen.add(node._name)
-
-            for dep in node.dependencies():
-                stack.append(dep)
-
-            yield node
-
-    def find_operations(self, operation: type | tuple[type]) -> Generator[Expr]:
-        """Search the expression graph for a specific operation type
-
-        Parameters
-        ----------
-        operation
-            The operation type to search for.
-
-        Returns
-        -------
-        nodes
-            Generator of `operation` instances. Ordering corresponds
-            to a depth-first search of the expression graph.
-        """
-        assert (
-            isinstance(operation, tuple)
-            and all(issubclass(e, Expr) for e in operation)
-            or issubclass(operation, Expr)
-        ), "`operation` must be`Expr` subclass)"
-        return (expr for expr in self.walk() if isinstance(expr, operation))
+    def dtypes(self):
+        return self._meta.dtypes
 
 
 class Literal(Expr):
@@ -1213,14 +865,23 @@ class MapOverlap(MapPartitions):
         kwargs = self.kwargs
         if kwargs is None:
             kwargs = {}
-        kwargs = kwargs.copy()
-        kwargs.update({"before": self.before, "after": self.after, "func": self.func})
         return kwargs
+
+    @property
+    def args(self):
+        return (
+            [self.frame]
+            + [self.func, self.before, self.after]
+            + self.operands[len(self._parameters) :]
+        )
 
     @functools.cached_property
     def _meta(self):
         meta = self.operand("meta")
-        args = [arg._meta if isinstance(arg, Expr) else arg for arg in self.args]
+        args = [self.frame._meta] + [
+            arg._meta if isinstance(arg, Expr) else arg
+            for arg in self.operands[len(self._parameters) :]
+        ]
         return _get_meta_map_partitions(args, [], self.func, self.kwargs, meta, None)
 
     @functools.cached_property
@@ -1254,6 +915,7 @@ class MapOverlap(MapPartitions):
             self.transform_divisions,
             self.clear_divisions,
             self._kwargs,
+            *self.args[1:],
         )
 
 
@@ -1265,7 +927,8 @@ class CreateOverlappingPartitions(Expr):
         return self.frame._meta
 
     def _divisions(self):
-        return (None,) * (self.frame.npartitions + 1)
+        # Keep divisions alive, MapPartitions will handle the actual division logic
+        return self.frame.divisions
 
     def _layer(self) -> dict:
         dsk, prevs, nexts = {}, [], []
@@ -1353,7 +1016,7 @@ def _combined_parts(prev_part, current_part, next_part, before, after):
         else:
             prev_part_input = prev_part
             prev_part = _tail_timedelta(current_part, prev_part, before)
-            if len(prev_part_input) == len(prev_part):
+            if len(prev_part_input) == len(prev_part) and len(prev_part_input) > 0:
                 raise NotImplementedError(msg)
 
     if next_part is not None:
@@ -1363,7 +1026,7 @@ def _combined_parts(prev_part, current_part, next_part, before, after):
         else:
             next_part_input = next_part
             next_part = _head_timedelta(current_part, next_part, after)
-            if len(next_part_input) == len(next_part):
+            if len(next_part_input) == len(next_part) and len(next_part_input) > 0:
                 raise NotImplementedError(msg)
 
     parts = [p for p in (prev_part, current_part, next_part) if p is not None]
@@ -1372,8 +1035,8 @@ def _combined_parts(prev_part, current_part, next_part, before, after):
     return CombinedOutput(
         (
             combined,
-            len(prev_part) if prev_part is not None else None,
-            len(next_part) if next_part is not None else None,
+            len(prev_part) if prev_part is not None and len(prev_part) > 0 else None,
+            len(next_part) if next_part is not None and len(next_part) > 0 else None,
         )
     )
 
@@ -1500,14 +1163,12 @@ class Query(Blockwise):
 class MemoryUsagePerPartition(Blockwise):
     _parameters = ["frame", "index", "deep"]
     _defaults = {"index": True, "deep": False}
-    operation = staticmethod(total_mem_usage)
 
-    @functools.cached_property
-    def _meta(self):
-        meta = self.frame._meta
-        if is_series_like(meta):
-            return meta._constructor([super()._meta])
-        return meta._constructor_sliced([super()._meta])
+    @staticmethod
+    def operation(*args, **kwargs):
+        if is_series_like(args[0]):
+            return args[0]._constructor([total_mem_usage(*args, **kwargs)])
+        return args[0]._constructor_sliced([total_mem_usage(*args, **kwargs)])
 
     def _divisions(self):
         return (None,) * (self.frame.npartitions + 1)
@@ -1562,9 +1223,37 @@ class RenameFrame(Elemwise):
 
 
 class RenameSeries(Elemwise):
-    _parameters = ["frame", "index"]
-    _keyword_only = ["index"]
+    _parameters = ["frame", "index", "sorted_index"]
+    _keyword_only = ["index", "sorted_index"]
+    _defaults = {"sorted_index": False}
     operation = M.rename
+
+    @functools.cached_property
+    def _meta(self):
+        return make_meta(meta_nonempty(self.frame._meta).rename(**self._kwargs))
+
+    @property
+    def _kwargs(self) -> dict:
+        if is_series_like(self.frame._meta):
+            return {"index": self.operand("index")}
+        else:
+            return {"name": self.operand("index")}
+
+    def _divisions(self):
+        index = self.operand("index")
+        if is_scalar(index) and not isinstance(index, Callable):
+            return self.frame.divisions
+        elif self.sorted_index and self.frame.known_divisions:
+            old = pd.Series(1, index=self.frame.divisions)
+            new_divisions = old.rename(index).index
+            if not new_divisions.is_monotonic_increasing:
+                raise ValueError(
+                    "The renamer creates an Index with non-monotonic divisions. "
+                    "This is not allowed. Please set sorted_index=False."
+                )
+            return tuple(new_divisions.tolist())
+        else:
+            return (None,) * (self.frame.npartitions + 1)
 
 
 class Fillna(Elemwise):
@@ -1768,7 +1457,11 @@ class Apply(Elemwise):
 
     @functools.cached_property
     def _meta(self):
-        return self.frame._meta.apply(self.function, *self.args, **self.kwargs)
+        return make_meta(
+            meta_nonempty(self.frame._meta).apply(
+                self.function, *self.args, **self.kwargs
+            )
+        )
 
     def _task(self, index: int):
         return (
@@ -1785,13 +1478,28 @@ class Apply(Elemwise):
 
 class Map(Elemwise):
     _projection_passthrough = True
-    _parameters = ["frame", "arg", "na_action"]
-    _defaults = {"na_action": None}
+    _parameters = ["frame", "arg", "na_action", "meta"]
+    _defaults = {"na_action": None, "meta": None}
+    _keyword_only = ["meta"]
     operation = M.map
 
     @functools.cached_property
     def _meta(self):
-        return self.frame._meta
+        if self.operand("meta") is None:
+            args = [
+                meta_nonempty(op._meta) if isinstance(op, Expr) else op
+                for op in self._args
+            ]
+            return make_meta(self.operation(*args, **self._kwargs))
+        return make_meta(
+            self.operand("meta"),
+            parent_meta=self.frame._meta,
+            index=self.frame._meta.index,
+        )
+
+    @functools.cached_property
+    def _kwargs(self) -> dict:
+        return {}
 
     def _divisions(self):
         if is_index_like(self.frame._meta):
@@ -1915,12 +1623,13 @@ class Projection(Elemwise):
 
     @property
     def columns(self):
-        if isinstance(self.operand("columns"), list):
-            return self.operand("columns")
-        elif isinstance(self.operand("columns"), pd.Index):
-            return list(self.operand("columns"))
+        cols = self.operand("columns")
+        if isinstance(cols, list):
+            return cols
+        elif isinstance(cols, pd.Index):
+            return list(cols)
         else:
-            return [self.operand("columns")]
+            return [cols]
 
     @functools.cached_property
     def _meta(self):
@@ -2024,13 +1733,36 @@ class Lengths(Expr):
 class ResetIndex(Elemwise):
     """Reset the index of a Series or DataFrame"""
 
-    _parameters = ["frame", "drop"]
-    _defaults = {"drop": False}
-    _keyword_only = ["drop"]
+    _parameters = ["frame", "drop", "name"]
+    _defaults = {"drop": False, "name": no_default}
+    _keyword_only = ["drop", "name"]
     operation = M.reset_index
+
+    @functools.cached_property
+    def _kwargs(self) -> dict:
+        kwargs = {"drop": self.drop}
+        if self.operand("name") is not no_default:
+            kwargs.update({"name": self.operand("name")})
+        return kwargs
 
     def _divisions(self):
         return (None,) * (self.frame.npartitions + 1)
+
+
+class AddPrefixSeries(Elemwise):
+    _parameters = ["frame", "prefix"]
+    operation = M.add_prefix
+
+    def _divisions(self):
+        return tuple(self.prefix + str(division) for division in self.frame.divisions)
+
+
+class AddSuffixSeries(AddPrefixSeries):
+    _parameters = ["frame", "suffix"]
+    operation = M.add_suffix
+
+    def _divisions(self):
+        return tuple(str(division) + self.suffix for division in self.frame.divisions)
 
 
 class AddPrefix(Elemwise):
@@ -2099,6 +1831,8 @@ class Head(Expr):
     def _lower(self):
         if not isinstance(self, BlockwiseHead):
             # Lower to Blockwise
+            if is_index_like(self._meta):
+                return BlockwiseHeadIndex(Partitions(self.frame, [0]), self.n)
             return BlockwiseHead(Partitions(self.frame, [0]), self.n)
 
 
@@ -2114,6 +1848,11 @@ class BlockwiseHead(Head, Blockwise):
 
     def _task(self, index: int):
         return (M.head, (self.frame._name, index), self.n)
+
+
+class BlockwiseHeadIndex(BlockwiseHead):
+    def _task(self, index: int):
+        return (operator.getitem, (self.frame._name, index), slice(0, self.n))
 
 
 class Tail(Expr):
@@ -2151,6 +1890,10 @@ class Tail(Expr):
     def _lower(self):
         if not isinstance(self, BlockwiseTail):
             # Lower to Blockwise
+            if is_index_like(self._meta):
+                return BlockwiseTailIndex(
+                    Partitions(self.frame, [self.frame.npartitions - 1]), self.n
+                )
             return BlockwiseTail(
                 Partitions(self.frame, [self.frame.npartitions - 1]), self.n
             )
@@ -2168,6 +1911,11 @@ class BlockwiseTail(Tail, Blockwise):
 
     def _task(self, index: int):
         return (M.tail, (self.frame._name, index), self.n)
+
+
+class BlockwiseTailIndex(BlockwiseTail):
+    def _task(self, index: int):
+        return (operator.getitem, (self.frame._name, index), slice(-self.n, None))
 
 
 class Binop(Elemwise):
@@ -2223,6 +1971,20 @@ class Add(Binop):
             return 2 * self.left
 
 
+class MethodOperator(Binop):
+    _parameters = ["name", "left", "right", "axis", "level", "fill_value"]
+    _defaults = {"axis": "columns", "level": None, "fill_value": None}
+    _keyword_only = ["axis", "level", "fill_value"]
+
+    @property
+    def _operator_repr(self):
+        return self.name
+
+    @staticmethod
+    def operation(name, left, right, **kwargs):
+        return getattr(left, name)(right, **kwargs)
+
+
 class Sub(Binop):
     operation = operator.sub
     _operator_repr = "-"
@@ -2239,6 +2001,11 @@ class Mul(Binop):
             and isinstance(self.right.left, numbers.Number)
         ):
             return (self.left * self.right.left) * self.right.right
+
+
+class Pow(Binop):
+    operation = operator.pow
+    _operator_repr = "**"
 
 
 class Div(Binop):
@@ -2480,12 +2247,15 @@ def is_broadcastable(s):
 
 def non_blockwise_ancestors(expr):
     """Traverse through tree to find ancestors that are not blockwise or are IO"""
+    from dask_expr._cumulative import CumulativeAggregations
+
     stack = [expr]
     while stack:
         e = stack.pop()
         if isinstance(e, IO):
             yield e
-        elif isinstance(e, Blockwise):
+        elif isinstance(e, (Blockwise, CumulativeAggregations)):
+            # TODO: Capture this in inheritance logic
             dependencies = e.dependencies()
             stack.extend([expr for expr in dependencies if not is_broadcastable(expr)])
         else:
@@ -2617,14 +2387,45 @@ def optimize_blockwise_fusion(expr):
     return expr
 
 
+class Diff(MapOverlap):
+    _parameters = ["frame", "periods"]
+    _defaults = {"periods": 1}
+    func = M.diff
+    enforce_metadata = True
+    transform_divisions = False
+    clear_divisions = False
+
+    def _divisions(self):
+        return self.frame.divisions
+
+    @functools.cached_property
+    def _meta(self):
+        return meta_nonempty(self.frame._meta).diff(**self.kwargs)
+
+    def _simplify_up(self, parent):
+        if isinstance(parent, Projection):
+            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+
+    @functools.cached_property
+    def kwargs(self):
+        return dict(periods=self.periods)
+
+    @property
+    def before(self):
+        return self.periods if self.periods > 0 else 0
+
+    @property
+    def after(self):
+        return 0 if self.periods > 0 else -self.periods
+
+
 class FFill(MapOverlap):
-    _parameters = [
-        "frame",
-        "limit",
-    ]
+    _parameters = ["frame", "limit"]
     _defaults = {"limit": None}
     func = M.ffill
     enforce_metadata = True
+    transform_divisions = False
+    clear_divisions = False
 
     def _divisions(self):
         return self.frame.divisions
@@ -2649,20 +2450,6 @@ class FFill(MapOverlap):
     def after(self):
         return 0
 
-    def _lower(self):
-        return None
-
-    def _simplify_down(self):
-        return MapOverlap(
-            frame=self.frame,
-            func=self.func,
-            before=self.before,
-            after=self.after,
-            meta=self._meta,
-            enforce_metadata=self.enforce_metadata,
-            kwargs=self.kwargs,
-        )
-
 
 class BFill(FFill):
     func = M.bfill
@@ -2686,11 +2473,21 @@ class Shift(MapOverlap):
 
     func = M.shift
     enforce_metadata = True
-    before = 0
-    after = 0
+    transform_divisions = False
+
+    @functools.cached_property
+    def clear_divisions(self):
+        # TODO We can do better if freq is given, but this needs adjustments in
+        #  map_partitions
+        return True if self._divisions()[0] is None or self.freq is not None else False
 
     def _divisions(self):
-        return self.frame.divisions
+        if self.freq is None:
+            return self.frame.divisions
+        divisions = _calc_maybe_new_divisions(self.frame, self.periods, self.freq)
+        if divisions is None:
+            divisions = (None,) * (self.frame.npartitions + 1)
+        return divisions
 
     @functools.cached_property
     def _meta(self):
@@ -2704,25 +2501,33 @@ class Shift(MapOverlap):
         if isinstance(parent, Projection):
             return plain_column_projection(self, parent, dependents)
 
-    def _lower(self):
-        return None
+    @property
+    def before(self):
+        return self.periods if self.periods > 0 else 0
 
-    def _simplify_down(self):
-        if self.freq is None:
-            self.before, self.after = (
-                (self.periods, 0) if self.periods > 0 else (0, -self.periods)
-            )
-            return MapOverlap(
-                frame=self.frame,
-                func=self.func,
-                before=self.before,
-                after=self.after,
-                meta=self._meta,
-                enforce_metadata=self.enforce_metadata,
-                kwargs=self.kwargs,
-            )
-        else:
-            raise NotImplementedError()
+    @property
+    def after(self):
+        return 0 if self.periods > 0 else -self.periods
+
+
+class ShiftIndex(Blockwise):
+    _parameters = ["frame", "periods", "freq"]
+    _defaults = {"periods": 1, "freq": None}
+    _keyword_only = ["freq"]
+    operation = M.shift
+
+    def _divisions(self):
+        freq = self.freq
+        if freq is None:
+            freq = self._meta.freq
+        divisions = _calc_maybe_new_divisions(self.frame, self.periods, freq)
+        if divisions is None:
+            divisions = (None,) * (self.frame.npartitions + 1)
+        return divisions
+
+    @functools.cached_property
+    def _kwargs(self) -> dict:
+        return {"freq": self.freq} if self.freq is not None else {}
 
 
 class Fused(Blockwise):
