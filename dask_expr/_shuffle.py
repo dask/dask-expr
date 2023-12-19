@@ -1071,6 +1071,9 @@ class _SetIndexPost(Blockwise):
             kwargs["upsample"],
         )
         assert key in divisions_lru
+        if self.frame.npartitions < len(divisions_lru[key][0]) - 1:
+            # TODO: Culling, figure out a more efficient solution here
+            return self.frame.divisions
         return divisions_lru[key][0]
 
 
