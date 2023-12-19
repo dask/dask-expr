@@ -752,17 +752,9 @@ def _fillna(group, *, what, **kwargs):
 class GroupByBFill(GroupByTransform):
     func = staticmethod(functools.partial(_fillna, what="bfill"))
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            by_columns = self._by_columns
-            columns = sorted(set(parent.columns + by_columns))
-            if columns == self.frame.columns:
-                return
-            columns = [col for col in self.frame.columns if col in columns]
-            return type(parent)(
-                type(self)(self.frame[columns], *self.operands[1:]),
-                *parent.operands[1:],
-            )
+            return groupby_projection(self, parent, dependents)
 
 
 class GroupByFFill(GroupByBFill):
@@ -794,16 +786,9 @@ class Median(GroupByShift):
     def _shuffle_grp_func(self, shuffled=False):
         return self.grp_func
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            by_columns = self._by_columns
-            columns = sorted(set(parent.columns + by_columns))
-            if columns == self.frame.columns:
-                return
-            return type(parent)(
-                type(self)(self.frame[columns], *self.operands[1:]),
-                *parent.operands[1:],
-            )
+            return groupby_projection(self, parent, dependents)
 
 
 class GetGroup(Blockwise, GroupByBase):

@@ -467,7 +467,7 @@ class FromScalars(IO):
             )
         }
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
             if sorted(parent.columns) == sorted(self.names):
                 return
