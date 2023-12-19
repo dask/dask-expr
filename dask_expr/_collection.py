@@ -994,6 +994,8 @@ class DataFrame(FrameBase):
         shuffle_backend=None,
         npartitions=None,
     ):
+        if not is_dask_collection(other):
+            other = from_pandas(other, npartitions=1)
         if (
             not isinstance(other, list)
             and not is_dataframe_like(other._meta)
