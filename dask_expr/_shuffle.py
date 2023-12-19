@@ -1009,9 +1009,6 @@ class SetPartition(SetIndex):
 
     _parameters = ["frame", "_other", "drop", "npartitions", "ascending", "upsample"]
 
-    def _divisions(self):
-        return super()._divisions()
-
     def _lower(self):
         divisions = self.other._meta._constructor(self._divisions())
         partitions = _SetPartitionsPreSetIndex(self.other, divisions)
