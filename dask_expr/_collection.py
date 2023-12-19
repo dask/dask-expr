@@ -90,7 +90,10 @@ from dask_expr.io import FromPandasDivisions, FromScalars
 def _wrap_expr_api(*args, wrap_api=None, **kwargs):
     # Use Expr API, but convert to/from Expr objects
     assert wrap_api is not None
-    result = wrap_api(*args, **kwargs)
+    result = wrap_api(
+        *[arg.expr if isinstance(arg, FrameBase) else arg for arg in args],
+        **kwargs,
+    )
     if isinstance(result, expr.Expr):
         return new_collection(result)
     return result
@@ -99,14 +102,18 @@ def _wrap_expr_api(*args, wrap_api=None, **kwargs):
 def _wrap_expr_op(self, other, op=None):
     # Wrap expr operator
     assert op is not None
+    if isinstance(other, FrameBase):
+        other = other.expr
 
     if not isinstance(other, expr.Expr):
-        return new_collection(getattr(self, op)(other))
-    elif expr.are_co_aligned(self, other):
-        return new_collection(getattr(self, op)(other))
+        return new_collection(getattr(self.expr, op)(other))
+    elif expr.are_co_aligned(self.expr, other):
+        return new_collection(getattr(self.expr, op)(other))
     else:
         return new_collection(
-            getattr(AlignPartitions(self, other), op)(AlignPartitions(other, self))
+            getattr(AlignPartitions(self.expr, other), op)(
+                AlignPartitions(other, self.expr)
+            )
         )
 
 
@@ -171,7 +178,7 @@ def _wrap_expr_method_operator(name, class_):
 def _wrap_unary_expr_op(self, op=None):
     # Wrap expr operator
     assert op is not None
-    return new_collection(getattr(self, op)())
+    return new_collection(getattr(self.expr, op)())
 
 
 #
@@ -338,7 +345,7 @@ class FrameBase(DaskMethodsMixin):
 
     def copy(self):
         """Return a copy of this object"""
-        return new_collection(self)
+        return new_collection(self.expr)
 
     def eq(self, other):
         return self.__eq__(other)
