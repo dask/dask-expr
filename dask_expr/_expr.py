@@ -1432,6 +1432,10 @@ class Index(Elemwise):
             return self.frame._meta.index
         return meta
 
+    @property
+    def _projection_columns(self):
+        return []
+
     def _task(self, index: int):
         return (
             getattr,
@@ -2388,7 +2392,10 @@ class MinType:
 
 
 def determine_column_projection(expr, parent, dependents, additional_columns=None):
-    column_union = parent.columns.copy()
+    if isinstance(parent, Index):
+        column_union = []
+    else:
+        column_union = parent.columns.copy()
     parents = [x() for x in dependents[expr._name] if x() is not None]
 
     for p in parents:
