@@ -12,7 +12,7 @@ import toolz
 from dask.dataframe.core import is_dataframe_like, is_index_like, is_series_like
 from dask.utils import funcname, import_required, is_arraylike
 
-from dask_expr._util import _BackendData, _tokenize_deterministic, _tokenize_partial
+from dask_expr._util import _BackendData, _tokenize_deterministic
 
 
 class Expr:
@@ -528,21 +528,6 @@ class Expr:
         if changed:
             return type(self)(*new_operands)
         return self
-
-    def _find_similar_operations(self, root: Expr, ignore: list | None = None):
-        # Find operations with the same type and operands.
-        # Parameter keys specified by `ignore` will not be
-        # included in the operand comparison
-        alike = [
-            op for op in root.find_operations(type(self)) if op._name != self._name
-        ]
-        if not alike:
-            # No other operations of the same type. Early return
-            return []
-
-        # Return subset of `alike` with the same "token"
-        token = _tokenize_partial(self, ignore)
-        return [item for item in alike if _tokenize_partial(item, ignore) == token]
 
     def _node_label_args(self):
         """Operands to include in the node label by `visualize`"""
