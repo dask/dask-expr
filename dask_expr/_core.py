@@ -20,6 +20,8 @@ class Expr:
     _defaults = {}
 
     def __init__(self, *args, **kwargs):
+        from dask_expr._collection import FrameBase, Scalar
+
         operands = list(args)
         for parameter in type(self)._parameters[len(operands) :]:
             try:
@@ -27,7 +29,9 @@ class Expr:
             except KeyError:
                 operands.append(type(self)._defaults[parameter])
         assert not kwargs, kwargs
-        operands = [o.expr if hasattr(o, "expr") else o for o in operands]
+        operands = [
+            o.expr if isinstance(o, (FrameBase, Scalar)) else o for o in operands
+        ]
         self.operands = operands
         if self._required_attribute:
             dep = next(iter(self.dependencies()))._meta
