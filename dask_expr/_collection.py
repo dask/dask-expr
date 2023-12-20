@@ -330,7 +330,6 @@ class FrameBase(DaskMethodsMixin):
 
     @index.setter
     def index(self, value):
-        assert isinstance(value, Index), type(value)
         assert expr.are_co_aligned(
             self.expr, value.expr
         ), "value needs to be aligned with the index"
