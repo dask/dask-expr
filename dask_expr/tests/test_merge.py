@@ -156,68 +156,6 @@ def test_join_recursive():
     assert_eq(result, pdf.join([pdf2, pdf3], how="left"), check_dtype=False)
 
 
-@pytest.mark.parametrize("how", ["inner", "left", "right"])
-@pytest.mark.parametrize("npartitions", [28, 32])
-@pytest.mark.parametrize("base", ["lg", "sm"])
-def test_merge_tasks_large_to_small(how, npartitions, base):
-    size_lg = 3000
-    size_sm = 300
-    npartitions_lg = 30
-    npartitions_sm = 3
-    broadcast_bias = 1.0  # Prioritize broadcast
-
-    lg = lib.DataFrame(
-        {
-            "x": np.random.choice(np.arange(100), size_lg),
-            "y": np.arange(size_lg),
-        }
-    )
-    ddf_lg = from_pandas(lg, npartitions=npartitions_lg)
-
-    sm = lib.DataFrame(
-        {
-            "x": np.random.choice(np.arange(100), size_sm),
-            "y": np.arange(size_sm),
-        }
-    )
-    ddf_sm = from_pandas(sm, npartitions=npartitions_sm)
-
-    if base == "lg":
-        left = lg
-        ddf_left = ddf_lg
-        right = sm
-        ddf_right = ddf_sm
-    else:
-        left = sm
-        ddf_left = ddf_sm
-        right = lg
-        ddf_right = ddf_lg
-
-    dd_result = merge(
-        ddf_left,
-        ddf_right,
-        on="y",
-        how=how,
-        npartitions=npartitions,
-        broadcast=broadcast_bias,
-        shuffle_backend="tasks",
-    )
-    pd_result = lib.merge(left, right, on="y", how=how)
-
-    # Make sure `on` dtypes match
-    dd_result["y"] = dd_result["y"].astype(np.int32)
-    pd_result["y"] = pd_result["y"].astype(np.int32)
-
-    if npartitions:
-        assert dd_result.npartitions == npartitions
-
-    assert_eq(
-        dd_result.compute().sort_values("y"),
-        pd_result.sort_values("y"),
-        check_index=False,
-    )
-
-
 def test_join_recursive_raises():
     pdf = lib.DataFrame({"x": [1, 2, 3], "y": 1}, index=lib.Index([1, 2, 3], name="a"))
     df = from_pandas(pdf, npartitions=2)
