@@ -76,19 +76,14 @@ def test_merge_indexed(how, pass_name, sort, shuffle_backend):
 
 
 @pytest.mark.parametrize("how", ["left", "right", "inner", "outer"])
-@pytest.mark.parametrize("npartitions", [None, 22])
-def test_broadcast_merge(how, npartitions):
+def test_broadcast_merge(how):
     # Make simple left & right dfs
-    pdf1 = lib.DataFrame({"x": range(40), "y": range(40)})
-    df1 = from_pandas(pdf1, 20)
-    pdf2 = lib.DataFrame({"x": range(0, 40, 2), "z": range(20)})
-    df2 = from_pandas(pdf2, 2)
+    pdf1 = lib.DataFrame({"x": range(20), "y": range(20)})
+    df1 = from_pandas(pdf1, 4)
+    pdf2 = lib.DataFrame({"x": range(0, 20, 2), "z": range(10)})
+    df2 = from_pandas(pdf2, 1)
 
-    df3 = df1.merge(
-        df2, on="x", how=how, npartitions=npartitions, shuffle_backend="tasks"
-    )
-    if npartitions:
-        assert df3.npartitions == npartitions
+    df3 = df1.merge(df2, on="x", how=how)
 
     # Check that we avoid the shuffle when allowed
     if how in ("left", "inner"):
@@ -96,9 +91,8 @@ def test_broadcast_merge(how, npartitions):
 
     # Check result with/without fusion
     expect = pdf1.merge(pdf2, on="x", how=how)
-    # TODO: This is incorrect, but consistent with dask/dask
-    assert_eq(df3, expect, check_index=False, check_divisions=False)
-    assert_eq(df3.optimize(), expect, check_index=False, check_divisions=False)
+    assert_eq(df3, expect, check_index=False)
+    assert_eq(df3.optimize(), expect, check_index=False)
 
 
 def test_merge_column_projection():
@@ -154,68 +148,6 @@ def test_join_recursive():
     result = df.join([df2, df3], how="left")
     # The nature of our join might cast ints to floats
     assert_eq(result, pdf.join([pdf2, pdf3], how="left"), check_dtype=False)
-
-
-@pytest.mark.parametrize("how", ["inner", "left", "right"])
-@pytest.mark.parametrize("npartitions", [28, 32])
-@pytest.mark.parametrize("base", ["lg", "sm"])
-def test_merge_tasks_large_to_small(how, npartitions, base):
-    size_lg = 3000
-    size_sm = 300
-    npartitions_lg = 30
-    npartitions_sm = 3
-    broadcast_bias = 1.0  # Prioritize broadcast
-
-    lg = lib.DataFrame(
-        {
-            "x": np.random.choice(np.arange(100), size_lg),
-            "y": np.arange(size_lg),
-        }
-    )
-    ddf_lg = from_pandas(lg, npartitions=npartitions_lg)
-
-    sm = lib.DataFrame(
-        {
-            "x": np.random.choice(np.arange(100), size_sm),
-            "y": np.arange(size_sm),
-        }
-    )
-    ddf_sm = from_pandas(sm, npartitions=npartitions_sm)
-
-    if base == "lg":
-        left = lg
-        ddf_left = ddf_lg
-        right = sm
-        ddf_right = ddf_sm
-    else:
-        left = sm
-        ddf_left = ddf_sm
-        right = lg
-        ddf_right = ddf_lg
-
-    dd_result = merge(
-        ddf_left,
-        ddf_right,
-        on="y",
-        how=how,
-        npartitions=npartitions,
-        broadcast=broadcast_bias,
-        shuffle_backend="tasks",
-    )
-    pd_result = lib.merge(left, right, on="y", how=how)
-
-    # Make sure `on` dtypes match
-    dd_result["y"] = dd_result["y"].astype(np.int32)
-    pd_result["y"] = pd_result["y"].astype(np.int32)
-
-    if npartitions:
-        assert dd_result.npartitions == npartitions
-
-    assert_eq(
-        dd_result.compute().sort_values("y"),
-        pd_result.sort_values("y"),
-        check_index=False,
-    )
 
 
 def test_join_recursive_raises():

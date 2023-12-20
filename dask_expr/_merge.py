@@ -99,20 +99,6 @@ class Merge(Expr):
             return self.operand("_npartitions")
         return max(self.left.npartitions, self.right.npartitions)
 
-    @property
-    def _bcast_left(self):
-        if self.operand("_npartitions") is not None:
-            if self.broadcast_side == "right":
-                return Repartition(self.left, new_partitions=self._npartitions)
-        return self.left
-
-    @property
-    def _bcast_right(self):
-        if self.operand("_npartitions") is not None:
-            if self.broadcast_side == "left":
-                return Repartition(self.right, new_partitions=self._npartitions)
-        return self.right
-
     def _divisions(self):
         if self.merge_indexed_left and self.merge_indexed_right:
             divisions = list(
@@ -150,12 +136,12 @@ class Merge(Expr):
                 self.broadcast_side == "left"
                 and set(self.right._meta.index.names) == meta_index_names
             ):
-                return self._bcast_right._divisions()
+                return self.right._divisions()
             elif (
                 self.broadcast_side == "right"
                 and set(self.left._meta.index.names) == meta_index_names
             ):
-                return self._bcast_left._divisions()
+                return self.left._divisions()
             _npartitions = max(self.left.npartitions, self.right.npartitions)
 
         else:
@@ -272,7 +258,11 @@ class Merge(Expr):
                     shuffle_right_on = "_index"
 
             if self.is_broadcast_join:
-                left, right = self._bcast_left, self._bcast_right
+                if self.operand("_npartitions") is not None:
+                    if self.broadcast_side == "right":
+                        left = Repartition(left, new_partitions=self._npartitions)
+                    else:
+                        right = Repartition(right, new_partitions=self._npartitions)
 
                 if self.how != "inner":
                     if self.broadcast_side == "left":
