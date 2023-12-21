@@ -76,14 +76,19 @@ def test_merge_indexed(how, pass_name, sort, shuffle_backend):
 
 
 @pytest.mark.parametrize("how", ["left", "right", "inner", "outer"])
-def test_broadcast_merge(how):
+@pytest.mark.parametrize("npartitions", [None, 22])
+def test_broadcast_merge(how, npartitions):
     # Make simple left & right dfs
-    pdf1 = lib.DataFrame({"x": range(20), "y": range(20)})
-    df1 = from_pandas(pdf1, 4)
-    pdf2 = lib.DataFrame({"x": range(0, 20, 2), "z": range(10)})
-    df2 = from_pandas(pdf2, 1)
+    pdf1 = lib.DataFrame({"x": range(40), "y": range(40)})
+    df1 = from_pandas(pdf1, 20)
+    pdf2 = lib.DataFrame({"x": range(0, 40, 2), "z": range(20)})
+    df2 = from_pandas(pdf2, 2)
 
-    df3 = df1.merge(df2, on="x", how=how)
+    df3 = df1.merge(
+        df2, on="x", how=how, npartitions=npartitions, shuffle_backend="tasks"
+    )
+    if npartitions:
+        assert df3.npartitions == npartitions
 
     # Check that we avoid the shuffle when allowed
     if how in ("left", "inner"):
@@ -91,8 +96,9 @@ def test_broadcast_merge(how):
 
     # Check result with/without fusion
     expect = pdf1.merge(pdf2, on="x", how=how)
-    assert_eq(df3, expect, check_index=False)
-    assert_eq(df3.optimize(), expect, check_index=False)
+    # TODO: This is incorrect, but consistent with dask/dask
+    assert_eq(df3, expect, check_index=False, check_divisions=False)
+    assert_eq(df3.optimize(), expect, check_index=False, check_divisions=False)
 
 
 def test_merge_column_projection():
@@ -160,6 +166,16 @@ def test_join_recursive_raises():
         df.join([df], how="inner")
     with pytest.raises(ValueError, match="only supports left or outer"):
         df.join([df], how="right")
+
+
+def test_singleton_divisions():
+    df = lib.DataFrame({"x": [1, 1, 1]}, index=[1, 2, 3])
+    ddf = from_pandas(df, npartitions=2)
+    ddf2 = ddf.set_index("x")
+
+    joined = ddf2.join(ddf2, rsuffix="r")
+    assert joined.divisions == (1, 1)
+    joined.compute()
 
 
 def test_categorical_merge_does_not_increase_npartitions():

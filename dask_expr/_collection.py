@@ -328,6 +328,14 @@ class FrameBase(DaskMethodsMixin):
     def index(self):
         return new_collection(self.expr.index)
 
+    @index.setter
+    def index(self, value):
+        assert expr.are_co_aligned(
+            self.expr, value.expr
+        ), "value needs to be aligned with the index"
+        _expr = expr.AssignIndex(self, value)
+        self._expr = _expr
+
     def reset_index(self, drop=False):
         return new_collection(expr.ResetIndex(self, drop))
 
@@ -1814,6 +1822,13 @@ def from_dask_dataframe(ddf: _Frame, optimize: bool = True) -> FrameBase:
     if optimize:
         graph = ddf.__dask_optimize__(graph, ddf.__dask_keys__())
     return from_graph(graph, ddf._meta, ddf.divisions, ddf._name)
+
+
+def from_dask_array(x, columns=None, index=None, meta=None):
+    from dask.dataframe.io import from_dask_array
+
+    df = from_dask_array(x, columns=columns, index=index, meta=meta)
+    return from_dask_dataframe(df, optimize=True)
 
 
 def read_csv(path, *args, usecols=None, **kwargs):
