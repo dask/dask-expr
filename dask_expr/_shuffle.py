@@ -232,6 +232,10 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
         # Reduce partition count if necessary
         if npartitions_out < frame.npartitions:
             frame = Repartition(frame, new_partitions=npartitions_out)
+            if isinstance(partitioning_index, Expr):
+                partitioning_index = Repartition(
+                    partitioning_index, new_partitions=npartitions_out
+                )
 
         drop_columns = []
         if isinstance(partitioning_index, Expr) or partitioning_index != [

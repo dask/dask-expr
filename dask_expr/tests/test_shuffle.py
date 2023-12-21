@@ -444,3 +444,7 @@ def test_shuffle(df, pdf):
 
     with pytest.raises(TypeError, match="index must be aligned"):
         df.shuffle(df.x.repartition(npartitions=2))
+
+    result = df.shuffle(df.x, npartitions=2)
+    assert result.npartitions == 2
+    assert_eq(result, pdf)
