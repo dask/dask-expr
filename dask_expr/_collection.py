@@ -819,6 +819,12 @@ class FrameBase(DaskMethodsMixin):
     def isnull(self):
         return ~self.notnull()
 
+    @classmethod
+    def from_dict(
+        cls, data, *, npartitions=1, orient="columns", dtype=None, columns=None
+    ):
+        return from_dict(data, npartitions, orient, dtype=dtype, columns=columns)
+
 
 # Add operator attributes
 for op in [
