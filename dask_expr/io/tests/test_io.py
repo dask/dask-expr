@@ -503,5 +503,5 @@ def test_from_dask_array():
 
     arr = da.ones((20, 4), chunks=(2, 2))
     df = from_dask_array(arr, columns=["a", "b", "c", "d"])
-    pdf = lib.DataFrame(arr.compute(), columns=list("abcd"))
+    pdf = lib.DataFrame(arr.compute(), columns=["a", "b", "c", "d"])
     assert_eq(df, pdf)
