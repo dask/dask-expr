@@ -282,6 +282,10 @@ def test_set_index_single_partition(pdf):
     assert_eq(df.set_index("x"), pdf.set_index("x"))
 
 
+def test_set_index_list(df, pdf):
+    assert_eq(df.set_index(["x"]), pdf.set_index(["x"]))
+
+
 def test_sort_values_descending(df, pdf):
     assert_eq(
         df.sort_values(by="y", ascending=False),
