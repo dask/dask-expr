@@ -73,7 +73,7 @@ class FromDelayed(PartitionsFiltered, BlockwiseIO):
             return identifiy, key
 
 
-def identifiy(x):
+def identity(x):
     return x
 
 
