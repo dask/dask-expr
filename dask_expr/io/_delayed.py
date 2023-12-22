@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from dask.dataframe.dispatch import make_meta
 from dask.dataframe.utils import check_meta
@@ -80,7 +80,7 @@ def identity(x):
 def from_delayed(
     dfs: Delayed | distributed.Future | Iterable[Delayed | distributed.Future],
     meta=None,
-    divisions: tuple | Literal["sorted"] | None = None,
+    divisions: tuple | None = None,
     verify_meta: bool = True,
 ):
     """Create Dask DataFrame from many Dask Delayed objects
@@ -97,8 +97,6 @@ def from_delayed(
     divisions :
         Partition boundaries along the index.
         For tuple, see https://docs.dask.org/en/latest/dataframe-design.html#partitions
-        For string 'sorted' will compute the delayed values to find index
-        values.  Assumes that the indexes are mutually sorted.
         If None, then won't use index information
     prefix :
         Prefix to prepend to the keys.
@@ -110,6 +108,12 @@ def from_delayed(
 
     if len(dfs) == 0:
         raise TypeError("Must supply at least one delayed object")
+
+    if divisions == "sorted":
+        raise NotImplementedError(
+            "divisions='sorted' not supported, please calculate the divisions "
+            "yourself."
+        )
 
     dfs = [
         delayed(df) if not isinstance(df, Delayed) and hasattr(df, "key") else df
