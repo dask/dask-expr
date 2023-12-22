@@ -8,6 +8,7 @@ from datetime import timedelta
 
 import dask
 import numpy as np
+import pandas as pd
 import pytest
 from dask.dataframe._compat import PANDAS_GE_210
 from dask.dataframe.utils import UNKNOWN_CATEGORIES
@@ -1918,3 +1919,10 @@ def test_axes(df, pdf):
     [assert_eq(d, p) for d, p in zip(df.axes, pdf.axes)]
     assert len(df.x.axes) == len(pdf.x.axes)
     assert_eq(df.x.axes[0], pdf.x.axes[0])
+
+
+def test_map_partitions_series(df, pdf):
+    result = df.x.map_partitions(M.min).compute()
+    assert isinstance(result, pd.Series)
+    assert len(result) == df.npartitions
+    assert min(pdf.x) == min(result)
