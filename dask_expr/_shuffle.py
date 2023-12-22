@@ -256,7 +256,7 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
 
             if isinstance(partitioning_index, Expr):
                 if partitioning_index.ndim == 1:
-                    col = "_partitions_1"
+                    col = "_partitions_0"
                     frame = Assign(frame, col, partitioning_index)
                     partitioning_index = [col]
                 else:
