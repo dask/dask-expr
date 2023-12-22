@@ -222,9 +222,7 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
         # Normalize partitioning_index
         if isinstance(partitioning_index, str):
             partitioning_index = [partitioning_index]
-        if isinstance(partitioning_index, Expr):
-            pass
-        elif not isinstance(partitioning_index, list):
+        if not isinstance(partitioning_index, (list, Expr)):
             raise ValueError(
                 f"{type(partitioning_index)} not a supported type for partitioning_index"
             )
