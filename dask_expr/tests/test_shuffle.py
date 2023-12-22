@@ -220,6 +220,18 @@ def test_set_index_simplify(df, pdf):
     assert q._name == expected._name
 
 
+def test_set_index_numeric_columns():
+    pdf = lib.DataFrame(
+        {
+            0: list("ABAABBABAA"),
+            1: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            2: [1, 2, 3, 2, 1, 3, 2, 4, 2, 3],
+        }
+    )
+    ddf = from_pandas(pdf, 3)
+    assert_eq(ddf.set_index(0), pdf.set_index(0))
+
+
 def test_set_index_without_sort(df, pdf):
     result = df.set_index("y", sort=False)
     assert_eq(result, pdf.set_index("y"))

@@ -171,7 +171,7 @@ class Shuffle(Expr):
 
     @functools.cached_property
     def _meta(self):
-        return self.frame._meta
+        return self.frame._meta.drop(columns=["_partitions"], errors="ignore")
 
     def _divisions(self):
         return (None,) * (self.npartitions_out + 1)
@@ -1066,7 +1066,12 @@ class SetPartition(SetIndex):
             "upsample": self.upsample,
         }
         index_set = _SetIndexPost(
-            shuffled, self.other._meta.name, drop, set_name, kwargs
+            shuffled,
+            self.other._meta.name,
+            drop,
+            set_name,
+            self.frame._meta.columns.dtype,
+            kwargs,
         )
         return SortIndexBlockwise(index_set)
 
@@ -1079,20 +1084,29 @@ class _SetPartitionsPreSetIndex(Blockwise):
 
     @functools.cached_property
     def _meta(self):
-        return self.frame._meta._constructor([0])
+        return make_meta(self.frame._meta._constructor([0]))
 
 
 class _SetIndexPost(Blockwise):
-    _parameters = ["frame", "index_name", "drop", "set_name", "key_kwargs"]
+    _parameters = [
+        "frame",
+        "index_name",
+        "drop",
+        "set_name",
+        "column_dtype",
+        "key_kwargs",
+    ]
     _is_length_preserving = True
 
     @property
     def _args(self) -> list:
-        return self.operands[:4]
+        return self.operands[:5]
 
     @staticmethod
-    def operation(df, index_name, drop, set_name):
-        return df.set_index(set_name, drop=drop).rename_axis(index=index_name)
+    def operation(df, index_name, drop, set_name, column_dtype):
+        df = df.set_index(set_name, drop=drop).rename_axis(index=index_name)
+        df.columns = df.columns.astype(column_dtype)
+        return df
 
     def _divisions(self):
         kwargs = self.key_kwargs
