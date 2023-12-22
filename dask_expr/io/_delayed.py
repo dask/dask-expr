@@ -70,7 +70,7 @@ class FromDelayed(PartitionsFiltered, BlockwiseIO):
                 key,
             )
         else:
-            return identifiy, key
+            return identity, key
 
 
 def identity(x):
