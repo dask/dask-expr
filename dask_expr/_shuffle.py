@@ -171,6 +171,7 @@ class Shuffle(Expr):
 
     @functools.cached_property
     def _meta(self):
+        # We will drop _partitions later on, so reflect this here
         return self.frame._meta.drop(columns=["_partitions"], errors="ignore")
 
     def _divisions(self):
