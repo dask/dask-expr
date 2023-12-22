@@ -179,7 +179,7 @@ def test_set_index_sorted(pdf):
     assert result._name == expected._name
 
     with pytest.raises(TypeError, match="not supported by set_index"):
-        df.set_index([df["y"]], sorted=True)
+        df.set_index([df["y"], df["x"]], sorted=True)
 
     with pytest.raises(NotImplementedError, match="requires sorted=True"):
         df.set_index(["y", "z"], sorted=False)
