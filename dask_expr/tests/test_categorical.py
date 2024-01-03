@@ -18,7 +18,9 @@ def df(pdf):
     yield from_pandas(pdf, npartitions=2)
 
 
-def test_set_categories(df, pdf):
+def test_set_categories(pdf):
+    pdf = pdf.astype("category")
+    df = from_pandas(pdf, npartitions=2)
     assert df.x.cat.known
     assert_eq(df.x.cat.codes, pdf.x.cat.codes)
     ser = df.x.cat.as_unknown()
