@@ -862,6 +862,17 @@ def test_drop_duplicates_subset_simplify(pdf, subset, projection):
     assert str(result) == str(expected)
 
 
+def test_rename_columns():
+    # Multi-index columns
+    pdf = lib.DataFrame({("A", "0"): [1, 2, 2, 3], ("B", 1): [1, 2, 3, 4]})
+    df = from_pandas(pdf, npartitions=2)
+
+    df.columns = ["x", "y"]
+    pdf.columns = ["x", "y"]
+    lib.testing.assert_index_equal(df.columns, lib.Index(["x", "y"]))
+    lib.testing.assert_index_equal(df._meta.columns, lib.Index(["x", "y"]))
+
+
 def test_broadcast(pdf, df):
     assert_eq(
         df + df.sum(),
