@@ -24,8 +24,8 @@ from dask.dataframe.core import (
     is_series_like,
     new_dd_object,
 )
-from dask.dataframe.dispatch import make_meta, meta_nonempty
-from dask.dataframe.multi import is_categorical_dtype, warn_dtype_mismatch
+from dask.dataframe.dispatch import is_categorical_dtype, make_meta, meta_nonempty
+from dask.dataframe.multi import warn_dtype_mismatch
 from dask.dataframe.utils import has_known_categories, index_summary
 from dask.utils import (
     IndexCallable,
