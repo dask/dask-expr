@@ -25,7 +25,7 @@ from dask.dataframe.core import (
     new_dd_object,
 )
 from dask.dataframe.dispatch import make_meta, meta_nonempty
-from dask.dataframe.multi import warn_dtype_mismatch
+from dask.dataframe.multi import is_categorical_dtype, warn_dtype_mismatch
 from dask.dataframe.utils import has_known_categories, index_summary
 from dask.utils import (
     IndexCallable,
@@ -40,7 +40,7 @@ from tlz import first
 
 from dask_expr import _expr as expr
 from dask_expr._align import AlignPartitions
-from dask_expr._categorical import CategoricalAccessor
+from dask_expr._categorical import CategoricalAccessor, Categorize, GetCategories
 from dask_expr._concat import Concat
 from dask_expr._datetime import DatetimeAccessor
 from dask_expr._expr import (
@@ -1362,6 +1362,72 @@ class DataFrame(FrameBase):
         from dask_expr._indexing import ILocIndexer
 
         return ILocIndexer(self)
+
+    def categorize(self, columns=None, index=None, split_every=None, **kwargs):
+        """Convert columns of the DataFrame to category dtype.
+
+        Parameters
+        ----------
+        columns : list, optional
+            A list of column names to convert to categoricals. By default any
+            column with an object dtype is converted to a categorical, and any
+            unknown categoricals are made known.
+        index : bool, optional
+            Whether to categorize the index. By default, object indices are
+            converted to categorical, and unknown categorical indices are made
+            known. Set True to always categorize the index, False to never.
+        split_every : int, optional
+            Group partitions into groups of this size while performing a
+            tree-reduction. If set to False, no tree-reduction will be used.
+            Default is 16.
+        kwargs
+            Keyword arguments are passed on to compute.
+        """
+        df = self
+        meta = df._meta
+        if columns is None:
+            columns = list(meta.select_dtypes(["object", "string", "category"]).columns)
+        elif is_scalar(columns):
+            columns = [columns]
+
+        # Filter out known categorical columns
+        columns = [
+            c
+            for c in columns
+            if not (is_categorical_dtype(meta[c]) and has_known_categories(meta[c]))
+        ]
+
+        if index is not False:
+            if is_categorical_dtype(meta.index):
+                index = not has_known_categories(meta.index)
+            elif index is None:
+                index = str(meta.index.dtype) in ("object", "string")
+
+        # Nothing to do
+        if not len(columns) and index is False:
+            return df
+
+        if split_every is None:
+            split_every = 16
+        elif split_every is False:
+            split_every = df.npartitions
+        elif not isinstance(split_every, Integral) or split_every < 2:
+            raise ValueError("split_every must be an integer >= 2")
+
+        from dask_expr._collection import new_collection
+
+        # Eagerly compute the categories
+        categories, index = new_collection(
+            GetCategories(
+                self.expr, columns=columns, index=index, split_every=split_every
+            )
+        ).compute()
+
+        # Some operations like get_dummies() rely on the order of categories
+        categories = {k: v.sort_values() for k, v in categories.items()}
+
+        # Categorize each partition
+        return new_collection(Categorize(self.expr, categories, index))
 
     def nunique(self, axis=0, dropna=True):
         if axis == 1:

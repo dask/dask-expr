@@ -1,5 +1,11 @@
 import functools
 
+import pandas as pd
+from dask.dataframe.categorical import (
+    _categorize_block,
+    _get_categories,
+    _get_categories_agg,
+)
 from dask.dataframe.utils import (
     AttributeNotImplementedError,
     clear_known_categories,
@@ -8,7 +14,8 @@ from dask.dataframe.utils import (
 from dask.utils import M
 
 from dask_expr._accessor import Accessor, PropertyMap
-from dask_expr._expr import Elemwise
+from dask_expr._expr import Blockwise, Elemwise
+from dask_expr._reductions import ApplyConcatApply
 
 
 class CategoricalAccessor(Accessor):
@@ -127,3 +134,31 @@ class AsUnknown(Elemwise):
     @functools.cached_property
     def _meta(self):
         return clear_known_categories(self.frame._meta)
+
+
+class Categorize(Blockwise):
+    _parameters = ["frame", "categories", "index"]
+    operation = staticmethod(_categorize_block)
+    _projection_passthrough = True
+
+    @functools.cached_property
+    def _meta(self):
+        meta = _categorize_block(
+            self.frame._meta, self.operand("categories"), self.operand("index")
+        )
+        return meta
+
+
+class GetCategories(ApplyConcatApply):
+    _parameters = ["frame", "columns", "index", "split_every"]
+
+    chunk = staticmethod(_get_categories)
+    aggregate = staticmethod(_get_categories_agg)
+
+    @property
+    def chunk_kwargs(self):
+        return {"columns": self.operand("columns"), "index": self.operand("index")}
+
+    @functools.cached_property
+    def _meta(self):
+        return ({}, pd.Series())
