@@ -994,7 +994,7 @@ class DataFrame(FrameBase):
         indicator : boolean or string, default False
             Passed through to the backend DataFrame library.
         shuffle_method: optional
-            Shuffle backend to use if shuffling is necessary.
+            Shuffle method to use if shuffling is necessary.
         npartitions : int, optional
             The number of output partitions
         broadcast : float, bool, optional
