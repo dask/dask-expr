@@ -736,7 +736,7 @@ class SetIndex(BaseSetIndexSortValues):
         "npartitions",
         "upsample",
         "shuffle_method",
-        "options",  # Shuffle backend options
+        "options",  # Options for the chosen shuffle method
     ]
     _defaults = {
         "drop": True,
