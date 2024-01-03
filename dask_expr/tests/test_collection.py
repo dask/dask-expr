@@ -889,7 +889,7 @@ def test_rename_columns():
     lib.testing.assert_index_equal(df.columns, lib.Index(["x", "y"]))
     lib.testing.assert_index_equal(df._meta.columns, lib.Index(["x", "y"]))
 
-    
+
 def test_columns_named_divisions_and_meta():
     df = lib.DataFrame(
         {"_meta": [1, 2, 3, 4], "divisions": ["a", "b", "c", "d"]},
