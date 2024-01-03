@@ -871,8 +871,8 @@ class SortValues(BaseSetIndexSortValues):
         "sort_function_kwargs",
         "upsample",
         "ignore_index",
-        "shuffle_method",  # Shuffle backend
-        "options",  # Shuffle backend options
+        "shuffle_method",
+        "options",  # Options for the chosen shuffle method
     ]
     _defaults = {
         "partition_size": 128e6,
