@@ -130,10 +130,6 @@ def _wrap_expr_method_operator(name, class_):
             if level is not None:
                 raise NotImplementedError("level must be None")
 
-            # TODO(milesgranger): Add support for other, `other` types than DataFrame.
-            if not isinstance(other, DataFrame):
-                raise NotImplementedError("only other=DataFrame implemented")
-
             axis = _validate_axis(axis)
 
             if axis in (1, "columns"):
@@ -210,6 +206,10 @@ class FrameBase(DaskMethodsMixin):
     @functools.cached_property
     def _meta_nonempty(self):
         return meta_nonempty(self._meta)
+
+    @property
+    def divisions(self):
+        return self.expr.divisions
 
     @property
     def dtypes(self):
