@@ -385,12 +385,12 @@ def test_index_nulls(null_value):
 
 
 def test_set_index_sort_values_shuffle_options(df, pdf):
-    q = df.set_index("x", shuffle_backend="tasks", max_branch=10)
+    q = df.set_index("x", shuffle_method="tasks", max_branch=10)
     shuffle = list(q.optimize().find_operations(TaskShuffle))[0]
     assert shuffle.options == {"max_branch": 10}
     assert_eq(q, pdf.set_index("x"))
 
-    q = df.sort_values("x", shuffle_backend="tasks", max_branch=10)
+    q = df.sort_values("x", shuffle_method="tasks", max_branch=10)
     sorter = list(q.optimize().find_operations(TaskShuffle))[0]
     assert sorter.options == {"max_branch": 10}
     assert_eq(q, pdf)
@@ -414,7 +414,7 @@ def test_set_index_predicate_pushdown(df, pdf):
 
 def test_set_index_npartitions_changes(pdf):
     df = from_pandas(pdf, npartitions=30)
-    result = df.set_index("x", shuffle_backend="disk")
+    result = df.set_index("x", shuffle_method="disk")
     assert result.npartitions == result.optimize().npartitions
     assert_eq(result, pdf.set_index("x"))
 
