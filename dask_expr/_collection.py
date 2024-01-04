@@ -1366,6 +1366,8 @@ class DataFrame(FrameBase):
     def categorize(self, columns=None, index=None, split_every=None, **kwargs):
         """Convert columns of the DataFrame to category dtype.
 
+        .. warning:: This method eagerly computes the categories of the chosen columns.
+
         Parameters
         ----------
         columns : list, optional
@@ -1379,7 +1381,6 @@ class DataFrame(FrameBase):
         split_every : int, optional
             Group partitions into groups of this size while performing a
             tree-reduction. If set to False, no tree-reduction will be used.
-            Default is 16.
         kwargs
             Keyword arguments are passed on to compute.
         """
@@ -1406,13 +1407,6 @@ class DataFrame(FrameBase):
         # Nothing to do
         if not len(columns) and index is False:
             return df
-
-        if split_every is None:
-            split_every = 16
-        elif split_every is False:
-            split_every = df.npartitions
-        elif not isinstance(split_every, Integral) or split_every < 2:
-            raise ValueError("split_every must be an integer >= 2")
 
         from dask_expr._collection import new_collection
 
