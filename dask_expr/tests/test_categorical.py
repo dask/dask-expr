@@ -35,7 +35,5 @@ def test_set_categories(pdf):
 def test_categorize(df, pdf):
     df = df.categorize()
 
-    # assert df.x.cat.known
     assert df.y.cat.known
-    # assert ddf2.index.cat.known == known_index
     assert_eq(df, pdf.astype({"y": "category"}), check_categorical=False)
