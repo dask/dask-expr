@@ -1419,7 +1419,7 @@ class DataFrame(FrameBase):
         categories = {k: v.sort_values() for k, v in categories.items()}
 
         # Categorize each partition
-        return new_collection(Categorize(self.expr, categories, index))
+        return new_collection(Categorize(self, categories, index))
 
     def nunique(self, axis=0, dropna=True):
         if axis == 1:
