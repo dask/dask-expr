@@ -1603,7 +1603,7 @@ class Head(Expr):
                 )
 
             if hasattr(self.frame, "_partitions"):
-                partitions = self.frame._partitions[: self.npartitions]
+                partitions = self.frame._partitions[: self.operand("npartitions")]
             else:
                 partitions = [0]
             if is_index_like(self._meta):
