@@ -164,6 +164,9 @@ class GetCategories(ApplyConcatApply):
         return ({}, pd.Series())
 
     def _simplify_down(self):
+        if set(self.frame.columns) == set(self.operand("columns")):
+            return None
+
         return GetCategories(
             Projection(self.frame, self.operand("columns")),
             columns=self.operand("columns"),
