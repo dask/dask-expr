@@ -14,6 +14,7 @@ from dask.dataframe.utils import UNKNOWN_CATEGORIES
 from dask.utils import M
 
 from dask_expr import (
+    Series,
     expr,
     from_pandas,
     is_scalar,
@@ -482,25 +483,41 @@ def test_boolean_operators(func):
     ),
 )
 @pytest.mark.parametrize("series", (True, False))
-def test_method_operators(pdf, df, axis, level, fill_value, op, series):
+@pytest.mark.parametrize("other", ("series", "dataframe", 1))
+def test_method_operators(pdf, df, axis, level, fill_value, op, series, other):
     kwargs = {
         k: v
         for k, v in (("axis", axis), ("level", level), ("fill_value", fill_value))
         if v is not None
     }
-    if series:
-        kwargs.pop("axis")
-        pdf = pdf.x
-        df = df.x
 
     if level is not None:
         with pytest.raises(NotImplementedError, match="level must be None"):
             getattr(df, op)(other=df, **kwargs)
         return
 
-    expected = getattr(pdf, op)(other=pdf, **kwargs)
-    actual = getattr(df, op)(other=df, **kwargs)
-    assert_eq(expected, actual)
+    if other == "series":
+        pother = pdf.x
+        other = df.x
+    elif other == "dataframe":
+        pother = pdf
+        other = df
+    else:
+        pother = other
+
+    if isinstance(other, Series) and axis in (1, "columns"):
+        with pytest.raises(ValueError, match=f"Unable to {op} dd.Series with axis=1"):
+            getattr(df, op)(other=other, **kwargs)
+
+    elif isinstance(other, Series) and axis in (0, "index") and fill_value:
+        msg = f"fill_value {fill_value} not supported"
+        with pytest.raises(NotImplementedError, match=msg):
+            getattr(df, op)(other=other, **kwargs)
+
+    else:
+        expected = getattr(pdf, op)(other=pother, **kwargs)
+        actual = getattr(df, op)(other=other, **kwargs)
+        assert_eq(expected, actual)
 
 
 @pytest.mark.parametrize(
@@ -593,6 +610,7 @@ def test_to_timestamp(pdf, how):
         lambda df: df.rename(columns={"x": "xx"}).xx,
         lambda df: df.rename(columns={"x": "xx"})[["xx"]],
         lambda df: df.x.rename(index="hello"),
+        lambda df: df.x.rename(index=df.x),
         lambda df: df.x.rename(index=("hello",)),
         lambda df: df.x.to_frame(),
         lambda df: df.drop(columns="x"),
@@ -860,6 +878,30 @@ def test_drop_duplicates_subset_simplify(pdf, subset, projection):
     expected = df[["x", "zz"]].simplify().drop_duplicates(subset=subset)[projection]
 
     assert str(result) == str(expected)
+
+
+def test_rename_columns():
+    # Multi-index columns
+    pdf = lib.DataFrame({("A", "0"): [1, 2, 2, 3], ("B", 1): [1, 2, 3, 4]})
+    df = from_pandas(pdf, npartitions=2)
+
+    df.columns = ["x", "y"]
+    pdf.columns = ["x", "y"]
+    lib.testing.assert_index_equal(df.columns, lib.Index(["x", "y"]))
+    lib.testing.assert_index_equal(df._meta.columns, lib.Index(["x", "y"]))
+
+
+def test_columns_named_divisions_and_meta():
+    df = lib.DataFrame(
+        {"_meta": [1, 2, 3, 4], "divisions": ["a", "b", "c", "d"]},
+        index=[0, 1, 3, 5],
+    )
+    ddf = from_pandas(df, npartitions=2)
+
+    assert ddf.divisions == (0, 3, 5)
+    assert_eq(ddf["divisions"], df.divisions)
+    assert all(ddf._meta.columns == ["_meta", "divisions"])
+    assert_eq(ddf["_meta"], df._meta)
 
 
 def test_broadcast(pdf, df):

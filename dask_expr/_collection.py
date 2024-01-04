@@ -35,7 +35,12 @@ from dask.utils import (
     typename,
 )
 from fsspec.utils import stringify_path
-from pandas.core.dtypes.common import is_datetime64_any_dtype
+from pandas.api.types import (
+    is_bool_dtype,
+    is_datetime64_any_dtype,
+    is_numeric_dtype,
+    is_timedelta64_dtype,
+)
 from tlz import first
 
 from dask_expr import _expr as expr
@@ -43,6 +48,7 @@ from dask_expr._align import AlignPartitions
 from dask_expr._categorical import CategoricalAccessor
 from dask_expr._concat import Concat
 from dask_expr._datetime import DatetimeAccessor
+from dask_expr._describe import DescribeNonNumeric, DescribeNumeric
 from dask_expr._expr import (
     BFill,
     Diff,
@@ -130,10 +136,6 @@ def _wrap_expr_method_operator(name, class_):
             if level is not None:
                 raise NotImplementedError("level must be None")
 
-            # TODO(milesgranger): Add support for other, `other` types than DataFrame.
-            if not isinstance(other, DataFrame):
-                raise NotImplementedError("only other=DataFrame implemented")
-
             axis = _validate_axis(axis)
 
             if axis in (1, "columns"):
@@ -212,6 +214,10 @@ class FrameBase(DaskMethodsMixin):
         return meta_nonempty(self._meta)
 
     @property
+    def divisions(self):
+        return self.expr.divisions
+
+    @property
     def dtypes(self):
         return self.expr._meta.dtypes
 
@@ -228,7 +234,7 @@ class FrameBase(DaskMethodsMixin):
         if len(columns) != len(self.columns):
             # surface pandas error
             self._expr._meta.columns = columns
-        self._expr = self.rename(dict(zip(self.columns, columns)))._expr
+        self._expr = expr.ColumnsSetter(self, columns)
 
     def __len__(self):
         return new_collection(Len(self)).compute()
@@ -695,14 +701,20 @@ class FrameBase(DaskMethodsMixin):
             self.expr.prod(skipna, numeric_only, min_count, split_every)
         )
 
-    def var(self, axis=0, skipna=True, ddof=1, numeric_only=False):
-        return new_collection(self.expr.var(axis, skipna, ddof, numeric_only))
+    def var(self, axis=0, skipna=True, ddof=1, numeric_only=False, split_every=False):
+        return new_collection(
+            self.expr.var(axis, skipna, ddof, numeric_only, split_every=split_every)
+        )
 
-    def std(self, axis=0, skipna=True, ddof=1, numeric_only=False):
-        return new_collection(self.expr.std(axis, skipna, ddof, numeric_only))
+    def std(self, axis=0, skipna=True, ddof=1, numeric_only=False, split_every=False):
+        return new_collection(
+            self.expr.std(axis, skipna, ddof, numeric_only, split_every=split_every)
+        )
 
-    def mean(self, skipna=True, numeric_only=False, min_count=0):
-        return new_collection(self.expr.mean(skipna, numeric_only))
+    def mean(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
+        return new_collection(
+            self.expr.mean(skipna, numeric_only, split_every=split_every)
+        )
 
     def max(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
         return new_collection(
@@ -955,7 +967,7 @@ class DataFrame(FrameBase):
         right_index=False,
         suffixes=("_x", "_y"),
         indicator=False,
-        shuffle_backend=None,
+        shuffle_method=None,
         npartitions=None,
         broadcast=None,
     ):
@@ -993,8 +1005,8 @@ class DataFrame(FrameBase):
             right side, respectively
         indicator : boolean or string, default False
             Passed through to the backend DataFrame library.
-        shuffle_backend: optional
-            Shuffle backend to use if shuffling is necessary.
+        shuffle_method: optional
+            Shuffle method to use if shuffling is necessary.
         npartitions : int, optional
             The number of output partitions
         broadcast : float, bool, optional
@@ -1016,7 +1028,7 @@ class DataFrame(FrameBase):
             right_index,
             suffixes,
             indicator,
-            shuffle_backend,
+            shuffle_method,
             npartitions=npartitions,
             broadcast=broadcast,
         )
@@ -1028,7 +1040,7 @@ class DataFrame(FrameBase):
         how="left",
         lsuffix="",
         rsuffix="",
-        shuffle_backend=None,
+        shuffle_method=None,
         npartitions=None,
     ):
         if not isinstance(other, list) and not is_dask_collection(other):
@@ -1064,7 +1076,7 @@ class DataFrame(FrameBase):
             left_on=on,
             how=how,
             suffixes=(lsuffix, rsuffix),
-            shuffle_backend=shuffle_backend,
+            shuffle_method=shuffle_method,
             npartitions=npartitions,
         )
 
@@ -1224,9 +1236,10 @@ class DataFrame(FrameBase):
         npartitions: int | None = None,
         divisions=None,
         sort: bool = True,
-        shuffle_backend=None,
+        shuffle_method=None,
         upsample: float = 1.0,
         partition_size: float = 128e6,
+        **options,
     ):
         if isinstance(other, list):
             if any([isinstance(c, FrameBase) for c in other]):
@@ -1251,6 +1264,17 @@ class DataFrame(FrameBase):
             )
 
         if sorted:
+            if divisions is not None and len(divisions) - 1 != self.npartitions:
+                msg = (
+                    "When doing `df.set_index(col, sorted=True, divisions=...)`, "
+                    "divisions indicates known splits in the index column. In this "
+                    "case divisions must be the same length as the existing "
+                    "divisions in `df`\n\n"
+                    "If the intent is to repartition into new divisions after "
+                    "setting the index, you probably want:\n\n"
+                    "`df.set_index(col, sorted=True).repartition(divisions=divisions)`"
+                )
+                raise ValueError(msg)
             return new_collection(
                 SetIndexBlockwise(self, other, drop, new_divisions=divisions)
             )
@@ -1266,7 +1290,8 @@ class DataFrame(FrameBase):
                 npartitions=npartitions,
                 upsample=upsample,
                 partition_size=partition_size,
-                shuffle_backend=shuffle_backend,
+                shuffle_method=shuffle_method,
+                options=options,
             )
         )
 
@@ -1281,7 +1306,8 @@ class DataFrame(FrameBase):
         sort_function_kwargs: Mapping[str, Any] | None = None,
         upsample: float = 1.0,
         ignore_index: bool | None = False,
-        shuffle: str | None = None,
+        shuffle_method: str | None = None,
+        **options,
     ):
         """See DataFrame.sort_values for docstring"""
         if na_position not in ("first", "last"):
@@ -1320,7 +1346,8 @@ class DataFrame(FrameBase):
                 sort_function_kwargs,
                 upsample,
                 ignore_index,
-                shuffle,
+                shuffle_method,
+                options=options,
             )
         )
 
@@ -1404,6 +1431,37 @@ class DataFrame(FrameBase):
         return self.quantile(
             axis=axis, method=method, numeric_only=numeric_only
         ).rename(None)
+
+    def describe(
+        self,
+        split_every=False,
+        percentiles=None,
+        percentiles_method="default",
+        include=None,
+        exclude=None,
+    ):
+        # TODO: duplicated columns
+        if include is None and exclude is None:
+            _include = [np.number, np.timedelta64, np.datetime64]
+            columns = self._meta.select_dtypes(include=_include).columns
+            if len(columns) == 0:
+                columns = self._meta.columns
+        elif include == "all":
+            if exclude is not None:
+                raise ValueError("exclude must be None when include is 'all'")
+            columns = self._meta.columns
+        else:
+            columns = self._meta.select_dtypes(include=include, exclude=exclude).columns
+
+        stats = [
+            self[col].describe(
+                split_every=split_every,
+                percentiles=percentiles,
+                percentiles_method=percentiles_method,
+            )
+            for col in columns
+        ]
+        return concat(stats, axis=1)
 
     def info(self, buf=None, verbose=False, memory_usage=False):
         """
@@ -1643,7 +1701,7 @@ class Series(FrameBase):
             algorithm (``'dask'``).  If set to ``'tdigest'`` will use tdigest
             for floats and ints and fallback to the ``'dask'`` otherwise.
         """
-        if not pd.api.types.is_numeric_dtype(self.dtype):
+        if not is_numeric_dtype(self.dtype):
             raise TypeError(f"quantile() on non-numeric dtype {self.dtype}")
         allowed_methods = ["default", "dask", "tdigest"]
         if method not in allowed_methods:
@@ -1660,6 +1718,28 @@ class Series(FrameBase):
 
     def median_approximate(self, method="default"):
         return self.quantile(method=method)
+
+    def describe(
+        self,
+        split_every=False,
+        percentiles=None,
+        percentiles_method="default",
+        include=None,
+        exclude=None,
+    ):
+        if (
+            is_numeric_dtype(self.dtype)
+            and not is_bool_dtype(self.dtype)
+            or is_timedelta64_dtype(self.dtype)
+            or is_datetime64_any_dtype(self.dtype)
+        ):
+            return new_collection(
+                DescribeNumeric(self, split_every, percentiles, percentiles_method)
+            )
+        else:
+            return new_collection(
+                DescribeNonNumeric(self, split_every, percentiles, percentiles_method)
+            )
 
     @property
     def is_monotonic_increasing(self):
@@ -2047,7 +2127,7 @@ def merge(
     right_index=False,
     suffixes=("_x", "_y"),
     indicator=False,
-    shuffle_backend=None,
+    shuffle_method=None,
     npartitions=None,
     broadcast=None,
 ):
@@ -2099,7 +2179,7 @@ def merge(
             right_index=right_index,
             suffixes=suffixes,
             indicator=indicator,
-            shuffle_backend=shuffle_backend,
+            shuffle_method=shuffle_method,
             _npartitions=npartitions,
             broadcast=broadcast,
         )
