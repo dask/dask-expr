@@ -1082,7 +1082,7 @@ class SetPartition(SetIndex):
             set_name,
             self.frame._meta.columns.dtype,
             kwargs,
-            self.user_division,
+            self.user_divisions,
         )
         return SortIndexBlockwise(index_set)
 
