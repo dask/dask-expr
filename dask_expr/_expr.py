@@ -1603,7 +1603,9 @@ class Head(Expr):
             if isinstance(self, PartitionsFiltered):
                 partitions = self.frame._partitions[: self.operand("npartitions")]
             else:
-                partitions = list(range(self.operand("npartitions")))
+                partitions = list(
+                    range(self.frame.npartitions)[: self.operand("npartitions")]
+                )
 
             if is_index_like(self._meta):
                 return BlockwiseHeadIndex(Partitions(self.frame, partitions), self.n)
