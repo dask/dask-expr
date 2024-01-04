@@ -1412,9 +1412,7 @@ class DataFrame(FrameBase):
 
         # Eagerly compute the categories
         categories, index = new_collection(
-            GetCategories(
-                self.expr, columns=columns, index=index, split_every=split_every
-            )
+            GetCategories(self, columns=columns, index=index, split_every=split_every)
         ).compute()
 
         # Some operations like get_dummies() rely on the order of categories
