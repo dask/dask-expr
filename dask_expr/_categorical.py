@@ -14,7 +14,7 @@ from dask.dataframe.utils import (
 from dask.utils import M
 
 from dask_expr._accessor import Accessor, PropertyMap
-from dask_expr._expr import Blockwise, Elemwise
+from dask_expr._expr import Blockwise, Elemwise, Projection
 from dask_expr._reductions import ApplyConcatApply
 
 
@@ -162,3 +162,11 @@ class GetCategories(ApplyConcatApply):
     @functools.cached_property
     def _meta(self):
         return ({}, pd.Series())
+
+    def _simplify_down(self):
+        return GetCategories(
+            Projection(self.frame, self.operand("columns")),
+            columns=self.operand("columns"),
+            index=self.operand("index"),
+            split_every=self.operand("split_every"),
+        )
