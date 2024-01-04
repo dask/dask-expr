@@ -736,7 +736,8 @@ class SetIndex(BaseSetIndexSortValues):
         "ascending",
         "npartitions",
         "upsample",
-        "shuffle_backend",
+        "shuffle_method",
+        "options",  # Options for the chosen shuffle method
     ]
     _defaults = {
         "drop": True,
@@ -745,7 +746,8 @@ class SetIndex(BaseSetIndexSortValues):
         "ascending": True,
         "npartitions": None,
         "upsample": 1.0,
-        "shuffle_backend": None,
+        "shuffle_method": None,
+        "options": None,
     }
 
     @property
@@ -804,7 +806,9 @@ class SetIndex(BaseSetIndexSortValues):
             self._npartitions_input,
             self.ascending,
             self.upsample,
-            self.shuffle_backend,
+            self.user_divisions,
+            self.shuffle_method,
+            self.options,
         )
 
     def _simplify_up(self, parent, dependents):
@@ -869,7 +873,8 @@ class SortValues(BaseSetIndexSortValues):
         "sort_function_kwargs",
         "upsample",
         "ignore_index",
-        "shuffle",  # Shuffle backend
+        "shuffle_method",
+        "options",  # Options for the chosen shuffle method
     ]
     _defaults = {
         "partition_size": 128e6,
@@ -880,7 +885,7 @@ class SortValues(BaseSetIndexSortValues):
         "sort_function_kwargs": None,
         "upsample": 1.0,
         "ignore_index": False,
-        "shuffle": None,
+        "shuffle_method": None,
     }
 
     def _divisions(self):
@@ -956,7 +961,8 @@ class SortValues(BaseSetIndexSortValues):
             "_partitions",
             npartitions_out=len(divisions) - 1,
             ignore_index=self.ignore_index,
-            backend=self.shuffle,
+            backend=self.shuffle_method,
+            options=self.options,
         )
         return SortValuesBlockwise(
             shuffled, self.sort_function, self.sort_function_kwargs
@@ -1039,7 +1045,9 @@ class SetPartition(SetIndex):
         "npartitions",
         "ascending",
         "upsample",
-        "shuffle_backend",
+        "user_divisions",
+        "shuffle_method",
+        "options",  # Shuffle method options
     ]
 
     def _lower(self):
@@ -1053,7 +1061,8 @@ class SetPartition(SetIndex):
             "_partitions",
             npartitions_out=len(self._divisions()) - 1,
             ignore_index=True,
-            backend=self.shuffle_backend,
+            backend=self.shuffle_method,
+            options=self.options,
         )
 
         if isinstance(self._other, Expr):
@@ -1073,6 +1082,7 @@ class SetPartition(SetIndex):
             set_name,
             self.frame._meta.columns.dtype,
             kwargs,
+            self.user_division,
         )
         return SortIndexBlockwise(index_set)
 
@@ -1096,6 +1106,7 @@ class _SetIndexPost(Blockwise):
         "set_name",
         "column_dtype",
         "key_kwargs",
+        "user_divisions",
     ]
     _is_length_preserving = True
 
@@ -1110,6 +1121,8 @@ class _SetIndexPost(Blockwise):
         return df
 
     def _divisions(self):
+        if self.operand("user_divisions") is not None:
+            return self.operand("user_divisions")
         kwargs = self.key_kwargs
         key = (
             kwargs["other"],

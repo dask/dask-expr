@@ -156,6 +156,22 @@ def test_map_overlap_divisions(df, pdf):
     assert not result.optimize().known_divisions
 
 
+def test_map_partitions_partition_info(df):
+    partitions = {i: df.get_partition(i).compute() for i in range(df.npartitions)}
+
+    def f(x, partition_info=None):
+        assert partition_info is not None
+        assert "number" in partition_info
+        assert "division" in partition_info
+        assert partitions[partition_info["number"]].equals(x)
+        assert partition_info["division"] == x.index.min()
+        return x
+
+    df = df.map_partitions(f, meta=df._meta)
+    result = df.compute(scheduler="single-threaded")
+    assert type(result) == lib.DataFrame
+
+
 def test_map_overlap_provide_meta():
     df = lib.DataFrame(
         {"x": [1, 2, 4, 7, 11], "y": [1.0, 2.0, 3.0, 4.0, 5.0]}
@@ -191,3 +207,15 @@ def test_map_overlap_errors(df):
     # String timedelta offset with non-datetime
     with pytest.raises(TypeError):
         df.map_overlap(func, "1s", "1s", 0, 2, c=2)
+
+
+def test_align_dataframes():
+    df1 = lib.DataFrame({"A": [1, 2, 3, 3, 2, 3], "B": [1, 2, 3, 4, 5, 6]})
+    df2 = lib.DataFrame({"A": [3, 1, 2], "C": [1, 2, 3]})
+    ddf1 = from_pandas(df1, npartitions=2)
+
+    actual = ddf1.map_partitions(
+        lib.merge, df2, align_dataframes=False, left_on="A", right_on="A", how="left"
+    )
+    expected = lib.merge(df1, df2, left_on="A", right_on="A", how="left")
+    assert_eq(actual, expected, check_index=False, check_divisions=False)
