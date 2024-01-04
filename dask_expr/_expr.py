@@ -1563,8 +1563,8 @@ class AssignIndex(Elemwise):
 class Head(Expr):
     """Take the first `n` rows of the first partition"""
 
-    _parameters = ["frame", "n"]
-    _defaults = {"n": 5}
+    _parameters = ["frame", "n", "npartitions"]
+    _defaults = {"n": 5, "npartitions": 1}
 
     @functools.cached_property
     def _meta(self):
@@ -1579,12 +1579,12 @@ class Head(Expr):
     def _simplify_down(self):
         if isinstance(self.frame, Elemwise):
             operands = [
-                Head(op, self.n) if isinstance(op, Expr) else op
+                Head(op, self.n, self.npartitions) if isinstance(op, Expr) else op
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
         if isinstance(self.frame, Head):
-            return Head(self.frame.frame, min(self.n, self.frame.n))
+            return Head(self.frame.frame, min(self.n, self.frame.n), self.npartitions)
 
     def _simplify_up(self, parent, dependents):
         from dask_expr import Repartition
@@ -1595,9 +1595,20 @@ class Head(Expr):
     def _lower(self):
         if not isinstance(self, BlockwiseHead):
             # Lower to Blockwise
+            if hasattr(self.frame, "_partitions") and self.npartitions > len(
+                self.frame._partitions
+            ):
+                raise ValueError(
+                    f"only {len(self.frame._partitions)} partitions, head received {self.npartitions}"
+                )
+
+            if hasattr(self.frame, "_partitions"):
+                partitions = self.frame._partitions[: self.npartitions]
+            else:
+                partitions = [0]
             if is_index_like(self._meta):
-                return BlockwiseHeadIndex(Partitions(self.frame, [0]), self.n)
-            return BlockwiseHead(Partitions(self.frame, [0]), self.n)
+                return BlockwiseHeadIndex(Partitions(self.frame, partitions), self.n)
+            return BlockwiseHead(Partitions(self.frame, partitions), self.n)
 
 
 class BlockwiseHead(Head, Blockwise):

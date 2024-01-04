@@ -346,8 +346,8 @@ class FrameBase(DaskMethodsMixin):
     def reset_index(self, drop=False):
         return new_collection(expr.ResetIndex(self, drop))
 
-    def head(self, n=5, compute=True):
-        out = new_collection(expr.Head(self, n=n))
+    def head(self, n=5, compute=True, npartitions=1):
+        out = new_collection(expr.Head(self, n=n, npartitions=npartitions))
         if compute:
             out = out.compute()
         return out
