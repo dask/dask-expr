@@ -1595,7 +1595,7 @@ class Head(Expr):
     def _lower(self):
         if not isinstance(self, BlockwiseHead):
             # Lower to Blockwise
-            if self.npartitions > self.frame.npartitions:
+            if self.operand("npartitions") > self.frame.npartitions:
                 raise ValueError(
                     f"only {self.frame.npartitions} partitions, head received {self.npartitions}"
                 )
@@ -1603,7 +1603,7 @@ class Head(Expr):
             if isinstance(self, PartitionsFiltered):
                 partitions = self.frame._partitions[: self.operand("npartitions")]
             else:
-                partitions = list(range(self.frame.npartitions)[: self.npartitions])
+                partitions = list(range(self.operand("npartitions")))
 
             if is_index_like(self._meta):
                 return BlockwiseHeadIndex(Partitions(self.frame, partitions), self.n)
