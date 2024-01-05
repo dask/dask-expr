@@ -2327,6 +2327,34 @@ class ShiftIndex(Blockwise):
         return {"freq": self.freq} if self.freq is not None else {}
 
 
+class ShiftColumns(Blockwise):
+    _parameters = ["frame", "periods", "freq"]
+    _defaults = {"periods": 1, "freq": None}
+    operation = M.shift
+
+    @functools.cached_property
+    def _args(self) -> list:
+        return [self.frame]
+
+    @functools.cached_property
+    def _kwargs(self) -> dict:
+        return {"periods": self.periods, "freq": self.freq, "axis": 1}
+
+
+class DiffColumns(Blockwise):
+    _parameters = ["frame", "periods"]
+    _defaults = {"periods": 1}
+    operation = M.diff
+
+    @functools.cached_property
+    def _args(self) -> list:
+        return [self.frame]
+
+    @functools.cached_property
+    def _kwargs(self) -> dict:
+        return {"periods": self.periods, "axis": 1}
+
+
 class Fused(Blockwise):
     """Fused ``Blockwise`` expression
 
