@@ -30,7 +30,7 @@ class ILocIndexer(Indexer):
             raise NotImplementedError(msg)
 
         if len(self.obj.columns) == len(set(self.obj.columns)):
-            col_names = self.obj.columns[cindexer]
+            col_names = list(self.obj.columns[cindexer])
             return new_collection(Projection(self.obj, col_names))
         else:
             raise NotImplementedError
