@@ -1544,3 +1544,6 @@ class SeriesGroupBy(GroupBy):
 
     def corr(self, *args, **kwargs):
         raise NotImplementedError("cov is not implemented for SeriesGroupBy objects.")
+
+    def _all_numeric(self):
+        return True
