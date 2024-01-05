@@ -37,6 +37,7 @@ from dask.dataframe.groupby import (
     _value_counts_aggregate,
     _var_agg,
     _var_chunk,
+    numeric_only_not_implemented,
 )
 from dask.utils import M, apply, is_index_like
 
@@ -1151,6 +1152,7 @@ class GroupBy:
             return result.where(self.count() >= min_count, other=np.nan)
         return result
 
+    @numeric_only_not_implemented
     def mean(self, numeric_only=False, **kwargs):
         numeric_kwargs = self._numeric_only_kwargs(numeric_only)
         return self._single_agg(Mean, **kwargs, **numeric_kwargs)
@@ -1259,6 +1261,7 @@ class GroupBy:
             aggregate_kwargs=aggregate_kwargs,
         )
 
+    @numeric_only_not_implemented
     def var(self, ddof=1, split_every=None, split_out=1, numeric_only=True):
         if not numeric_only:
             raise NotImplementedError(
@@ -1285,6 +1288,7 @@ class GroupBy:
             result = result[result.columns[0]]
         return result
 
+    @numeric_only_not_implemented
     def std(self, ddof=1, split_every=None, split_out=1, numeric_only=True):
         if not numeric_only:
             raise NotImplementedError(
@@ -1311,6 +1315,7 @@ class GroupBy:
             result = result[result.columns[0]]
         return result
 
+    @numeric_only_not_implemented
     def aggregate(self, arg=None, split_every=8, split_out=1, **kwargs):
         if arg is None:
             raise NotImplementedError("arg=None not supported")
