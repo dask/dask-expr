@@ -136,3 +136,9 @@ def test_unique_base(df, pdf):
         df.index.unique().compute().sort_values().values,
         lib.Index(pdf.index.unique()).values,
     )
+
+
+def test_value_counts_split_out_normalize(df, pdf):
+    result = df.x.value_counts(split_out=2, normalize=True)
+    expected = pdf.x.value_counts(normalize=True)
+    assert_eq(result, expected)
