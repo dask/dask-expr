@@ -1151,8 +1151,15 @@ class GroupBy:
             return result.where(self.count() >= min_count, other=np.nan)
         return result
 
-    def mean(self, numeric_only=True, **kwargs):
-        if not numeric_only:
+    def _all_numeric(self):
+        """Are all columns that we're not grouping on numeric?"""
+        numerics = self.obj._meta._get_numeric_data()
+        # This computes a groupby but only on the empty meta
+        post_group_columns = self._meta.count().columns
+        return len(set(post_group_columns) - set(numerics.columns)) == 0
+
+    def mean(self, numeric_only=False, **kwargs):
+        if not numeric_only and not self._all_numeric():
             raise NotImplementedError(
                 "'numeric_only=False' is not implemented in Dask."
             )
@@ -1263,8 +1270,8 @@ class GroupBy:
             aggregate_kwargs=aggregate_kwargs,
         )
 
-    def var(self, ddof=1, split_every=None, split_out=1, numeric_only=True):
-        if not numeric_only:
+    def var(self, ddof=1, split_every=None, split_out=1, numeric_only=False):
+        if not numeric_only and not self._all_numeric():
             raise NotImplementedError(
                 "'numeric_only=False' is not implemented in Dask."
             )
@@ -1289,8 +1296,8 @@ class GroupBy:
             result = result[result.columns[0]]
         return result
 
-    def std(self, ddof=1, split_every=None, split_out=1, numeric_only=True):
-        if not numeric_only:
+    def std(self, ddof=1, split_every=None, split_out=1, numeric_only=False):
+        if not numeric_only and not self._all_numeric():
             raise NotImplementedError(
                 "'numeric_only=False' is not implemented in Dask."
             )
@@ -1316,12 +1323,12 @@ class GroupBy:
         return result
 
     def aggregate(
-        self, arg=None, split_every=8, split_out=1, numeric_only=True, **kwargs
+        self, arg=None, split_every=8, split_out=1, numeric_only=False, **kwargs
     ):
         if arg is None:
             raise NotImplementedError("arg=None not supported")
 
-        if not numeric_only:
+        if not numeric_only and not self._all_numeric():
             raise NotImplementedError(
                 "'numeric_only=False' is not implemented in Dask."
             )
