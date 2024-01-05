@@ -1640,7 +1640,7 @@ class Series(FrameBase):
             return uniqs.size
 
     def drop_duplicates(
-        self, ignore_index=False, split_every=None, split_out=True, keep="first"
+        self, ignore_index=False, split_every=None, split_out=True, keep=None
     ):
         if keep is False:
             raise NotImplementedError("drop_duplicates with keep=False")
