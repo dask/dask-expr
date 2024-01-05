@@ -4,7 +4,7 @@ import fnmatch
 import io
 import operator
 import pickle
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import dask
 import numpy as np
@@ -1922,6 +1922,19 @@ def test_align_axis(join):
 
     with pytest.raises(ValueError):
         ddf1a["A"].align(ddf1b["B"], join=join, axis=1)
+
+
+def test_quantile_datetime_numeric_only_false():
+    df = lib.DataFrame(
+        {
+            "int": [1, 2, 3, 4, 5, 6, 7, 8],
+            "dt": [lib.NaT] + [datetime(2011, i, 1) for i in range(1, 8)],
+            "timedelta": lib.to_timedelta([1, 2, 3, 4, 5, 6, 7, np.nan]),
+        }
+    )
+    ddf = from_pandas(df, 1)
+
+    assert_eq(ddf.quantile(numeric_only=False), df.quantile(numeric_only=False))
 
 
 def test_dtype(df, pdf):
