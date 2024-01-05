@@ -846,6 +846,12 @@ class FrameBase(DaskMethodsMixin):
     ):
         return from_dict(data, npartitions, orient, dtype=dtype, columns=columns)
 
+    def to_json(self, filename, *args, **kwargs):
+        """See dd.to_json docstring for more information"""
+        from dask.dataframe.io import to_json
+
+        return to_json(self, filename, *args, **kwargs)
+
 
 # Add operator attributes
 for op in [
