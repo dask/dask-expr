@@ -7,6 +7,7 @@ from types import LambdaType
 from typing import Any, Literal, TypeVar, cast
 
 import dask
+import numpy as np
 import pandas as pd
 from dask import config
 from dask.base import normalize_token, tokenize
@@ -79,8 +80,10 @@ def _convert_to_list(column) -> list | None:
 
 def is_scalar(x):
     # np.isscalar does not work for some pandas scalars, for example pd.NA
-    if isinstance(x, Sequence) and not isinstance(x, str) or hasattr(x, "dtype"):
+    if isinstance(x, Sequence) and not isinstance(x, str):
         return False
+    elif hasattr(x, "dtype"):
+        return isinstance(x, np.ScalarType)
     if isinstance(x, dict):
         return False
     if isinstance(x, (str, int)) or x is None:

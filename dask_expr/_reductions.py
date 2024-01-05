@@ -1162,8 +1162,10 @@ class ValueCounts(ReductionConstantDim):
     @classmethod
     def aggregate(cls, inputs, **kwargs):
         func = cls.reduction_aggregate or cls.reduction_chunk
-        df = _concat(inputs[:-1])
-        return func(df, inputs[-1], **kwargs)
+        if is_scalar(inputs[-1]):
+            return func(_concat(inputs[:-1]), inputs[-1], **kwargs)
+        else:
+            return func(_concat(inputs), **kwargs)
 
     @property
     def split_by(self):
@@ -1177,7 +1179,7 @@ class ValueCounts(ReductionConstantDim):
     def aggregate_args(self):
         if self.normalize and self.split_out != 1:
             return [self.total_length]
-        return [None]
+        return []
 
     @property
     def aggregate_kwargs(self):
