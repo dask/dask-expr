@@ -27,7 +27,7 @@ from dask.dataframe.dispatch import meta_nonempty
 from dask.dataframe.rolling import CombinedOutput, _head_timedelta, overlap_chunk
 from dask.dataframe.utils import clear_known_categories, drop_by_shallow_copy
 from dask.typing import no_default
-from dask.utils import M, apply, funcname
+from dask.utils import M, apply, funcname, has_keyword
 from tlz import merge_sorted, unique
 
 from dask_expr import _core as core
@@ -209,19 +209,21 @@ class Expr(core.Expr):
     def prod(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
         return Prod(self, skipna, numeric_only, min_count, split_every)
 
-    def var(self, axis=0, skipna=True, ddof=1, numeric_only=False):
+    def var(self, axis=0, skipna=True, ddof=1, numeric_only=False, split_every=False):
         if axis == 0:
-            return Var(self, skipna, ddof, numeric_only)
+            return Var(self, skipna, ddof, numeric_only, split_every)
         elif axis == 1:
             return VarColumns(self, skipna, ddof, numeric_only)
         else:
             raise ValueError(f"axis={axis} not supported. Please specify 0 or 1")
 
-    def std(self, axis=0, skipna=True, ddof=1, numeric_only=False):
-        return Sqrt(self.var(axis, skipna, ddof, numeric_only))
+    def std(self, axis=0, skipna=True, ddof=1, numeric_only=False, split_every=False):
+        return Sqrt(self.var(axis, skipna, ddof, numeric_only, split_every=split_every))
 
-    def mean(self, skipna=True, numeric_only=False, min_count=0):
-        return Mean(self, skipna=skipna, numeric_only=numeric_only)
+    def mean(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
+        return Mean(
+            self, skipna=skipna, numeric_only=numeric_only, split_every=split_every
+        )
 
     def max(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
         return Max(self, skipna, numeric_only, min_count, split_every)
@@ -560,11 +562,20 @@ class MapPartitions(Blockwise):
             self.kwargs,
         )
 
+    @functools.cached_property
+    def _has_partition_info(self):
+        return has_keyword(self.func, "partition_info")
+
     def _task(self, index: int):
         args = [self._blockwise_arg(op, index) for op in self.args]
-        kwargs = self.kwargs if self.kwargs is not None else {}
+        kwargs = (self.kwargs if self.kwargs is not None else {}).copy()
+        if self._has_partition_info:
+            kwargs["partition_info"] = {
+                "number": index,
+                "division": self.divisions[index],
+            }
+
         if self.enforce_metadata:
-            kwargs = kwargs.copy()
             kwargs.update(
                 {
                     "_func": self.func,
@@ -1561,8 +1572,8 @@ class AssignIndex(Elemwise):
 class Head(Expr):
     """Take the first `n` rows of the first partition"""
 
-    _parameters = ["frame", "n"]
-    _defaults = {"n": 5}
+    _parameters = ["frame", "n", "npartitions"]
+    _defaults = {"n": 5, "npartitions": 1}
 
     @functools.cached_property
     def _meta(self):
@@ -1577,12 +1588,12 @@ class Head(Expr):
     def _simplify_down(self):
         if isinstance(self.frame, Elemwise):
             operands = [
-                Head(op, self.n) if isinstance(op, Expr) else op
+                Head(op, self.n, self.npartitions) if isinstance(op, Expr) else op
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
         if isinstance(self.frame, Head):
-            return Head(self.frame.frame, min(self.n, self.frame.n))
+            return Head(self.frame.frame, min(self.n, self.frame.n), self.npartitions)
 
     def _simplify_up(self, parent, dependents):
         from dask_expr import Repartition
@@ -1593,9 +1604,21 @@ class Head(Expr):
     def _lower(self):
         if not isinstance(self, BlockwiseHead):
             # Lower to Blockwise
+            if self.operand("npartitions") > self.frame.npartitions:
+                raise ValueError(
+                    f"only {self.frame.npartitions} partitions, head received {self.npartitions}"
+                )
+
+            if isinstance(self, PartitionsFiltered):
+                partitions = self.frame._partitions[: self.operand("npartitions")]
+            else:
+                partitions = list(
+                    range(self.frame.npartitions)[: self.operand("npartitions")]
+                )
+
             if is_index_like(self._meta):
-                return BlockwiseHeadIndex(Partitions(self.frame, [0]), self.n)
-            return BlockwiseHead(Partitions(self.frame, [0]), self.n)
+                return BlockwiseHeadIndex(Partitions(self.frame, partitions), self.n)
+            return BlockwiseHead(Partitions(self.frame, partitions), self.n)
 
 
 class BlockwiseHead(Head, Blockwise):

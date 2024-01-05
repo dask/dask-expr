@@ -35,7 +35,12 @@ from dask.utils import (
     typename,
 )
 from fsspec.utils import stringify_path
-from pandas.core.dtypes.common import is_datetime64_any_dtype
+from pandas.api.types import (
+    is_bool_dtype,
+    is_datetime64_any_dtype,
+    is_numeric_dtype,
+    is_timedelta64_dtype,
+)
 from tlz import first
 
 from dask_expr import _expr as expr
@@ -43,6 +48,7 @@ from dask_expr._align import AlignPartitions
 from dask_expr._categorical import CategoricalAccessor, Categorize, GetCategories
 from dask_expr._concat import Concat
 from dask_expr._datetime import DatetimeAccessor
+from dask_expr._describe import DescribeNonNumeric, DescribeNumeric
 from dask_expr._expr import (
     BFill,
     Diff,
@@ -341,8 +347,8 @@ class FrameBase(DaskMethodsMixin):
     def reset_index(self, drop=False):
         return new_collection(expr.ResetIndex(self, drop))
 
-    def head(self, n=5, compute=True):
-        out = new_collection(expr.Head(self, n=n))
+    def head(self, n=5, npartitions=1, compute=True):
+        out = new_collection(expr.Head(self, n=n, npartitions=npartitions))
         if compute:
             out = out.compute()
         return out
@@ -557,44 +563,19 @@ class FrameBase(DaskMethodsMixin):
         align_dataframes=False,
         **kwargs,
     ):
-        if align_dataframes:
-            raise NotImplementedError()
-
-        if isinstance(before, str):
-            before = pd.to_timedelta(before)
-        if isinstance(after, str):
-            after = pd.to_timedelta(after)
-
-        if isinstance(before, datetime.timedelta) or isinstance(
-            after, datetime.timedelta
-        ):
-            if not is_datetime64_any_dtype(self.index._meta_nonempty.inferred_type):
-                raise TypeError(
-                    "Must have a `DatetimeIndex` when using string offset "
-                    "for `before` and `after`"
-                )
-
-        elif not (
-            isinstance(before, Integral)
-            and before >= 0
-            and isinstance(after, Integral)
-            and after >= 0
-        ):
-            raise ValueError("before and after must be positive integers")
-
-        new_expr = expr.MapOverlap(
+        return map_overlap(
             self,
             func,
             before,
             after,
-            meta,
-            enforce_metadata,
-            transform_divisions,
-            clear_divisions,
-            kwargs,
             *args,
+            meta=meta,
+            enforce_metadata=enforce_metadata,
+            transform_divisions=transform_divisions,
+            clear_divisions=clear_divisions,
+            align_dataframes=align_dataframes,
+            **kwargs,
         )
-        return new_collection(new_expr)
 
     def repartition(
         self,
@@ -695,14 +676,20 @@ class FrameBase(DaskMethodsMixin):
             self.expr.prod(skipna, numeric_only, min_count, split_every)
         )
 
-    def var(self, axis=0, skipna=True, ddof=1, numeric_only=False):
-        return new_collection(self.expr.var(axis, skipna, ddof, numeric_only))
+    def var(self, axis=0, skipna=True, ddof=1, numeric_only=False, split_every=False):
+        return new_collection(
+            self.expr.var(axis, skipna, ddof, numeric_only, split_every=split_every)
+        )
 
-    def std(self, axis=0, skipna=True, ddof=1, numeric_only=False):
-        return new_collection(self.expr.std(axis, skipna, ddof, numeric_only))
+    def std(self, axis=0, skipna=True, ddof=1, numeric_only=False, split_every=False):
+        return new_collection(
+            self.expr.std(axis, skipna, ddof, numeric_only, split_every=split_every)
+        )
 
-    def mean(self, skipna=True, numeric_only=False, min_count=0):
-        return new_collection(self.expr.mean(skipna, numeric_only))
+    def mean(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
+        return new_collection(
+            self.expr.mean(skipna, numeric_only, split_every=split_every)
+        )
 
     def max(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
         return new_collection(
@@ -1229,6 +1216,8 @@ class DataFrame(FrameBase):
         partition_size: float = 128e6,
         **options,
     ):
+        if isinstance(other, list) and len(other) == 1:
+            other = other[0]
         if isinstance(other, list):
             if any([isinstance(c, FrameBase) for c in other]):
                 raise TypeError("List[FrameBase] not supported by set_index")
@@ -1478,6 +1467,37 @@ class DataFrame(FrameBase):
             axis=axis, method=method, numeric_only=numeric_only
         ).rename(None)
 
+    def describe(
+        self,
+        split_every=False,
+        percentiles=None,
+        percentiles_method="default",
+        include=None,
+        exclude=None,
+    ):
+        # TODO: duplicated columns
+        if include is None and exclude is None:
+            _include = [np.number, np.timedelta64, np.datetime64]
+            columns = self._meta.select_dtypes(include=_include).columns
+            if len(columns) == 0:
+                columns = self._meta.columns
+        elif include == "all":
+            if exclude is not None:
+                raise ValueError("exclude must be None when include is 'all'")
+            columns = self._meta.columns
+        else:
+            columns = self._meta.select_dtypes(include=include, exclude=exclude).columns
+
+        stats = [
+            self[col].describe(
+                split_every=split_every,
+                percentiles=percentiles,
+                percentiles_method=percentiles_method,
+            )
+            for col in columns
+        ]
+        return concat(stats, axis=1)
+
     def info(self, buf=None, verbose=False, memory_usage=False):
         """
         Concise summary of a Dask DataFrame
@@ -1716,7 +1736,7 @@ class Series(FrameBase):
             algorithm (``'dask'``).  If set to ``'tdigest'`` will use tdigest
             for floats and ints and fallback to the ``'dask'`` otherwise.
         """
-        if not pd.api.types.is_numeric_dtype(self.dtype):
+        if not is_numeric_dtype(self.dtype):
             raise TypeError(f"quantile() on non-numeric dtype {self.dtype}")
         allowed_methods = ["default", "dask", "tdigest"]
         if method not in allowed_methods:
@@ -1733,6 +1753,28 @@ class Series(FrameBase):
 
     def median_approximate(self, method="default"):
         return self.quantile(method=method)
+
+    def describe(
+        self,
+        split_every=False,
+        percentiles=None,
+        percentiles_method="default",
+        include=None,
+        exclude=None,
+    ):
+        if (
+            is_numeric_dtype(self.dtype)
+            and not is_bool_dtype(self.dtype)
+            or is_timedelta64_dtype(self.dtype)
+            or is_datetime64_any_dtype(self.dtype)
+        ):
+            return new_collection(
+                DescribeNumeric(self, split_every, percentiles, percentiles_method)
+            )
+        else:
+            return new_collection(
+                DescribeNonNumeric(self, split_every, percentiles, percentiles_method)
+            )
 
     @property
     def is_monotonic_increasing(self):
@@ -2332,6 +2374,62 @@ def map_partitions(
         clear_divisions,
         kwargs,
         *args[1:],
+    )
+    return new_collection(new_expr)
+
+
+def map_overlap(
+    df,
+    func,
+    before,
+    after,
+    *args,
+    meta=no_default,
+    enforce_metadata=True,
+    transform_divisions=True,
+    clear_divisions=False,
+    align_dataframes=False,
+    **kwargs,
+):
+    if align_dataframes:
+        raise NotImplementedError()
+
+    if isinstance(before, str):
+        before = pd.to_timedelta(before)
+    if isinstance(after, str):
+        after = pd.to_timedelta(after)
+
+    if isinstance(before, datetime.timedelta) or isinstance(after, datetime.timedelta):
+        if isinstance(df, FrameBase):
+            inferred_type = df.index._meta_nonempty.inferred_type
+        else:
+            inferred_type = df.index.inferred_type
+
+        if not is_datetime64_any_dtype(inferred_type):
+            raise TypeError(
+                "Must have a `DatetimeIndex` when using string offset "
+                "for `before` and `after`"
+            )
+
+    elif not (
+        isinstance(before, Integral)
+        and before >= 0
+        and isinstance(after, Integral)
+        and after >= 0
+    ):
+        raise ValueError("before and after must be positive integers")
+
+    new_expr = expr.MapOverlap(
+        df,
+        func,
+        before,
+        after,
+        meta,
+        enforce_metadata,
+        transform_divisions,
+        clear_divisions,
+        kwargs,
+        *args,
     )
     return new_collection(new_expr)
 
