@@ -597,6 +597,7 @@ class FrameBase(DaskMethodsMixin):
             enforce_metadata,
             transform_divisions,
             clear_divisions,
+            transform_divisions,
             kwargs,
             *args,
         )
@@ -2337,6 +2338,7 @@ def map_partitions(
         enforce_metadata,
         transform_divisions,
         clear_divisions,
+        align_dataframes,
         kwargs,
         *args[1:],
     )
