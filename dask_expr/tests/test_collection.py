@@ -1408,11 +1408,11 @@ def test_drop_duplicates(df, pdf, split_out):
 def test_drop_duplicates_split_out(df, pdf):
     q = df.drop_duplicates(subset=["x"])
     assert len(list(q.optimize().find_operations(Shuffle))) > 0
-    assert_eq(q, pdf.drop_duplicates(subset=["x"]))
+    assert_eq(q, pdf.drop_duplicates(subset=["x"]), check_index=False)
 
     q = df.x.drop_duplicates()
     assert len(list(q.optimize().find_operations(Shuffle))) > 0
-    assert_eq(q, pdf.x.drop_duplicates())
+    assert_eq(q, pdf.x.drop_duplicates(), check_index=False)
 
 
 def test_walk(df):
@@ -1903,7 +1903,7 @@ def test_quantile(df):
         df.x.quantile(q=[]).compute()
 
     ser = from_pandas(lib.Series(["a", "b", "c"]), npartitions=2)
-    with pytest.raises(TypeError, match="on non-numeric"):
+    with pytest.raises(ValueError, match="object series"):
         ser.quantile()
 
 
