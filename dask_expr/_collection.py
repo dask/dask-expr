@@ -24,11 +24,12 @@ from dask.dataframe.core import (
     is_series_like,
     new_dd_object,
 )
-from dask.dataframe.dispatch import make_meta, meta_nonempty
+from dask.dataframe.dispatch import is_categorical_dtype, make_meta, meta_nonempty
 from dask.dataframe.multi import warn_dtype_mismatch
 from dask.dataframe.utils import has_known_categories, index_summary
 from dask.utils import (
     IndexCallable,
+    get_default_shuffle_method,
     memory_repr,
     put_lines,
     random_state_data,
@@ -45,7 +46,7 @@ from tlz import first
 
 from dask_expr import _expr as expr
 from dask_expr._align import AlignPartitions
-from dask_expr._categorical import CategoricalAccessor
+from dask_expr._categorical import CategoricalAccessor, Categorize, GetCategories
 from dask_expr._concat import Concat
 from dask_expr._datetime import DatetimeAccessor
 from dask_expr._describe import DescribeNonNumeric, DescribeNumeric
@@ -1122,11 +1123,26 @@ class DataFrame(FrameBase):
         return new_collection(MemoryUsageFrame(self, deep=deep, _index=index))
 
     def drop_duplicates(
-        self, subset=None, ignore_index=False, split_every=None, split_out=True
+        self,
+        subset=None,
+        ignore_index=False,
+        split_every=None,
+        split_out=True,
+        keep=None,
     ):
+        if keep is False:
+            raise NotImplementedError("drop_duplicates with keep=False")
+        if keep is not None and get_default_shuffle_method() == "p2p":
+            warnings.warn(
+                "P2P shuffle doesn't have ordering guarantees, so keep='first' and "
+                "keep='last' might return unexpected results",
+                UserWarning,
+            )
+        elif keep is None:
+            keep = "first"
         # Fail early if subset is not valid, e.g. missing columns
         subset = _convert_to_list(subset)
-        meta_nonempty(self._meta).drop_duplicates(subset=subset)
+        meta_nonempty(self._meta).drop_duplicates(subset=subset, keep=keep)
         return new_collection(
             DropDuplicates(
                 self,
@@ -1134,6 +1150,7 @@ class DataFrame(FrameBase):
                 ignore_index=ignore_index,
                 split_out=split_out,
                 split_every=split_every,
+                keep=keep,
             )
         )
 
@@ -1352,6 +1369,64 @@ class DataFrame(FrameBase):
 
         return ILocIndexer(self)
 
+    def categorize(self, columns=None, index=None, split_every=None, **kwargs):
+        """Convert columns of the DataFrame to category dtype.
+
+        .. warning:: This method eagerly computes the categories of the chosen columns.
+
+        Parameters
+        ----------
+        columns : list, optional
+            A list of column names to convert to categoricals. By default any
+            column with an object dtype is converted to a categorical, and any
+            unknown categoricals are made known.
+        index : bool, optional
+            Whether to categorize the index. By default, object indices are
+            converted to categorical, and unknown categorical indices are made
+            known. Set True to always categorize the index, False to never.
+        split_every : int, optional
+            Group partitions into groups of this size while performing a
+            tree-reduction. If set to False, no tree-reduction will be used.
+        kwargs
+            Keyword arguments are passed on to compute.
+        """
+        df = self
+        meta = df._meta
+        if columns is None:
+            columns = list(meta.select_dtypes(["object", "string", "category"]).columns)
+        elif is_scalar(columns):
+            columns = [columns]
+
+        # Filter out known categorical columns
+        columns = [
+            c
+            for c in columns
+            if not (is_categorical_dtype(meta[c]) and has_known_categories(meta[c]))
+        ]
+
+        if index is not False:
+            if is_categorical_dtype(meta.index):
+                index = not has_known_categories(meta.index)
+            elif index is None:
+                index = str(meta.index.dtype) in ("object", "string")
+
+        # Nothing to do
+        if not len(columns) and index is False:
+            return df
+
+        from dask_expr._collection import new_collection
+
+        # Eagerly compute the categories
+        categories, index = new_collection(
+            GetCategories(self, columns=columns, index=index, split_every=split_every)
+        ).compute()
+
+        # Some operations like get_dummies() rely on the order of categories
+        categories = {k: v.sort_values() for k, v in categories.items()}
+
+        # Categorize each partition
+        return new_collection(Categorize(self, categories, index))
+
     def nunique(self, axis=0, dropna=True):
         if axis == 1:
             return new_collection(expr.NUniqueColumns(self, axis=axis, dropna=dropna))
@@ -1506,7 +1581,8 @@ class DataFrame(FrameBase):
                     dtype=pprint_thing(dtype),
                 )
                 for i, (name, count, dtype) in enumerate(
-                    zip(self.columns, counts, self.dtypes)
+                    # NOTE: Use `counts.values` for cudf support
+                    zip(self.columns, counts.values, self.dtypes)
                 )
             ]
             lines.extend(header.split("\n"))
@@ -1627,13 +1703,26 @@ class Series(FrameBase):
         else:
             return uniqs.size
 
-    def drop_duplicates(self, ignore_index=False, split_every=None, split_out=True):
+    def drop_duplicates(
+        self, ignore_index=False, split_every=None, split_out=True, keep=None
+    ):
+        if keep is False:
+            raise NotImplementedError("drop_duplicates with keep=False")
+        if keep is not None and get_default_shuffle_method() == "p2p":
+            warnings.warn(
+                "P2P shuffle doesn't have ordering guarantees, so keep='first' and "
+                "keep='last' might return unexpected results",
+                UserWarning,
+            )
+        elif keep is None:
+            keep = "first"
         return new_collection(
             DropDuplicates(
                 self,
                 ignore_index=ignore_index,
                 split_out=split_out,
                 split_every=split_every,
+                keep=keep,
             )
         )
 
@@ -1893,7 +1982,12 @@ def optimize(collection, fuse=True):
     return new_collection(expr.optimize(collection.expr, fuse=fuse))
 
 
-def from_pandas(data, npartitions=1, sort=True):
+def from_pandas(data, npartitions=None, sort=True, chunksize=None):
+    if chunksize is not None and npartitions is not None:
+        raise TypeError("can't pass chunksize and npartitions")
+    elif chunksize is None and npartitions is None:
+        npartitions = 1
+
     from dask_expr.io.io import FromPandas
 
     return new_collection(
@@ -1901,6 +1995,7 @@ def from_pandas(data, npartitions=1, sort=True):
             _BackendData(data.copy()),
             npartitions=npartitions,
             sort=sort,
+            chunksize=chunksize,
         )
     )
 
@@ -2319,6 +2414,7 @@ def map_partitions(
         enforce_metadata,
         transform_divisions,
         clear_divisions,
+        align_dataframes,
         kwargs,
         *args[1:],
     )
@@ -2375,6 +2471,7 @@ def map_overlap(
         enforce_metadata,
         transform_divisions,
         clear_divisions,
+        align_dataframes,
         kwargs,
         *args,
     )
