@@ -7,8 +7,8 @@ import operator
 import numpy as np
 from dask.dataframe import methods
 from dask.dataframe.core import apply_and_enforce, is_dataframe_like, make_meta
-from dask.dataframe.io.io import sorted_division_locations
-from dask.utils import apply, funcname
+from dask.dataframe.io.io import _meta_from_array, sorted_division_locations
+from dask.utils import apply, funcname, is_series_like
 
 from dask_expr._expr import (
     Blockwise,
@@ -17,6 +17,7 @@ from dask_expr._expr import (
     Literal,
     PartitionsFiltered,
     Projection,
+    determine_column_projection,
     no_default,
 )
 from dask_expr._reductions import Len
@@ -59,7 +60,7 @@ class BlockwiseIO(Blockwise, IO):
     def _fusion_compression_factor(self):
         return 1
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if (
             self._absorb_projections
             and isinstance(parent, Projection)
@@ -67,69 +68,17 @@ class BlockwiseIO(Blockwise, IO):
         ):
             # Column projection
             parent_columns = parent.operand("columns")
-            proposed_columns = _convert_to_list(parent_columns)
-            make_series = isinstance(parent_columns, (str, int)) and not self._series
-            if set(proposed_columns) == set(self.columns) and not make_series:
-                # Already projected
+            proposed_columns = determine_column_projection(self, parent, dependents)
+            proposed_columns = _convert_to_list(proposed_columns)
+            proposed_columns = [col for col in self.columns if col in proposed_columns]
+            if set(proposed_columns) == set(self.columns):
+                # Already projected or nothing to do
                 return
-            substitutions = {"columns": _convert_to_list(parent_columns)}
-            if make_series:
-                substitutions["_series"] = True
-            return self.substitute_parameters(substitutions)
-
-    def _combine_similar(self, root: Expr):
-        if self._absorb_projections:
-            # For BlockwiseIO expressions with "columns"/"_series"
-            # attributes (`_absorb_projections == True`), we can avoid
-            # redundant file-system access by aggregating multiple
-            # operations with different column projections into the
-            # same operation.
-            alike = self._find_similar_operations(root, ignore=["columns", "_series"])
-            if alike:
-                # We have other BlockwiseIO operations (of the same
-                # sub-type) in the expression graph that can be combined
-                # with this one.
-
-                # Find the column-projection union needed to combine
-                # the qualified BlockwiseIO operations
-                columns_operand = self.operand("columns")
-                if columns_operand is None:
-                    columns_operand = self.columns
-                columns = set(columns_operand)
-                for op in alike:
-                    op_columns = op.operand("columns")
-                    if op_columns is None:
-                        op_columns = op.columns
-                    columns |= set(op_columns)
-                columns = sorted(columns)
-                if columns_operand is None:
-                    columns_operand = self.columns
-                # Can bail if we are not changing columns or the "_series" operand
-                if columns_operand == columns and (
-                    len(columns) > 1 or not self._series
-                ):
-                    return
-
-                # Check if we have the operation we want elsewhere in the graph
-                for op in alike:
-                    if set(op.columns) == set(columns) and not op.operand("_series"):
-                        return (
-                            op[columns_operand[0]]
-                            if self._series
-                            else op[columns_operand]
-                        )
-
-                if set(self.columns) == set(columns):
-                    return  # Skip unnecessary projection change
-
-                # Create the "combined" ReadParquet operation
-                subs = {"columns": columns}
-                if self._series:
-                    subs["_series"] = False
-                new = self.substitute_parameters(subs)
-                return new[columns_operand[0]] if self._series else new[columns_operand]
-
-        return
+            substitutions = {"columns": proposed_columns}
+            result = self.substitute_parameters(substitutions)
+            if result.columns != parent_columns:
+                result = result[parent_columns]
+            return result
 
     def _tune_up(self, parent):
         if self._fusion_compression_factor >= 1:
@@ -140,19 +89,19 @@ class BlockwiseIO(Blockwise, IO):
 
 
 class FusedIO(BlockwiseIO):
-    _parameters = ["expr"]
+    _parameters = ["_expr"]
 
     @functools.cached_property
     def _name(self):
         return (
-            funcname(type(self.operand("expr"))).lower()
+            funcname(type(self.operand("_expr"))).lower()
             + "-fused-"
             + _tokenize_deterministic(*self.operands)
         )
 
     @functools.cached_property
     def _meta(self):
-        return self.operand("expr")._meta
+        return self.operand("_expr")._meta
 
     def dependencies(self):
         return []
@@ -162,22 +111,22 @@ class FusedIO(BlockwiseIO):
         return len(self._fusion_buckets)
 
     def _divisions(self):
-        divisions = self.operand("expr")._divisions()
+        divisions = self.operand("_expr")._divisions()
         new_divisions = [divisions[b[0]] for b in self._fusion_buckets]
         new_divisions.append(self._fusion_buckets[-1][-1])
         return tuple(new_divisions)
 
     def _task(self, index: int):
-        expr = self.operand("expr")
+        expr = self.operand("_expr")
         bucket = self._fusion_buckets[index]
         return (methods.concat, [expr._filtered_task(i) for i in bucket])
 
     @functools.cached_property
     def _fusion_buckets(self):
-        partitions = self.operand("expr")._partitions
+        partitions = self.operand("_expr")._partitions
         npartitions = len(partitions)
 
-        step = math.ceil(1 / self.operand("expr")._fusion_compression_factor)
+        step = math.ceil(1 / self.operand("_expr")._fusion_compression_factor)
         step = min(step, math.ceil(math.sqrt(npartitions)), 100)
 
         buckets = [partitions[i : i + step] for i in range(0, npartitions, step)]
@@ -390,7 +339,7 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
         else:
             return _convert_to_list(columns_operand)
 
-    @property
+    @functools.cached_property
     def _divisions_and_locations(self):
         assert isinstance(self.frame, _BackendData)
         npartitions = self.operand("npartitions")
@@ -426,7 +375,7 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
             )
         return self._pd_length_stats
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Lengths):
             _lengths = self._get_lengths()
             if _lengths:
@@ -438,10 +387,16 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
                 return Literal(sum(_lengths))
 
         if isinstance(parent, Projection):
-            return super()._simplify_up(parent)
+            return super()._simplify_up(parent, dependents)
 
     def _divisions(self):
         return self._divisions_and_locations[0]
+
+    @functools.cached_property
+    def npartitions(self):
+        if self._filtered:
+            return super().npartitions
+        return len(self._divisions_and_locations[0]) - 1
 
     def _locations(self):
         return self._divisions_and_locations[1]
@@ -483,3 +438,109 @@ class FromPandasDivisions(FromPandas):
             indexer[-1] = len(data)
             _division_info_cache[key] = key, indexer
         return _division_info_cache[key]
+
+
+class FromScalars(IO):
+    _parameters = ["meta", "names"]
+
+    @property
+    def _scalars(self):
+        return self.dependencies()
+
+    def _divisions(self):
+        return (min(self.names), max(self.names))
+
+    @functools.cached_property
+    def _meta(self):
+        return type(self.meta)(
+            [s._meta for s in self._scalars], index=self.names, name=self.meta.name
+        )
+
+    def _layer(self) -> dict:
+        return {
+            (self._name, 0): (
+                type(self.meta),
+                [(s._name, 0) for s in self._scalars],
+                self.names,
+                None,
+                self.meta.name,
+            )
+        }
+
+    def _simplify_up(self, parent, dependents):
+        if isinstance(parent, Projection):
+            if sorted(parent.columns) == sorted(self.names):
+                return
+            new_names, new_scalars = [], []
+            for n, s in zip(self.names, self._scalars):
+                if n in parent.columns:
+                    new_names.append(n)
+                    new_scalars.append(s)
+            return type(parent)(
+                type(self)(self.meta, new_names, *new_scalars), *parent.operands[1:]
+            )
+
+
+class FromArray(PartitionsFiltered, BlockwiseIO):
+    _parameters = [
+        "frame",
+        "chunksize",
+        "original_columns",
+        "meta",
+        "columns",
+        "_partitions",
+    ]
+    _defaults = {
+        "chunksize": 50_000,
+        "original_columns": None,
+        "meta": None,
+        "columns": None,
+        "_partitions": None,
+    }
+    _pd_length_stats = None
+    _absorb_projections = True
+
+    @functools.cached_property
+    def _meta(self):
+        meta = _meta_from_array(
+            self.frame, self.operand("original_columns"), self.operand("meta")
+        )
+        if self.operand("columns") is not None:
+            return meta[self.operand("columns")]
+        return meta
+
+    @functools.cached_property
+    def original_columns(self):
+        if self.operand("original_columns") is None:
+            if is_series_like(self._meta):
+                return [0]
+            return list(range(len(self._meta.columns)))
+        return self.operand("original_columns")
+
+    @functools.cached_property
+    def _column_indices(self):
+        if self.operand("columns") is None:
+            return slice(0, len(self.original_columns))
+        return [
+            i
+            for i, col in enumerate(self.original_columns)
+            if col in self.operand("columns")
+        ]
+
+    def _divisions(self):
+        divisions = tuple(range(0, len(self.frame), self.chunksize))
+        divisions = divisions + (len(self.frame) - 1,)
+        return divisions
+
+    def _filtered_task(self, index: int):
+        data = self.frame[slice(index * self.chunksize, (index + 1) * self.chunksize)]
+        if index == len(self.divisions) - 2:
+            idx = range(self.divisions[index], self.divisions[index + 1] + 1)
+        else:
+            idx = range(self.divisions[index], self.divisions[index + 1])
+
+        if is_series_like(self._meta):
+            return (type(self._meta), data, idx, self._meta.dtype, self._meta.name)
+        else:
+            data = data[:, self._column_indices]
+            return (type(self._meta), data, idx, self._meta.columns)

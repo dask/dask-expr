@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import datetime
 import functools
 import inspect
 import warnings
 from collections.abc import Callable, Hashable, Mapping
 from numbers import Integral, Number
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 import numpy as np
 import pandas as pd
@@ -23,7 +24,8 @@ from dask.dataframe.core import (
     is_series_like,
     new_dd_object,
 )
-from dask.dataframe.dispatch import meta_nonempty
+from dask.dataframe.dispatch import make_meta, meta_nonempty
+from dask.dataframe.multi import warn_dtype_mismatch
 from dask.dataframe.utils import has_known_categories, index_summary
 from dask.utils import (
     IndexCallable,
@@ -34,6 +36,12 @@ from dask.utils import (
     typename,
 )
 from fsspec.utils import stringify_path
+from pandas.api.types import (
+    is_bool_dtype,
+    is_datetime64_any_dtype,
+    is_numeric_dtype,
+    is_timedelta64_dtype,
+)
 from tlz import first
 
 from dask_expr import _expr as expr
@@ -41,6 +49,7 @@ from dask_expr._align import AlignPartitions
 from dask_expr._categorical import CategoricalAccessor
 from dask_expr._concat import Concat
 from dask_expr._datetime import DatetimeAccessor
+from dask_expr._describe import DescribeNonNumeric, DescribeNumeric
 from dask_expr._expr import (
     BFill,
     Diff,
@@ -66,7 +75,6 @@ from dask_expr._reductions import (
     NLargest,
     NSmallest,
     PivotTable,
-    Prod,
     Unique,
     ValueCounts,
 )
@@ -80,7 +88,7 @@ from dask_expr._util import (
     _validate_axis,
     is_scalar,
 )
-from dask_expr.io import FromPandasDivisions
+from dask_expr.io import FromPandasDivisions, FromScalars
 
 #
 # Utilities to wrap Expr API
@@ -129,10 +137,6 @@ def _wrap_expr_method_operator(name, class_):
             if level is not None:
                 raise NotImplementedError("level must be None")
 
-            # TODO(milesgranger): Add support for other, `other` types than DataFrame.
-            if not isinstance(other, DataFrame):
-                raise NotImplementedError("only other=DataFrame implemented")
-
             axis = _validate_axis(axis)
 
             if axis in (1, "columns"):
@@ -142,8 +146,8 @@ def _wrap_expr_method_operator(name, class_):
             return new_collection(
                 expr.MethodOperator(
                     name=name,
-                    left=self.expr,
-                    right=other.expr,
+                    left=self,
+                    right=other,
                     axis=axis,
                     level=level,
                     fill_value=fill_value,
@@ -161,8 +165,8 @@ def _wrap_expr_method_operator(name, class_):
             return new_collection(
                 expr.MethodOperator(
                     name=name,
-                    left=self.expr,
-                    right=other.expr,
+                    left=self,
+                    right=other,
                     axis=axis,
                     fill_value=fill_value,
                     level=level,
@@ -211,6 +215,10 @@ class FrameBase(DaskMethodsMixin):
         return meta_nonempty(self._meta)
 
     @property
+    def divisions(self):
+        return self.expr.divisions
+
+    @property
     def dtypes(self):
         return self.expr._meta.dtypes
 
@@ -227,10 +235,10 @@ class FrameBase(DaskMethodsMixin):
         if len(columns) != len(self.columns):
             # surface pandas error
             self._expr._meta.columns = columns
-        self._expr = self.rename(dict(zip(self.columns, columns)))._expr
+        self._expr = expr.ColumnsSetter(self, columns)
 
     def __len__(self):
-        return new_collection(Len(self.expr)).compute()
+        return new_collection(Len(self)).compute()
 
     @property
     def nbytes(self):
@@ -246,12 +254,21 @@ class FrameBase(DaskMethodsMixin):
             return self.loc[other]
         return new_collection(self.expr.__getitem__(other))
 
-    def persist(self, fuse=True, combine_similar=True, **kwargs):
-        out = self.optimize(combine_similar=combine_similar, fuse=fuse)
+    def __bool__(self):
+        raise ValueError(
+            f"The truth value of a {self.__class__.__name__} is ambiguous. "
+            "Use a.any() or a.all()."
+        )
+
+    def persist(self, fuse=True, **kwargs):
+        out = self.optimize(fuse=fuse)
         return DaskMethodsMixin.persist(out, **kwargs)
 
-    def compute(self, fuse=True, combine_similar=True, **kwargs):
-        out = self.optimize(combine_similar=combine_similar, fuse=fuse)
+    def compute(self, fuse=True, **kwargs):
+        out = self
+        if not isinstance(out, Scalar):
+            out = out.repartition(npartitions=1)
+        out = out.optimize(fuse=fuse)
         return DaskMethodsMixin.compute(out, **kwargs)
 
     def __dask_graph__(self):
@@ -270,10 +287,8 @@ class FrameBase(DaskMethodsMixin):
     def lower_once(self):
         return new_collection(self.expr.lower_once())
 
-    def optimize(self, combine_similar: bool = True, fuse: bool = True):
-        return new_collection(
-            self.expr.optimize(combine_similar=combine_similar, fuse=fuse)
-        )
+    def optimize(self, fuse: bool = True):
+        return new_collection(self.expr.optimize(fuse=fuse))
 
     @property
     def dask(self):
@@ -322,17 +337,25 @@ class FrameBase(DaskMethodsMixin):
     def index(self):
         return new_collection(self.expr.index)
 
-    def reset_index(self, drop=False):
-        return new_collection(expr.ResetIndex(self.expr, drop))
+    @index.setter
+    def index(self, value):
+        assert expr.are_co_aligned(
+            self.expr, value.expr
+        ), "value needs to be aligned with the index"
+        _expr = expr.AssignIndex(self, value)
+        self._expr = _expr
 
-    def head(self, n=5, compute=True):
-        out = new_collection(expr.Head(self.expr, n=n))
+    def reset_index(self, drop=False):
+        return new_collection(expr.ResetIndex(self, drop))
+
+    def head(self, n=5, npartitions=1, compute=True):
+        out = new_collection(expr.Head(self, n=n, npartitions=npartitions))
         if compute:
             out = out.compute()
         return out
 
     def tail(self, n=5, compute=True):
-        out = new_collection(expr.Tail(self.expr, n=n))
+        out = new_collection(expr.Tail(self, n=n))
         if compute:
             out = out.compute()
         return out
@@ -388,7 +411,7 @@ class FrameBase(DaskMethodsMixin):
                     # version 1.21.x and 1.22.x do not
                     pass
         # TODO: use delayed for values
-        return new_collection(expr.Isin(self.expr, values=values))
+        return new_collection(expr.Isin(self, values=values))
 
     def _partitions(self, index):
         # Used by `partitions` for partition-wise slicing
@@ -402,7 +425,7 @@ class FrameBase(DaskMethodsMixin):
         assert set(index).issubset(range(self.npartitions))
 
         # Return selected partitions
-        return new_collection(expr.Partitions(self.expr, index))
+        return new_collection(expr.Partitions(self, index))
 
     @property
     def partitions(self):
@@ -448,10 +471,16 @@ class FrameBase(DaskMethodsMixin):
         # Preserve partition count by default
         npartitions = npartitions or self.npartitions
 
+        if isinstance(index, FrameBase):
+            if not expr.are_co_aligned(self.expr, index.expr):
+                raise TypeError(
+                    "index must be aligned with the DataFrame to use as shuffle index."
+                )
+
         # Returned shuffled result
         return new_collection(
             Shuffle(
-                self.expr,
+                self,
                 index,
                 npartitions,
                 ignore_index,
@@ -510,25 +539,17 @@ class FrameBase(DaskMethodsMixin):
             DataFrame object representing the schema of the expected result.
         """
 
-        if align_dataframes:
-            # TODO: Handle alignment?
-            # Perhaps we only handle the case that all `Expr` operands
-            # have the same number of partitions or can be broadcasted
-            # within `MapPartitions`. If so, the `map_partitions` API
-            # will need to call `Repartition` on operands that are not
-            # aligned with `self.expr`.
-            raise NotImplementedError()
-        new_expr = expr.MapPartitions(
-            self.expr,
+        return map_partitions(
             func,
-            meta,
-            enforce_metadata,
-            transform_divisions,
-            clear_divisions,
-            kwargs,
-            *[arg.expr if isinstance(arg, FrameBase) else arg for arg in args],
+            self,
+            *args,
+            meta=meta,
+            enforce_metadata=enforce_metadata,
+            transform_divisions=transform_divisions,
+            clear_divisions=clear_divisions,
+            align_dataframes=align_dataframes,
+            **kwargs,
         )
-        return new_collection(new_expr)
 
     def map_overlap(
         self,
@@ -543,21 +564,19 @@ class FrameBase(DaskMethodsMixin):
         align_dataframes=False,
         **kwargs,
     ):
-        if align_dataframes:
-            raise NotImplementedError()
-        new_expr = expr.MapOverlap(
-            self.expr,
+        return map_overlap(
+            self,
             func,
             before,
             after,
-            meta,
-            enforce_metadata,
-            transform_divisions,
-            clear_divisions,
-            kwargs,
-            *[arg.expr if isinstance(arg, FrameBase) else arg for arg in args],
+            *args,
+            meta=meta,
+            enforce_metadata=enforce_metadata,
+            transform_divisions=transform_divisions,
+            clear_divisions=clear_divisions,
+            align_dataframes=align_dataframes,
+            **kwargs,
         )
-        return new_collection(new_expr)
 
     def repartition(
         self,
@@ -616,12 +635,12 @@ class FrameBase(DaskMethodsMixin):
                 "``divisions=`` keyword arguments."
             )
         if freq is not None:
-            return new_collection(RepartitionFreq(self.expr, freq))
+            if not isinstance(self.divisions[0], pd.Timestamp):
+                raise TypeError("Can only repartition on frequency for timeseries")
+            return new_collection(RepartitionFreq(self, freq))
         else:
             return new_collection(
-                Repartition(
-                    self.expr, npartitions, divisions, force, partition_size, freq
-                )
+                Repartition(self, npartitions, divisions, force, partition_size, freq)
             )
 
     def to_dask_dataframe(self, optimize: bool = True, **optimize_kwargs) -> _Frame:
@@ -644,29 +663,45 @@ class FrameBase(DaskMethodsMixin):
             lengths=lengths, meta=meta
         )
 
-    def sum(self, skipna=True, numeric_only=False, min_count=0):
-        return new_collection(self.expr.sum(skipna, numeric_only, min_count))
+    @property
+    def values(self):
+        return self.to_dask_array()
 
-    def prod(self, skipna=True, numeric_only=False, min_count=0):
-        return new_collection(self.expr.prod(skipna, numeric_only, min_count))
+    def sum(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
+        return new_collection(
+            self.expr.sum(skipna, numeric_only, min_count, split_every)
+        )
 
-    def var(self, axis=0, skipna=True, ddof=1, numeric_only=False):
-        return new_collection(self.expr.var(axis, skipna, ddof, numeric_only))
+    def prod(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
+        return new_collection(
+            self.expr.prod(skipna, numeric_only, min_count, split_every)
+        )
 
-    def std(self, axis=0, skipna=True, ddof=1, numeric_only=False):
-        return new_collection(self.expr.std(axis, skipna, ddof, numeric_only))
+    def var(self, axis=0, skipna=True, ddof=1, numeric_only=False, split_every=False):
+        return new_collection(
+            self.expr.var(axis, skipna, ddof, numeric_only, split_every=split_every)
+        )
 
-    def mean(self, skipna=True, numeric_only=False, min_count=0):
-        return new_collection(self.expr.mean(skipna, numeric_only))
+    def std(self, axis=0, skipna=True, ddof=1, numeric_only=False, split_every=False):
+        return new_collection(
+            self.expr.std(axis, skipna, ddof, numeric_only, split_every=split_every)
+        )
 
-    def max(self, skipna=True, numeric_only=False, min_count=0):
-        return new_collection(self.expr.max(skipna, numeric_only, min_count))
+    def mean(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
+        return new_collection(
+            self.expr.mean(skipna, numeric_only, split_every=split_every)
+        )
 
-    def any(self, skipna=True):
-        return new_collection(self.expr.any(skipna))
+    def max(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
+        return new_collection(
+            self.expr.max(skipna, numeric_only, min_count, split_every)
+        )
 
-    def all(self, skipna=True):
-        return new_collection(self.expr.all(skipna))
+    def any(self, skipna=True, split_every=False):
+        return new_collection(self.expr.any(skipna, split_every))
+
+    def all(self, skipna=True, split_every=False):
+        return new_collection(self.expr.all(skipna, split_every))
 
     def idxmin(self, skipna=True, numeric_only=False):
         return new_collection(self.expr.idxmin(skipna, numeric_only))
@@ -674,16 +709,17 @@ class FrameBase(DaskMethodsMixin):
     def idxmax(self, skipna=True, numeric_only=False):
         return new_collection(self.expr.idxmax(skipna, numeric_only))
 
-    def mode(self, dropna=True):
-        return new_collection(self.expr.mode(dropna))
+    def min(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
+        return new_collection(
+            self.expr.min(skipna, numeric_only, min_count, split_every)
+        )
 
-    def min(self, skipna=True, numeric_only=False, min_count=0):
-        return new_collection(self.expr.min(skipna, numeric_only, min_count))
-
-    def count(self, numeric_only=False):
-        return new_collection(self.expr.count(numeric_only))
+    def count(self, numeric_only=False, split_every=False):
+        return new_collection(self.expr.count(numeric_only, split_every))
 
     def abs(self):
+        # Raise pandas errors
+        meta_nonempty(self._meta).abs()
         return new_collection(self.expr.abs())
 
     def astype(self, dtypes):
@@ -705,16 +741,12 @@ class FrameBase(DaskMethodsMixin):
         return new_collection(self.expr.isnull())
 
     def mask(self, cond, other=np.nan):
-        cond = cond.expr if isinstance(cond, FrameBase) else cond
-        other = other.expr if isinstance(other, FrameBase) else other
         return new_collection(self.expr.mask(cond, other))
 
     def round(self, decimals=0):
         return new_collection(self.expr.round(decimals))
 
     def where(self, cond, other=np.nan):
-        cond = cond.expr if isinstance(cond, FrameBase) else cond
-        other = other.expr if isinstance(other, FrameBase) else other
         return new_collection(self.expr.where(cond, other))
 
     def apply(self, function, *args, **kwargs):
@@ -727,13 +759,13 @@ class FrameBase(DaskMethodsMixin):
         axis = _validate_axis(axis)
         if axis == 1:
             raise NotImplementedError("ffill on axis 1 not implemented")
-        return new_collection(FFill(self.expr, limit))
+        return new_collection(FFill(self, limit))
 
     def bfill(self, axis=0, _inplace=False, limit=None, _downcast=None):
         axis = _validate_axis(axis)
         if axis == 1:
             raise NotImplementedError("bfill on axis 1 not implemented")
-        return new_collection(BFill(self.expr, limit))
+        return new_collection(BFill(self, limit))
 
     def fillna(self, value=None):
         return new_collection(self.expr.fillna(value))
@@ -744,7 +776,7 @@ class FrameBase(DaskMethodsMixin):
 
         axis = _validate_axis(axis)
         if axis == 0:
-            return new_collection(Shift(self.expr, periods, freq))
+            return new_collection(Shift(self, periods, freq))
 
         return self.map_partitions(
             func=Shift.func,
@@ -758,7 +790,7 @@ class FrameBase(DaskMethodsMixin):
     def diff(self, periods=1, axis=0):
         axis = _validate_axis(axis)
         if axis == 0:
-            return new_collection(Diff(self.expr, periods))
+            return new_collection(Diff(self, periods))
         return self.map_partitions(
             func=Diff.func,
             enforce_metadata=False,
@@ -774,10 +806,10 @@ class FrameBase(DaskMethodsMixin):
         return new_collection(self.expr.rename_axis(mapper, index, columns, axis))
 
     def align(self, other, join="outer", fill_value=None):
-        return self.expr.align(other.expr, join, fill_value)
+        return self.expr.align(other, join, fill_value)
 
-    def nunique_approx(self):
-        return new_collection(self.expr.nunique_approx())
+    def nunique_approx(self, split_every=None):
+        return new_collection(self.expr.nunique_approx(split_every=split_every))
 
     def cumsum(self, skipna=True):
         return new_collection(self.expr.cumsum(skipna=skipna))
@@ -801,10 +833,16 @@ class FrameBase(DaskMethodsMixin):
         return LocIndexer(self)
 
     def notnull(self):
-        return new_collection(expr.NotNull(self.expr))
+        return new_collection(expr.NotNull(self))
 
     def isnull(self):
         return ~self.notnull()
+
+    @classmethod
+    def from_dict(
+        cls, data, *, npartitions=1, orient="columns", dtype=None, columns=None
+    ):
+        return from_dict(data, npartitions, orient, dtype=dtype, columns=columns)
 
 
 # Add operator attributes
@@ -848,6 +886,9 @@ for op in [
 class DataFrame(FrameBase):
     """DataFrame-like Expr Collection"""
 
+    _accessors: ClassVar[set[str]] = set()
+    _partition_type = pd.DataFrame
+
     @property
     def shape(self):
         return self.size / max(len(self.columns), 1), len(self.columns)
@@ -883,9 +924,9 @@ class DataFrame(FrameBase):
                             "Setting a Series with a different base is not supported",
                         )
 
-                result = new_collection(expr.Assign(result.expr, k, v.expr))
+                result = new_collection(expr.Assign(result, k, v))
             elif not isinstance(v, FrameBase) and isinstance(v, Hashable):
-                result = new_collection(expr.Assign(result.expr, k, v))
+                result = new_collection(expr.Assign(result, k, v))
             else:
                 raise TypeError(f"Column assignment doesn't support type {type(v)}")
 
@@ -902,7 +943,7 @@ class DataFrame(FrameBase):
         right_index=False,
         suffixes=("_x", "_y"),
         indicator=False,
-        shuffle_backend=None,
+        shuffle_method=None,
         npartitions=None,
         broadcast=None,
     ):
@@ -940,8 +981,8 @@ class DataFrame(FrameBase):
             right side, respectively
         indicator : boolean or string, default False
             Passed through to the backend DataFrame library.
-        shuffle_backend: optional
-            Shuffle backend to use if shuffling is necessary.
+        shuffle_method: optional
+            Shuffle method to use if shuffling is necessary.
         npartitions : int, optional
             The number of output partitions
         broadcast : float, bool, optional
@@ -963,7 +1004,7 @@ class DataFrame(FrameBase):
             right_index,
             suffixes,
             indicator,
-            shuffle_backend,
+            shuffle_method,
             npartitions=npartitions,
             broadcast=broadcast,
         )
@@ -975,15 +1016,17 @@ class DataFrame(FrameBase):
         how="left",
         lsuffix="",
         rsuffix="",
-        shuffle_backend=None,
+        shuffle_method=None,
         npartitions=None,
     ):
+        if not isinstance(other, list) and not is_dask_collection(other):
+            other = from_pandas(other, npartitions=1)
         if (
             not isinstance(other, list)
             and not is_dataframe_like(other._meta)
             and hasattr(other._meta, "name")
         ):
-            other = new_collection(expr.ToFrame(other.expr))
+            other = new_collection(expr.ToFrame(other))
 
         if not isinstance(other, FrameBase):
             if not isinstance(other, list) or not all(
@@ -992,6 +1035,11 @@ class DataFrame(FrameBase):
                 raise ValueError("other must be DataFrame or list of DataFrames")
             if how not in ("outer", "left"):
                 raise ValueError("merge_multi only supports left or outer joins")
+
+            other = [
+                from_pandas(o, npartitions=1) if not is_dask_collection(o) else o
+                for o in other
+            ]
 
             return new_collection(
                 JoinRecursive([self.expr] + [o.expr for o in other], how=how)
@@ -1004,12 +1052,12 @@ class DataFrame(FrameBase):
             left_on=on,
             how=how,
             suffixes=(lsuffix, rsuffix),
-            shuffle_backend=shuffle_backend,
+            shuffle_method=shuffle_method,
             npartitions=npartitions,
         )
 
     def groupby(
-        self, by, group_keys=None, sort=None, observed=None, dropna=None, **kwargs
+        self, by, group_keys=True, sort=None, observed=None, dropna=None, **kwargs
     ):
         from dask_expr._groupby import GroupBy
 
@@ -1060,26 +1108,25 @@ class DataFrame(FrameBase):
         return list(o)
 
     def map(self, func, na_action=None, meta=None):
-        return new_collection(
-            expr.Map(self.expr, arg=func, na_action=na_action, meta=meta)
-        )
+        return new_collection(expr.Map(self, arg=func, na_action=na_action, meta=meta))
 
     def __repr__(self):
         return f"<dask_expr.expr.DataFrame: expr={self.expr}>"
 
     def nlargest(self, n=5, columns=None):
-        return new_collection(NLargest(self.expr, n=n, _columns=columns))
+        return new_collection(NLargest(self, n=n, _columns=columns))
 
     def nsmallest(self, n=5, columns=None):
-        return new_collection(NSmallest(self.expr, n=n, _columns=columns))
+        return new_collection(NSmallest(self, n=n, _columns=columns))
 
     def memory_usage(self, deep=False, index=True):
-        return new_collection(MemoryUsageFrame(self.expr, deep=deep, _index=index))
+        return new_collection(MemoryUsageFrame(self, deep=deep, _index=index))
 
     def drop_duplicates(
         self,
         subset=None,
         ignore_index=False,
+        split_every=None,
         split_out=True,
         keep=None,
     ):
@@ -1098,10 +1145,11 @@ class DataFrame(FrameBase):
         meta_nonempty(self._meta).drop_duplicates(subset=subset, keep=keep)
         return new_collection(
             DropDuplicates(
-                self.expr,
+                self,
                 subset=subset,
                 ignore_index=ignore_index,
                 split_out=split_out,
+                split_every=split_every,
                 keep=keep,
             )
         )
@@ -1113,7 +1161,7 @@ class DataFrame(FrameBase):
             )
         subset = _convert_to_list(subset)
         return new_collection(
-            expr.DropnaFrame(self.expr, how=how, subset=subset, thresh=thresh)
+            expr.DropnaFrame(self, how=how, subset=subset, thresh=thresh)
         )
 
     def sample(self, n=None, frac=None, replace=False, random_state=None):
@@ -1136,15 +1184,15 @@ class DataFrame(FrameBase):
 
         state_data = random_state_data(self.npartitions, random_state)
         return new_collection(
-            expr.Sample(self.expr, state_data=state_data, frac=frac, replace=replace)
+            expr.Sample(self, state_data=state_data, frac=frac, replace=replace)
         )
 
     def rename(self, columns):
-        return new_collection(expr.RenameFrame(self.expr, columns=columns))
+        return new_collection(expr.RenameFrame(self, columns=columns))
 
     def explode(self, column):
         column = _convert_to_list(column)
-        return new_collection(expr.ExplodeFrame(self.expr, column=column))
+        return new_collection(expr.ExplodeFrame(self, column=column))
 
     def drop(self, labels=None, axis=0, columns=None, errors="raise"):
         if columns is None and labels is None:
@@ -1158,7 +1206,7 @@ class DataFrame(FrameBase):
             raise NotImplementedError(
                 "Drop currently only works for axis=1 or when columns is not None"
             )
-        return new_collection(expr.Drop(self.expr, columns=columns, errors=errors))
+        return new_collection(expr.Drop(self, columns=columns, errors=errors))
 
     def to_parquet(self, path, **kwargs):
         from dask_expr.io.parquet import to_parquet
@@ -1170,7 +1218,7 @@ class DataFrame(FrameBase):
         return new_collection(self.expr[columns])
 
     def eval(self, expr, **kwargs):
-        return new_collection(Eval(self.expr, _expr=expr, expr_kwargs=kwargs))
+        return new_collection(Eval(self, _expr=expr, expr_kwargs=kwargs))
 
     def set_index(
         self,
@@ -1180,9 +1228,13 @@ class DataFrame(FrameBase):
         npartitions: int | None = None,
         divisions=None,
         sort: bool = True,
+        shuffle_method=None,
         upsample: float = 1.0,
         partition_size: float = 128e6,
+        **options,
     ):
+        if isinstance(other, list) and len(other) == 1:
+            other = other[0]
         if isinstance(other, list):
             if any([isinstance(c, FrameBase) for c in other]):
                 raise TypeError("List[FrameBase] not supported by set_index")
@@ -1198,7 +1250,6 @@ class DataFrame(FrameBase):
 
         if divisions is not None:
             check_divisions(divisions)
-        other = other.expr if isinstance(other, Series) else other
 
         if (sorted or not sort) and npartitions is not None:
             raise ValueError(
@@ -1207,21 +1258,34 @@ class DataFrame(FrameBase):
             )
 
         if sorted:
+            if divisions is not None and len(divisions) - 1 != self.npartitions:
+                msg = (
+                    "When doing `df.set_index(col, sorted=True, divisions=...)`, "
+                    "divisions indicates known splits in the index column. In this "
+                    "case divisions must be the same length as the existing "
+                    "divisions in `df`\n\n"
+                    "If the intent is to repartition into new divisions after "
+                    "setting the index, you probably want:\n\n"
+                    "`df.set_index(col, sorted=True).repartition(divisions=divisions)`"
+                )
+                raise ValueError(msg)
             return new_collection(
-                SetIndexBlockwise(self.expr, other, drop, new_divisions=divisions)
+                SetIndexBlockwise(self, other, drop, new_divisions=divisions)
             )
         elif not sort:
-            return new_collection(SetIndexBlockwise(self.expr, other, drop, None))
+            return new_collection(SetIndexBlockwise(self, other, drop, None))
 
         return new_collection(
             SetIndex(
-                self.expr,
+                self,
                 other,
                 drop,
                 user_divisions=divisions,
                 npartitions=npartitions,
                 upsample=upsample,
                 partition_size=partition_size,
+                shuffle_method=shuffle_method,
+                options=options,
             )
         )
 
@@ -1236,7 +1300,8 @@ class DataFrame(FrameBase):
         sort_function_kwargs: Mapping[str, Any] | None = None,
         upsample: float = 1.0,
         ignore_index: bool | None = False,
-        shuffle: str | None = None,
+        shuffle_method: str | None = None,
+        **options,
     ):
         """See DataFrame.sort_values for docstring"""
         if na_position not in ("first", "last"):
@@ -1265,7 +1330,7 @@ class DataFrame(FrameBase):
 
         return new_collection(
             SortValues(
-                self.expr,
+                self,
                 by,
                 ascending,
                 na_position,
@@ -1275,18 +1340,25 @@ class DataFrame(FrameBase):
                 sort_function_kwargs,
                 upsample,
                 ignore_index,
-                shuffle,
+                shuffle_method,
+                options=options,
             )
         )
 
     def query(self, expr, **kwargs):
-        return new_collection(Query(self.expr, expr, kwargs))
+        return new_collection(Query(self, expr, kwargs))
+
+    def mode(self, dropna=True, split_every=False):
+        modes = []
+        for _, col in self.items():
+            modes.append(col.mode(dropna=dropna, split_every=split_every))
+        return concat(modes, axis=1)
 
     def add_prefix(self, prefix):
-        return new_collection(expr.AddPrefix(self.expr, prefix))
+        return new_collection(expr.AddPrefix(self, prefix))
 
     def add_suffix(self, suffix):
-        return new_collection(expr.AddSuffix(self.expr, suffix))
+        return new_collection(expr.AddSuffix(self, suffix))
 
     def pivot_table(self, index, columns, values, aggfunc="mean"):
         return pivot_table(self, index, columns, values, aggfunc)
@@ -1299,9 +1371,7 @@ class DataFrame(FrameBase):
 
     def nunique(self, axis=0, dropna=True):
         if axis == 1:
-            return new_collection(
-                expr.NUniqueColumns(self.expr, axis=axis, dropna=dropna)
-            )
+            return new_collection(expr.NUniqueColumns(self, axis=axis, dropna=dropna))
         else:
             return concat(
                 [
@@ -1309,6 +1379,83 @@ class DataFrame(FrameBase):
                     for name, col in self.items()
                 ]
             )
+
+    def quantile(self, q=0.5, axis=0, numeric_only=False, method="default"):
+        """Approximate row-wise and precise column-wise quantiles of DataFrame
+
+        Parameters
+        ----------
+        q : list/array of floats, default 0.5 (50%)
+            Iterable of numbers ranging from 0 to 1 for the desired quantiles
+        axis : {0, 1, 'index', 'columns'} (default 0)
+            0 or 'index' for row-wise, 1 or 'columns' for column-wise
+        method : {'default', 'tdigest', 'dask'}, optional
+            What method to use. By default will use dask's internal custom
+            algorithm (``'dask'``).  If set to ``'tdigest'`` will use tdigest
+            for floats and ints and fallback to the ``'dask'`` otherwise.
+        """
+        allowed_methods = ["default", "dask", "tdigest"]
+        if method not in allowed_methods:
+            raise ValueError("method can only be 'default', 'dask' or 'tdigest'")
+        meta = make_meta(self._meta.quantile(q=q, numeric_only=numeric_only))
+
+        if numeric_only:
+            frame = self.select_dtypes("number")
+        else:
+            frame = self
+
+        collections = []
+        for _, col in frame.items():
+            collections.append(col.quantile(q=q, method=method))
+
+        if len(collections) > 0 and isinstance(collections[0], Scalar):
+            return _from_scalars(collections, meta, frame.expr.columns)
+
+        return concat(collections, axis=1)
+
+    def median(self, axis=0, numeric_only=False):
+        if axis == 1 or self.npartitions == 1:
+            return self.median_approximate(axis=axis, numeric_only=numeric_only)
+        raise NotImplementedError(
+            "Dask doesn't implement an exact median in all cases as this is hard to do in parallel. "
+            "See the `median_approximate` method instead, which uses an approximate algorithm."
+        )
+
+    def median_approximate(self, axis=0, method="default", numeric_only=False):
+        return self.quantile(
+            axis=axis, method=method, numeric_only=numeric_only
+        ).rename(None)
+
+    def describe(
+        self,
+        split_every=False,
+        percentiles=None,
+        percentiles_method="default",
+        include=None,
+        exclude=None,
+    ):
+        # TODO: duplicated columns
+        if include is None and exclude is None:
+            _include = [np.number, np.timedelta64, np.datetime64]
+            columns = self._meta.select_dtypes(include=_include).columns
+            if len(columns) == 0:
+                columns = self._meta.columns
+        elif include == "all":
+            if exclude is not None:
+                raise ValueError("exclude must be None when include is 'all'")
+            columns = self._meta.columns
+        else:
+            columns = self._meta.select_dtypes(include=include, exclude=exclude).columns
+
+        stats = [
+            self[col].describe(
+                split_every=split_every,
+                percentiles=percentiles,
+                percentiles_method=percentiles_method,
+            )
+            for col in columns
+        ]
+        return concat(stats, axis=1)
 
     def info(self, buf=None, verbose=False, memory_usage=False):
         """
@@ -1399,6 +1546,9 @@ class DataFrame(FrameBase):
 class Series(FrameBase):
     """Series-like Expr Collection"""
 
+    _accessors: ClassVar[set[str]] = set()
+    _partition_type = pd.Series
+
     @property
     def shape(self):
         return (self.size,)
@@ -1411,6 +1561,9 @@ class Series(FrameBase):
         o = set(dir(type(self)))
         o.update(self.__dict__)
         o.update(set(dir(expr.Expr)))
+        for accessor in ["cat", "str"]:
+            if not hasattr(self._meta, accessor):
+                o.remove(accessor)
         return list(o)
 
     @property
@@ -1433,35 +1586,48 @@ class Series(FrameBase):
         return self.index
 
     def map(self, arg, na_action=None, meta=None):
-        return new_collection(
-            expr.Map(self.expr, arg=arg, na_action=na_action, meta=None)
-        )
+        return new_collection(expr.Map(self, arg=arg, na_action=na_action, meta=meta))
 
     def __repr__(self):
         return f"<dask_expr.expr.Series: expr={self.expr}>"
 
     def to_frame(self, name=no_default):
-        return new_collection(expr.ToFrame(self.expr, name=name))
+        return new_collection(expr.ToFrame(self, name=name))
 
-    def value_counts(self, sort=None, ascending=False, dropna=True, normalize=False):
+    def value_counts(
+        self,
+        sort=None,
+        ascending=False,
+        dropna=True,
+        normalize=False,
+        split_every=None,
+        split_out=1,
+    ):
         return new_collection(
-            ValueCounts(self.expr, sort, ascending, dropna, normalize)
+            ValueCounts(
+                self, sort, ascending, dropna, normalize, split_every, split_out
+            )
         )
 
+    def mode(self, dropna=True, split_every=False):
+        return new_collection(self.expr.mode(dropna, split_every))
+
     def nlargest(self, n=5):
-        return new_collection(NLargest(self.expr, n=n))
+        return new_collection(NLargest(self, n=n))
 
     def nsmallest(self, n=5):
-        return new_collection(NSmallest(self.expr, n=n))
+        return new_collection(NSmallest(self, n=n))
 
     def memory_usage(self, deep=False, index=True):
-        return new_collection(MemoryUsageFrame(self.expr, deep=deep, _index=index))
+        return new_collection(MemoryUsageFrame(self, deep=deep, _index=index))
 
-    def product(self):
-        return new_collection(Prod(self.expr))
+    def product(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
+        return new_collection(
+            self.expr.prod(skipna, numeric_only, min_count, split_every)
+        )
 
-    def unique(self):
-        return new_collection(Unique(self.expr))
+    def unique(self, split_every=None, split_out=True):
+        return new_collection(Unique(self, split_every, split_out))
 
     def nunique(self, dropna=True):
         uniqs = self.drop_duplicates()
@@ -1473,25 +1639,45 @@ class Series(FrameBase):
         else:
             return uniqs.size
 
-    def drop_duplicates(self, ignore_index=False, split_out=True, keep="first"):
+    def drop_duplicates(
+        self, ignore_index=False, split_every=None, split_out=True, keep="first"
+    ):
         if keep is False:
             raise NotImplementedError("drop_duplicates with keep=False")
+        if keep is not None and get_default_shuffle_method() == "p2p":
+            warnings.warn(
+                "P2P shuffle doesn't have ordering guarantees, so keep='first' and "
+                "keep='last' might return unexpected results",
+                UserWarning,
+            )
+        elif keep is None:
+            keep = "first"
         return new_collection(
             DropDuplicates(
-                self.expr, ignore_index=ignore_index, split_out=split_out, keep=keep
+                self,
+                ignore_index=ignore_index,
+                split_out=split_out,
+                split_every=split_every,
+                keep=keep,
             )
         )
 
     def dropna(self):
-        return new_collection(expr.DropnaSeries(self.expr))
+        return new_collection(expr.DropnaSeries(self))
 
     def between(self, left, right, inclusive="both"):
         return new_collection(
-            expr.Between(self.expr, left=left, right=right, inclusive=inclusive)
+            expr.Between(self, left=left, right=right, inclusive=inclusive)
         )
 
     def explode(self):
-        return new_collection(expr.ExplodeSeries(self.expr))
+        return new_collection(expr.ExplodeSeries(self))
+
+    def add_prefix(self, prefix):
+        return new_collection(expr.AddPrefixSeries(self, prefix))
+
+    def add_suffix(self, suffix):
+        return new_collection(expr.AddSuffixSeries(self, suffix))
 
     cat = CachedAccessor("cat", CategoricalAccessor)
     dt = CachedAccessor("dt", DatetimeAccessor)
@@ -1499,7 +1685,7 @@ class Series(FrameBase):
 
     def _repartition_quantiles(self, npartitions, upsample=1.0, random_state=None):
         return new_collection(
-            RepartitionQuantiles(self.expr, npartitions, upsample, random_state)
+            RepartitionQuantiles(self, npartitions, upsample, random_state)
         )
 
     def groupby(self, by, **kwargs):
@@ -1508,7 +1694,7 @@ class Series(FrameBase):
         return SeriesGroupBy(self, by, **kwargs)
 
     def rename(self, index, sorted_index=False):
-        return new_collection(expr.RenameSeries(self.expr, index, sorted_index))
+        return new_collection(expr.RenameSeries(self, index, sorted_index))
 
     def quantile(self, q=0.5, method="default"):
         """Approximate quantiles of Series
@@ -1522,20 +1708,53 @@ class Series(FrameBase):
             algorithm (``'dask'``).  If set to ``'tdigest'`` will use tdigest
             for floats and ints and fallback to the ``'dask'`` otherwise.
         """
-        if not pd.api.types.is_numeric_dtype(self.dtype):
+        if not is_numeric_dtype(self.dtype):
             raise TypeError(f"quantile() on non-numeric dtype {self.dtype}")
         allowed_methods = ["default", "dask", "tdigest"]
         if method not in allowed_methods:
             raise ValueError("method can only be 'default', 'dask' or 'tdigest'")
-        return new_collection(SeriesQuantile(self.expr, q, method))
+        return new_collection(SeriesQuantile(self, q, method))
+
+    def median(self):
+        if self.npartitions == 1:
+            return self.median_approximate()
+        raise NotImplementedError(
+            "Dask doesn't implement an exact median in all cases as this is hard to do in parallel. "
+            "See the `median_approximate` method instead, which uses an approximate algorithm."
+        )
+
+    def median_approximate(self, method="default"):
+        return self.quantile(method=method)
+
+    def describe(
+        self,
+        split_every=False,
+        percentiles=None,
+        percentiles_method="default",
+        include=None,
+        exclude=None,
+    ):
+        if (
+            is_numeric_dtype(self.dtype)
+            and not is_bool_dtype(self.dtype)
+            or is_timedelta64_dtype(self.dtype)
+            or is_datetime64_any_dtype(self.dtype)
+        ):
+            return new_collection(
+                DescribeNumeric(self, split_every, percentiles, percentiles_method)
+            )
+        else:
+            return new_collection(
+                DescribeNonNumeric(self, split_every, percentiles, percentiles_method)
+            )
 
     @property
     def is_monotonic_increasing(self):
-        return new_collection(IsMonotonicIncreasing(self.expr))
+        return new_collection(IsMonotonicIncreasing(self))
 
     @property
     def is_monotonic_decreasing(self):
-        return new_collection(IsMonotonicDecreasing(self.expr))
+        return new_collection(IsMonotonicDecreasing(self))
 
 
 for name in [
@@ -1567,21 +1786,77 @@ for name in [
 class Index(Series):
     """Index-like Expr Collection"""
 
+    _accessors: ClassVar[set[str]] = set()
+    _partition_type = pd.Index
+
+    _dt_attributes = {
+        "nanosecond",
+        "microsecond",
+        "millisecond",
+        "dayofyear",
+        "minute",
+        "hour",
+        "day",
+        "dayofweek",
+        "second",
+        "week",
+        "weekday",
+        "weekofyear",
+        "month",
+        "quarter",
+        "year",
+    }
+
+    _cat_attributes = {
+        "known",
+        "as_known",
+        "as_unknown",
+        "add_categories",
+        "categories",
+        "remove_categories",
+        "reorder_categories",
+        "as_ordered",
+        "codes",
+        "remove_unused_categories",
+        "set_categories",
+        "as_unordered",
+        "ordered",
+        "rename_categories",
+    }
+
+    _monotonic_attributes = {
+        "is_monotonic",
+        "is_monotonic_increasing",
+        "is_monotonic_decreasing",
+    }
+
+    def __getattr__(self, key):
+        if (
+            isinstance(self._meta.dtype, pd.CategoricalDtype)
+            and key in self._cat_attributes
+        ):
+            return getattr(self.cat, key)
+        elif key in self._dt_attributes:
+            return getattr(self.dt, key)
+        elif key in self._monotonic_attributes:
+            return getattr(self, key)
+        return super().__getattr__(key)
+
     def __repr__(self):
         return f"<dask_expr.expr.Index: expr={self.expr}>"
 
     def to_series(self, index=None, name=no_default):
         if index is not None:
             raise NotImplementedError
-        return new_collection(expr.ToSeriesIndex(self.expr, index=index, name=name))
+        return new_collection(expr.ToSeriesIndex(self, index=index, name=name))
 
     def to_frame(self, index=True, name=no_default):
         if not index:
             raise NotImplementedError
-        return new_collection(expr.ToFrameIndex(self.expr, index=index, name=name))
+        return new_collection(expr.ToFrameIndex(self, index=index, name=name))
 
     def memory_usage(self, deep=False):
-        return new_collection(MemoryUsageIndex(self.expr, deep=deep))
+        return new_collection(MemoryUsageIndex(self, deep=deep))
 
     @property
     def index(self):
@@ -1589,10 +1864,16 @@ class Index(Series):
             f"{self.__class__.__name__!r} object has no attribute 'index'"
         )
 
+    def shift(self, periods=1, freq=None):
+        return new_collection(expr.ShiftIndex(self, periods, freq))
+
     def __dir__(self):
         o = set(dir(type(self)))
         o.update(self.__dict__)
         o.update(set(dir(expr.Expr)))
+        o.update(self._dt_attributes)
+        if isinstance(self.dtype, pd.CategoricalDtype):
+            o.update(self._cat_attributes)
         return list(o)
 
 
@@ -1602,11 +1883,20 @@ class Scalar(FrameBase):
     def __repr__(self):
         return f"<dask_expr.expr.Scalar: expr={self.expr}>"
 
+    def __bool__(self):
+        raise TypeError(
+            f"Trying to convert {self} to a boolean value. Because Dask objects are "
+            "lazily evaluated, they cannot be converted to a boolean value or used "
+            "in boolean conditions like if statements. Try calling .compute() to "
+            "force computation prior to converting to a boolean value or using in "
+            "a conditional statement."
+        )
+
     def __dask_postcompute__(self):
         return first, ()
 
     def to_series(self, index=0) -> Series:
-        return new_collection(expr.ScalarToSeries(self.expr, index=index))
+        return new_collection(expr.ScalarToSeries(self, index=index))
 
 
 def new_collection(expr):
@@ -1640,10 +1930,80 @@ def from_pandas(data, npartitions=1, sort=True):
     )
 
 
+def from_array(arr, chunksize=50_000, columns=None, meta=None):
+    import dask.array as da
+
+    if isinstance(arr, da.Array):
+        return from_dask_array(arr, columns=columns, meta=meta)
+
+    from dask_expr.io.io import FromArray
+
+    return new_collection(
+        FromArray(
+            arr,
+            chunksize=chunksize,
+            original_columns=columns,
+            meta=meta,
+        )
+    )
+
+
 def from_graph(*args, **kwargs):
     from dask_expr.io.io import FromGraph
 
     return new_collection(FromGraph(*args, **kwargs))
+
+
+def from_dict(
+    data,
+    npartitions,
+    orient="columns",
+    dtype=None,
+    columns=None,
+    constructor=pd.DataFrame,
+):
+    """
+    Construct a Dask DataFrame from a Python Dictionary
+
+    Parameters
+    ----------
+    data : dict
+        Of the form {field : array-like} or {field : dict}.
+    npartitions : int
+        The number of partitions of the index to create. Note that depending on
+        the size and index of the dataframe, the output may have fewer
+        partitions than requested.
+    orient : {'columns', 'index', 'tight'}, default 'columns'
+        The "orientation" of the data. If the keys of the passed dict
+        should be the columns of the resulting DataFrame, pass 'columns'
+        (default). Otherwise if the keys should be rows, pass 'index'.
+        If 'tight', assume a dict with keys
+        ['index', 'columns', 'data', 'index_names', 'column_names'].
+    dtype: bool
+        Data type to force, otherwise infer.
+    columns: string, optional
+        Column labels to use when ``orient='index'``. Raises a ValueError
+        if used with ``orient='columns'`` or ``orient='tight'``.
+    constructor: class, default pd.DataFrame
+        Class with which ``from_dict`` should be called with.
+
+    Examples
+    --------
+    >>> import dask.dataframe as dd
+    >>> ddf = dd.from_dict({"num1": [1, 2, 3, 4], "num2": [7, 8, 9, 10]}, npartitions=2)
+    """
+
+    collection_types = {type(v) for v in data.values() if is_dask_collection(v)}
+    if collection_types:
+        raise NotImplementedError(
+            "from_dict doesn't currently support Dask collections as inputs. "
+            f"Objects of type {collection_types} were given in the input dict."
+        )
+
+    return from_pandas(
+        constructor.from_dict(data, orient, dtype, columns),
+        npartitions,
+    )
 
 
 def from_dask_dataframe(ddf: _Frame, optimize: bool = True) -> FrameBase:
@@ -1658,6 +2018,13 @@ def from_dask_dataframe(ddf: _Frame, optimize: bool = True) -> FrameBase:
     if optimize:
         graph = ddf.__dask_optimize__(graph, ddf.__dask_keys__())
     return from_graph(graph, ddf._meta, ddf.divisions, ddf._name)
+
+
+def from_dask_array(x, columns=None, index=None, meta=None):
+    from dask.dataframe.io import from_dask_array
+
+    df = from_dask_array(x, columns=columns, index=index, meta=meta)
+    return from_dask_dataframe(df, optimize=True)
 
 
 def read_csv(path, *args, usecols=None, **kwargs):
@@ -1722,22 +2089,27 @@ def concat(
     join="outer",
     ignore_unknown_divisions=False,
     ignore_order=False,
+    interleave_partitions=False,
     **kwargs,
 ):
+    if interleave_partitions is True:
+        raise NotImplementedError("interleave_partitions=True isn't implemented yet")
     if not isinstance(dfs, list):
         raise TypeError("dfs must be a list of DataFrames/Series objects")
     if len(dfs) == 0:
         raise ValueError("No objects to concatenate")
     if len(dfs) == 1:
+        if axis == 1 and isinstance(dfs[0], Series):
+            return dfs[0].to_frame()
         return dfs[0]
 
     if join not in ("inner", "outer"):
         raise ValueError("'join' must be 'inner' or 'outer'")
 
-    dfs = [from_pandas(df) if not is_dask_collection(df) else df for df in dfs]
+    dfs = [from_pandas(df) if not isinstance(df, FrameBase) else df for df in dfs]
 
     if axis == 1:
-        dfs = [df for df in dfs if len(df.columns) > 0]
+        dfs = [df for df in dfs if len(df.columns) > 0 or isinstance(df, Series)]
 
     return new_collection(
         Concat(
@@ -1746,7 +2118,7 @@ def concat(
             kwargs,
             axis,
             ignore_unknown_divisions,
-            *[df.expr for df in dfs],
+            *dfs,
         )
     )
 
@@ -1762,7 +2134,7 @@ def merge(
     right_index=False,
     suffixes=("_x", "_y"),
     indicator=False,
-    shuffle_backend=None,
+    shuffle_method=None,
     npartitions=None,
     broadcast=None,
 ):
@@ -1799,9 +2171,9 @@ def merge(
             right_index = True
         right = from_pandas(right, npartitions=1)
 
-    left = left.expr
-    right = right.expr
     assert is_dataframe_like(right._meta)
+    if left_on and right_on:
+        warn_dtype_mismatch(left, right, left_on, right_on)
 
     return new_collection(
         Merge(
@@ -1814,7 +2186,7 @@ def merge(
             right_index=right_index,
             suffixes=suffixes,
             indicator=indicator,
-            shuffle_backend=shuffle_backend,
+            shuffle_method=shuffle_method,
             _npartitions=npartitions,
             broadcast=broadcast,
         )
@@ -1921,25 +2293,121 @@ def pivot_table(df, index, columns, values, aggfunc="mean"):
         raise ValueError("'values' must refer to an existing column or columns")
 
     return new_collection(
-        PivotTable(
-            df.expr, index=index, columns=columns, values=values, aggfunc=aggfunc
-        )
+        PivotTable(df, index=index, columns=columns, values=values, aggfunc=aggfunc)
     )
 
 
 def to_numeric(arg, errors="raise", downcast=None):
     if not isinstance(arg, Series):
         raise TypeError("arg must be a Series")
-    return new_collection(ToNumeric(frame=arg.expr, errors=errors, downcast=downcast))
+    return new_collection(ToNumeric(frame=arg, errors=errors, downcast=downcast))
 
 
 def to_datetime(arg, **kwargs):
     if not isinstance(arg, FrameBase):
         raise TypeError("arg must be a Series or a DataFrame")
-    return new_collection(ToDatetime(frame=arg.expr, kwargs=kwargs))
+    return new_collection(ToDatetime(frame=arg, kwargs=kwargs))
 
 
 def to_timedelta(arg, unit=None, errors="raise"):
     if not isinstance(arg, Series):
         raise TypeError("arg must be a Series")
-    return new_collection(ToTimedelta(frame=arg.expr, unit=unit, errors=errors))
+    return new_collection(ToTimedelta(frame=arg, unit=unit, errors=errors))
+
+
+def _from_scalars(scalars, meta, names):
+    return new_collection(FromScalars(meta, names, *scalars))
+
+
+def map_partitions(
+    func,
+    *args,
+    meta=no_default,
+    enforce_metadata=True,
+    transform_divisions=True,
+    clear_divisions=False,
+    align_dataframes=False,
+    **kwargs,
+):
+    if align_dataframes:
+        # TODO: Handle alignment?
+        # Perhaps we only handle the case that all `Expr` operands
+        # have the same number of partitions or can be broadcasted
+        # within `MapPartitions`. If so, the `map_partitions` API
+        # will need to call `Repartition` on operands that are not
+        # aligned with `self.expr`.
+        raise NotImplementedError()
+    new_expr = expr.MapPartitions(
+        args[0],
+        func,
+        meta,
+        enforce_metadata,
+        transform_divisions,
+        clear_divisions,
+        kwargs,
+        *args[1:],
+    )
+    return new_collection(new_expr)
+
+
+def map_overlap(
+    df,
+    func,
+    before,
+    after,
+    *args,
+    meta=no_default,
+    enforce_metadata=True,
+    transform_divisions=True,
+    clear_divisions=False,
+    align_dataframes=False,
+    **kwargs,
+):
+    if align_dataframes:
+        raise NotImplementedError()
+
+    if isinstance(before, str):
+        before = pd.to_timedelta(before)
+    if isinstance(after, str):
+        after = pd.to_timedelta(after)
+
+    if isinstance(before, datetime.timedelta) or isinstance(after, datetime.timedelta):
+        if isinstance(df, FrameBase):
+            inferred_type = df.index._meta_nonempty.inferred_type
+        else:
+            inferred_type = df.index.inferred_type
+
+        if not is_datetime64_any_dtype(inferred_type):
+            raise TypeError(
+                "Must have a `DatetimeIndex` when using string offset "
+                "for `before` and `after`"
+            )
+
+    elif not (
+        isinstance(before, Integral)
+        and before >= 0
+        and isinstance(after, Integral)
+        and after >= 0
+    ):
+        raise ValueError("before and after must be positive integers")
+
+    new_expr = expr.MapOverlap(
+        df,
+        func,
+        before,
+        after,
+        meta,
+        enforce_metadata,
+        transform_divisions,
+        clear_divisions,
+        kwargs,
+        *args,
+    )
+    return new_collection(new_expr)
+
+
+def isna(arg):
+    if isinstance(arg, FrameBase):
+        return arg.isna()
+    else:
+        return map_partitions(pd.isna, from_pandas(arg))

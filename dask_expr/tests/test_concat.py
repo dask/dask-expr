@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from dask_expr import Len, concat, from_pandas
+from dask_expr import DataFrame, Len, Series, concat, from_pandas
 from dask_expr.tests._util import _backend_library, assert_eq
 
 # Set DataFrame backend for this module
@@ -129,6 +129,29 @@ def test_concat_axis_one_drop_dfs_not_selected(pdf, df):
     assert_eq(result, lib.concat([pdf, pdf2, pdf3], axis=1)[["x", "y", "x_2"]])
 
 
+def test_concat_ignore_order():
+    pdf1 = lib.DataFrame(
+        {
+            "x": lib.Categorical(
+                ["a", "b", "c", "a"], categories=["a", "b", "c"], ordered=True
+            )
+        }
+    )
+    ddf1 = from_pandas(pdf1, 2)
+    pdf2 = lib.DataFrame(
+        {
+            "x": lib.Categorical(
+                ["c", "b", "a"], categories=["c", "b", "a"], ordered=True
+            )
+        }
+    )
+    ddf2 = from_pandas(pdf2, 2)
+    expected = lib.concat([pdf1, pdf2])
+    expected["x"] = expected["x"].astype("category")
+    result = concat([ddf1, ddf2], ignore_order=True)
+    assert_eq(result, expected)
+
+
 def test_concat_index(df, pdf):
     df2 = from_pandas(pdf, npartitions=3)
     result = concat([df, df2])
@@ -138,6 +161,25 @@ def test_concat_index(df, pdf):
     query = Len(result.expr).optimize(fuse=False)
     expected = (0 + Len(df.expr) + Len(df2.expr)).optimize(fuse=False)
     assert query._name == expected._name
+
+
+def test_concat_one_series(df):
+    c = concat([df.x], axis=0)
+    assert isinstance(c, Series)
+
+    c = concat([df.x], axis=1)
+    assert isinstance(c, DataFrame)
+
+
+def test_concat_dataframe_empty():
+    df = lib.DataFrame({"a": [100, 200, 300]}, dtype="int64")
+    empty_df = lib.DataFrame([], dtype="int64")
+    df_concat = lib.concat([df, empty_df])
+
+    ddf = from_pandas(df, npartitions=1)
+    empty_ddf = from_pandas(empty_df, npartitions=1)
+    ddf_concat = concat([ddf, empty_ddf])
+    assert_eq(df_concat, ddf_concat)
 
 
 def test_concat_after_merge():
@@ -158,3 +200,13 @@ def test_concat_after_merge():
     total = concat([_df1, _df2])
 
     assert_eq(total, ptotal, check_index=False)
+
+
+def test_concat_series(pdf):
+    pdf["z"] = 1
+    df = from_pandas(pdf, npartitions=5)
+    q = concat([df.y, df.x, df.z], axis=1)[["x", "y"]]
+    df2 = df[["x", "y"]]
+    expected = concat([df2.y, df2.x], axis=1)[["x", "y"]]
+    assert q.optimize(fuse=False)._name == expected.optimize(fuse=False)._name
+    assert_eq(q, lib.concat([pdf.y, pdf.x, pdf.z], axis=1)[["x", "y"]])

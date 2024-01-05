@@ -6,7 +6,7 @@ import pytest
 from dask_expr import SetIndexBlockwise, from_pandas
 from dask_expr._expr import Blockwise
 from dask_expr._repartition import RepartitionToFewer
-from dask_expr._shuffle import divisions_lru
+from dask_expr._shuffle import TaskShuffle, divisions_lru
 from dask_expr.io import FromPandas
 from dask_expr.tests._util import _backend_library, assert_eq
 
@@ -179,7 +179,7 @@ def test_set_index_sorted(pdf):
     assert result._name == expected._name
 
     with pytest.raises(TypeError, match="not supported by set_index"):
-        df.set_index([df["y"]], sorted=True)
+        df.set_index([df["y"], df["x"]], sorted=True)
 
     with pytest.raises(NotImplementedError, match="requires sorted=True"):
         df.set_index(["y", "z"], sorted=False)
@@ -220,6 +220,18 @@ def test_set_index_simplify(df, pdf):
     assert q._name == expected._name
 
 
+def test_set_index_numeric_columns():
+    pdf = lib.DataFrame(
+        {
+            0: list("ABAABBABAA"),
+            1: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            2: [1, 2, 3, 2, 1, 3, 2, 4, 2, 3],
+        }
+    )
+    ddf = from_pandas(pdf, 3)
+    assert_eq(ddf.set_index(0), pdf.set_index(0))
+
+
 def test_set_index_without_sort(df, pdf):
     result = df.set_index("y", sort=False)
     assert_eq(result, pdf.set_index("y"))
@@ -241,19 +253,23 @@ def test_set_index_without_sort(df, pdf):
 
 @pytest.mark.parametrize("shuffle", [None, "tasks"])
 def test_sort_values(df, pdf, shuffle):
-    assert_eq(df.sort_values("x", shuffle=shuffle), pdf.sort_values("x"))
-    assert_eq(df.sort_values("x", shuffle=shuffle, npartitions=2), pdf.sort_values("x"))
+    assert_eq(df.sort_values("x", shuffle_method=shuffle), pdf.sort_values("x"))
+    assert_eq(
+        df.sort_values("x", shuffle_method=shuffle, npartitions=2), pdf.sort_values("x")
+    )
     pdf.iloc[5, 0] = -10
     df = from_pandas(pdf, npartitions=10)
-    assert_eq(df.sort_values("x", shuffle=shuffle, upsample=2.0), pdf.sort_values("x"))
+    assert_eq(
+        df.sort_values("x", shuffle_method=shuffle, upsample=2.0), pdf.sort_values("x")
+    )
 
     with pytest.raises(NotImplementedError, match="a single boolean for ascending"):
-        df.sort_values(by=["x", "y"], shuffle=shuffle, ascending=[True, True])
+        df.sort_values(by=["x", "y"], shuffle_method=shuffle, ascending=[True, True])
     with pytest.raises(NotImplementedError, match="sorting by named columns"):
-        df.sort_values(by=1, shuffle=shuffle)
+        df.sort_values(by=1, shuffle_method=shuffle)
 
     with pytest.raises(ValueError, match="must be either 'first' or 'last'"):
-        df.sort_values(by="x", shuffle=shuffle, na_position="bla")
+        df.sort_values(by="x", shuffle_method=shuffle, na_position="bla")
 
 
 @pytest.mark.parametrize("shuffle", [None, "tasks"])
@@ -262,7 +278,7 @@ def test_sort_values_temporary_column_dropped(shuffle):
         {"x": range(10), "y": [1, 2, 3, 4, 5] * 2, "z": ["cat", "dog"] * 5}
     )
     df = from_pandas(pdf, npartitions=2)
-    _sorted = df.sort_values(["z"], shuffle=shuffle)
+    _sorted = df.sort_values(["z"], shuffle_method=shuffle)
     result = _sorted.compute()
     assert "_partitions" not in result.columns
 
@@ -280,6 +296,10 @@ def test_sort_values_optimize(df, pdf):
 def test_set_index_single_partition(pdf):
     df = from_pandas(pdf, npartitions=1)
     assert_eq(df.set_index("x"), pdf.set_index("x"))
+
+
+def test_set_index_list(df, pdf):
+    assert_eq(df.set_index(["x"]), pdf.set_index(["x"]))
 
 
 def test_sort_values_descending(df, pdf):
@@ -371,6 +391,31 @@ def test_sort_values_add():
         assert_eq(df, pdf, sort_results=False)
 
 
+@pytest.mark.parametrize("null_value", [None, lib.NaT, lib.NA])
+def test_index_nulls(null_value):
+    "Setting the index with some non-numeric null raises error"
+    df = lib.DataFrame(
+        {"numeric": [1, 2, 3, 4], "non_numeric": ["foo", "bar", "foo", "bar"]}
+    )
+    ddf = from_pandas(df, npartitions=2)
+    with pytest.raises(NotImplementedError, match="presence of nulls"):
+        ddf.set_index(
+            ddf["non_numeric"].map({"foo": "foo", "bar": null_value})
+        ).compute()
+
+
+def test_set_index_sort_values_shuffle_options(df, pdf):
+    q = df.set_index("x", shuffle_method="tasks", max_branch=10)
+    shuffle = list(q.optimize().find_operations(TaskShuffle))[0]
+    assert shuffle.options == {"max_branch": 10}
+    assert_eq(q, pdf.set_index("x"))
+
+    q = df.sort_values("x", shuffle_method="tasks", max_branch=10)
+    sorter = list(q.optimize().find_operations(TaskShuffle))[0]
+    assert sorter.options == {"max_branch": 10}
+    assert_eq(q, pdf)
+
+
 def test_set_index_predicate_pushdown(df, pdf):
     pdf = pdf.set_index("x")
     query = df.set_index("x")
@@ -385,6 +430,28 @@ def test_set_index_predicate_pushdown(df, pdf):
 
     result = query[(query.index > 5) & (query.y > -1)]
     assert_eq(result, pdf[(pdf.index > 5) & (pdf.y > -1)])
+
+
+def test_set_index_with_explicit_divisions():
+    pdf = lib.DataFrame({"x": [4, 1, 2, 5]}, index=[10, 20, 30, 40])
+
+    df = from_pandas(pdf, npartitions=2)
+
+    result = df.set_index("x", divisions=[1, 3, 5])
+    assert result.divisions == (1, 3, 5)
+    assert_eq(result, pdf.set_index("x"))
+
+
+def test_set_index_npartitions_changes(pdf):
+    df = from_pandas(pdf, npartitions=30)
+    result = df.set_index("x", shuffle_method="disk")
+    assert result.npartitions == result.optimize().npartitions
+    assert_eq(result, pdf.set_index("x"))
+
+
+def test_set_index_sorted_divisions(df):
+    with pytest.raises(ValueError, match="must be the same length"):
+        df.set_index("x", divisions=(1, 2, 3), sorted=True)
 
 
 def test_set_index_sort_values_one_partition(pdf):
@@ -407,3 +474,24 @@ def test_set_index_sort_values_one_partition(pdf):
     assert_eq(pdf.set_index("x"), query)
     assert len(divisions_lru) == 0
     assert len(list(query.expr.find_operations(RepartitionToFewer))) > 0
+
+
+def test_shuffle(df, pdf):
+    result = df.shuffle(df.x)
+    assert result.npartitions == df.npartitions
+    assert_eq(result, pdf)
+
+    result = df.shuffle(df[["x"]])
+    assert result.npartitions == df.npartitions
+    assert_eq(result, pdf)
+
+    result = df[["y"]].shuffle(df[["x"]])
+    assert result.npartitions == df.npartitions
+    assert_eq(result, pdf[["y"]])
+
+    with pytest.raises(TypeError, match="index must be aligned"):
+        df.shuffle(df.x.repartition(npartitions=2))
+
+    result = df.shuffle(df.x, npartitions=2)
+    assert result.npartitions == 2
+    assert_eq(result, pdf)

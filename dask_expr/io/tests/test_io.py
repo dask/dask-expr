@@ -3,12 +3,17 @@ import os
 
 import dask.array as da
 import dask.dataframe as dd
+import numpy as np
 import pytest
 from dask.array.utils import assert_eq as array_assert_eq
 from dask.dataframe.utils import assert_eq
 
 from dask_expr import (
+    DataFrame,
+    from_array,
+    from_dask_array,
     from_dask_dataframe,
+    from_dict,
     from_map,
     from_pandas,
     optimize,
@@ -18,7 +23,7 @@ from dask_expr import (
 )
 from dask_expr._expr import Expr, Lengths, Literal, Replace
 from dask_expr._reductions import Len
-from dask_expr.io import FromMap, ReadCSV, ReadParquet
+from dask_expr.io import FromArray, FromMap, ReadCSV, ReadParquet
 from dask_expr.tests._util import _backend_library
 
 # Set DataFrame backend for this module
@@ -182,7 +187,10 @@ def test_io_fusion_blockwise(tmpdir):
     assert df.npartitions == 2
     assert len(df.__dask_graph__()) == 2
     graph = (
-        read_parquet(tmpdir)["a"].repartition(npartitions=4).optimize().__dask_graph__()
+        read_parquet(tmpdir)["a"]
+        .repartition(npartitions=4)
+        .optimize(fuse=False)
+        .__dask_graph__()
     )
     assert any("readparquet-fused" in key[0] for key in graph.keys())
 
@@ -400,6 +408,16 @@ def test_combine_similar_no_projection_on_one_branch(tmpdir):
     assert_eq(df, pdf)
 
 
+def test_from_pandas_sort_and_different_partitions():
+    pdf = lib.DataFrame({"a": [1, 2, 3] * 3, "b": 1}).set_index("a")
+    df = from_pandas(pdf, npartitions=4, sort=True)
+    assert_eq(pdf.sort_index(), df, sort_results=False)
+
+    pdf = lib.DataFrame({"a": [1, 2, 3] * 3, "b": 1}).set_index("a")
+    df = from_pandas(pdf, npartitions=4, sort=False)
+    assert_eq(pdf, df, sort_results=False)
+
+
 @pytest.mark.parametrize("meta", [True, False])
 @pytest.mark.parametrize("label", [None, "foo"])
 @pytest.mark.parametrize("allow_projection", [True, False])
@@ -482,3 +500,44 @@ def test_from_pandas_divisions_duplicated():
     assert_eq(df.partitions[0], pdf.loc[1:4])
     assert_eq(df.partitions[1], pdf.loc[5:6])
     assert_eq(df.partitions[2], pdf.loc[8:])
+
+
+def test_from_array():
+    arr = np.random.randint(1, 100, (100,))
+    assert_eq(from_array(arr, chunksize=5), lib.Series(arr))
+    assert_eq(from_array(arr, chunksize=5, columns="a"), lib.Series(arr, name="a"))
+    columns = ["a", "b", "c", "d"]
+    arr = np.random.randint(1, 100, (100, 4))
+    assert_eq(
+        from_array(arr, chunksize=5, columns=columns),
+        lib.DataFrame(arr, columns=columns),
+    )
+    assert_eq(
+        from_array(arr, chunksize=5, columns=columns)["a"],
+        lib.DataFrame(arr, columns=columns)["a"],
+    )
+    assert_eq(
+        from_array(arr, chunksize=5, columns=columns)[["a"]],
+        lib.DataFrame(arr, columns=columns)[["a"]],
+    )
+    q = from_array(arr, chunksize=5, columns=columns)[["a"]].simplify()
+    for expr in q.walk():
+        if isinstance(expr, FromArray):
+            assert expr.columns == ["a"]
+
+
+def test_from_dask_array():
+    import dask.array as da
+
+    arr = da.ones((20, 4), chunks=(2, 2))
+    df = from_dask_array(arr, columns=["a", "b", "c", "d"])
+    pdf = lib.DataFrame(arr.compute(), columns=["a", "b", "c", "d"])
+    assert_eq(df, pdf)
+
+
+def test_from_dict():
+    data = {"a": [1, 2, 3, 4], "B": [10, 11, 12, 13]}
+    result = from_dict(data, npartitions=2)
+    expected = lib.DataFrame(data)
+    assert_eq(result, expected)
+    assert_eq(DataFrame.from_dict(data), expected)

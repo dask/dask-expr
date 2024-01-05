@@ -2,29 +2,28 @@ import functools
 import math
 import operator
 
-from dask.core import flatten
 from dask.dataframe.dispatch import make_meta, meta_nonempty
-from dask.dataframe.multi import _concat_wrapper, _merge_chunk_wrapper, _split_partition
+from dask.dataframe.multi import (
+    _concat_wrapper,
+    _merge_chunk_wrapper,
+    _split_partition,
+    merge_chunk,
+)
 from dask.dataframe.shuffle import partitioning_index
-from dask.utils import M, apply, get_default_shuffle_method
+from dask.utils import apply, get_default_shuffle_method
 from toolz import merge_sorted, unique
 
 from dask_expr._expr import (
     Blockwise,
     Expr,
-    Filter,
     Index,
     PartitionsFiltered,
     Projection,
+    determine_column_projection,
 )
 from dask_expr._repartition import Repartition
-from dask_expr._shuffle import (
-    AssignPartitioningIndex,
-    Shuffle,
-    _contains_index_name,
-    _select_columns_or_index,
-)
-from dask_expr._util import _convert_to_list, _tokenize_deterministic
+from dask_expr._shuffle import Shuffle, _contains_index_name, _select_columns_or_index
+from dask_expr._util import _convert_to_list, _tokenize_deterministic, is_scalar
 
 _HASH_COLUMN_NAME = "__hash_partition"
 _PARTITION_COLUMN = "_partitions"
@@ -53,7 +52,7 @@ class Merge(Expr):
         "right_index",
         "suffixes",
         "indicator",
-        "shuffle_backend",
+        "shuffle_method",
         "_npartitions",
         "broadcast",
     ]
@@ -65,14 +64,10 @@ class Merge(Expr):
         "right_index": False,
         "suffixes": ("_x", "_y"),
         "indicator": False,
-        "shuffle_backend": None,
+        "shuffle_method": None,
         "_npartitions": None,
         "broadcast": None,
     }
-
-    # combine similar variables
-    _skip_ops = (Filter, AssignPartitioningIndex, Shuffle)
-    _remove_ops = (Projection,)
 
     def __str__(self):
         return f"Merge({self._name[-7:]})"
@@ -104,17 +99,67 @@ class Merge(Expr):
             return self.operand("_npartitions")
         return max(self.left.npartitions, self.right.npartitions)
 
+    @property
+    def _bcast_left(self):
+        if self.operand("_npartitions") is not None:
+            if self.broadcast_side == "right":
+                return Repartition(self.left, new_partitions=self._npartitions)
+        return self.left
+
+    @property
+    def _bcast_right(self):
+        if self.operand("_npartitions") is not None:
+            if self.broadcast_side == "left":
+                return Repartition(self.right, new_partitions=self._npartitions)
+        return self.right
+
     def _divisions(self):
         if self.merge_indexed_left and self.merge_indexed_right:
-            return list(unique(merge_sorted(self.left.divisions, self.right.divisions)))
-
-        if self.is_broadcast_join:
-            if self.broadcast_side == "left":
-                return self.right._divisions()
-            return self.left._divisions()
+            divisions = list(
+                unique(merge_sorted(self.left.divisions, self.right.divisions))
+            )
+            if len(divisions) == 1:
+                return (divisions[0], divisions[0])
+            if self.left.npartitions == 1 and self.right.npartitions == 1:
+                return (min(divisions), max(divisions))
+            return divisions
 
         if self._is_single_partition_broadcast:
+            use_left = self.right_index or _contains_index_name(
+                self.right._meta, self.right_on
+            )
+            use_right = self.left_index or _contains_index_name(
+                self.left._meta, self.left_on
+            )
+            if (
+                use_right
+                and self.left.npartitions == 1
+                and self.how in ("right", "inner")
+            ):
+                return self.right.divisions
+            elif (
+                use_left
+                and self.right.npartitions == 1
+                and self.how in ("inner", "left")
+            ):
+                return self.left.divisions
+            else:
+                _npartitions = max(self.left.npartitions, self.right.npartitions)
+
+        elif self.is_broadcast_join:
+            meta_index_names = set(self._meta.index.names)
+            if (
+                self.broadcast_side == "left"
+                and set(self.right._meta.index.names) == meta_index_names
+            ):
+                return self._bcast_right._divisions()
+            elif (
+                self.broadcast_side == "right"
+                and set(self.left._meta.index.names) == meta_index_names
+            ):
+                return self._bcast_left._divisions()
             _npartitions = max(self.left.npartitions, self.right.npartitions)
+
         else:
             _npartitions = self._npartitions
 
@@ -133,7 +178,7 @@ class Merge(Expr):
         elif isinstance(self.broadcast, bool):
             broadcast = self.broadcast
 
-        s_backend = self.shuffle_backend or get_default_shuffle_method()
+        s_backend = self.shuffle_method or get_default_shuffle_method()
         if (
             s_backend in ("tasks", "p2p")
             and self.how in ("inner", "left", "right")
@@ -189,7 +234,7 @@ class Merge(Expr):
         right_on = self.right_on
         left_index = self.left_index
         right_index = self.right_index
-        shuffle_backend = self.shuffle_backend
+        shuffle_method = self.shuffle_method
 
         # TODO:
         #  1. Add/leverage partition statistics
@@ -229,18 +274,14 @@ class Merge(Expr):
                     shuffle_right_on = "_index"
 
             if self.is_broadcast_join:
-                if self.operand("_npartitions") is not None:
-                    if self.broadcast_side == "right":
-                        left = Repartition(left, new_partitions=self._npartitions)
-                    else:
-                        right = Repartition(right, new_partitions=self._npartitions)
+                left, right = self._bcast_left, self._bcast_right
 
                 if self.how != "inner":
                     if self.broadcast_side == "left":
                         left = Shuffle(
                             left,
                             shuffle_left_on,
-                            npartitions_out=right.npartitions,
+                            npartitions_out=left.npartitions,
                         )
                     else:
                         right = Shuffle(
@@ -262,8 +303,8 @@ class Merge(Expr):
                 )
 
         if (shuffle_left_on or shuffle_right_on) and (
-            shuffle_backend == "p2p"
-            or shuffle_backend is None
+            shuffle_method == "p2p"
+            or shuffle_method is None
             and get_default_shuffle_method() == "p2p"
         ):
             return HashJoinP2P(
@@ -287,7 +328,7 @@ class Merge(Expr):
                 left,
                 shuffle_left_on,
                 npartitions_out=self._npartitions,
-                backend=shuffle_backend,
+                backend=shuffle_method,
                 index_shuffle=left_index,
             )
 
@@ -297,26 +338,26 @@ class Merge(Expr):
                 right,
                 shuffle_right_on,
                 npartitions_out=self._npartitions,
-                backend=shuffle_backend,
+                backend=shuffle_method,
                 index_shuffle=right_index,
             )
 
         # Blockwise merge
         return BlockwiseMerge(left, right, **self.kwargs)
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, (Projection, Index)):
             # Reorder the column projection to
             # occur before the Merge
+            columns = determine_column_projection(self, parent, dependents)
+            columns = _convert_to_list(columns)
             if isinstance(parent, Index):
                 # Index creates an empty column projection
-                projection, parent_columns = [], None
+                projection, parent_columns = columns, None
             else:
-                projection, parent_columns = parent.operand("columns"), parent.operand(
-                    "columns"
-                )
-                if isinstance(projection, (str, int)):
-                    projection = [projection]
+                projection, parent_columns = columns, parent.operand("columns")
+            if is_scalar(projection):
+                projection = [projection]
 
             left, right = self.left, self.right
             left_on = _convert_to_list(self.left_on)
@@ -362,137 +403,6 @@ class Merge(Expr):
                     return type(parent)(result)
                 return result[parent_columns]
 
-    def _validate_same_operations(self, common, op, remove="both"):
-        # Travers left and right to check if we can find the same operation
-        # more than once. We have to account for potential projections on both sides
-        name = common._name
-        if name == op._name:
-            return True, op.left.columns, op.right.columns
-
-        columns_left, columns_right = None, None
-        op_left, op_right = op.left, op.right
-        if remove in ("both", "left"):
-            op_left, columns_left = self._remove_operations(
-                op.left, self._remove_ops, self._skip_ops
-            )
-        if remove in ("both", "right"):
-            op_right, columns_right = self._remove_operations(
-                op.right, self._remove_ops, self._skip_ops
-            )
-
-        return (
-            type(op)(op_left, op_right, *op.operands[2:])._name == name,
-            columns_left,
-            columns_right,
-        )
-
-    @staticmethod
-    def _flatten_columns(expr, columns, side):
-        if len(columns) == 0:
-            return getattr(expr, side).columns
-        else:
-            return list(set(flatten(columns)))
-
-    def _combine_similar(self, root: Expr):
-        # Push projections back up to avoid performing the same merge multiple times
-
-        left, columns_left = self._remove_operations(
-            self.left, self._remove_ops, self._skip_ops
-        )
-        columns_left = self._flatten_columns(self, columns_left, "left")
-        right, columns_right = self._remove_operations(
-            self.right, self._remove_ops, self._skip_ops
-        )
-        columns_right = self._flatten_columns(self, columns_right, "right")
-
-        if left._name == self.left._name and right._name == self.right._name:
-            # There aren't any ops we can remove, so bail
-            return
-
-        # We can not remove Projections on both sides at once, because only
-        # one side might need the push back up step. So try if removing Projections
-        # on either side works before removing them on both sides at once.
-
-        common_left = type(self)(self.left, right, *self.operands[2:])
-        common_right = type(self)(left, self.right, *self.operands[2:])
-        common_both = type(self)(left, right, *self.operands[2:])
-
-        columns, left_sub, right_sub = None, None, None
-
-        for op in self._find_similar_operations(root, ignore=["left", "right"]):
-            if op._name in (common_right._name, common_left._name, common_both._name):
-                if sorted(self.columns) != sorted(op.columns):
-                    return op[self.columns]
-                return op
-
-            validation = self._validate_same_operations(common_right, op, "left")
-            if validation[0]:
-                left_sub = self._flatten_columns(op, validation[1], side="left")
-                columns = self.right.columns.copy()
-                columns += [col for col in self.left.columns if col not in columns]
-                break
-
-            validation = self._validate_same_operations(common_left, op, "right")
-            if validation[0]:
-                right_sub = self._flatten_columns(op, validation[2], side="right")
-                columns = self.left.columns.copy()
-                columns += [col for col in self.right.columns if col not in columns]
-                break
-
-            validation = self._validate_same_operations(common_both, op)
-            if validation[0]:
-                left_sub = self._flatten_columns(op, validation[1], side="left")
-                right_sub = self._flatten_columns(op, validation[2], side="right")
-                columns = columns_left.copy()
-                columns += [col for col in columns_right if col not in columns_left]
-                break
-
-        if columns is not None:
-            expr = self
-            if _PARTITION_COLUMN in columns:
-                columns.remove(_PARTITION_COLUMN)
-
-            if left_sub is not None:
-                left_sub.extend([col for col in columns_left if col not in left_sub])
-                left = self._replace_projections(self.left, sorted(left_sub))
-                expr = expr.substitute(self.left, left)
-
-            if right_sub is not None:
-                right_sub.extend([col for col in columns_right if col not in right_sub])
-                right = self._replace_projections(self.right, sorted(right_sub))
-                expr = expr.substitute(self.right, right)
-
-            if sorted(expr.columns) != sorted(columns):
-                expr = expr[columns]
-            if expr._name == self._name:
-                return None
-            return expr
-
-    def _replace_projections(self, frame, new_columns):
-        # This branch might have a number of Projections that differ from our
-        # new columns. We replace those projections appropriately
-
-        operations = []
-        while isinstance(frame, self._remove_ops + self._skip_ops):
-            if isinstance(frame, self._remove_ops):
-                # TODO: Shuffle and AssignPartitioningIndex being 2 different ops
-                #  causes all kinds of pain
-                if isinstance(frame.frame, AssignPartitioningIndex):
-                    new_cols = new_columns
-                else:
-                    new_cols = [col for col in new_columns if col != _PARTITION_COLUMN]
-
-                # Ignore Projection if new_columns = frame.frame.columns
-                if sorted(new_cols) != sorted(frame.frame.columns):
-                    operations.append((type(frame), [new_cols]))
-            else:
-                operations.append((type(frame), frame.operands[1:]))
-            frame = frame.frame
-
-        for op_type, operands in reversed(operations):
-            frame = op_type(frame, *operands)
-        return frame
-
 
 class HashJoinP2P(Merge, PartitionsFiltered):
     _parameters = [
@@ -535,18 +445,22 @@ class HashJoinP2P(Merge, PartitionsFiltered):
 
         dsk = {}
         token_left = _tokenize_deterministic(
-            "hash-join",
+            # Include self._name to ensure that shuffle IDs are unique for individual
+            # merge operations. Reusing shuffles between merges is dangerous because of
+            # required coordination and complexity introduced through dynamic clusters.
+            self._name,
             self.left._name,
             self.shuffle_left_on,
-            self.npartitions,
-            self._partitions,
+            self.left_index,
         )
         token_right = _tokenize_deterministic(
-            "hash-join",
+            # Include self._name to ensure that shuffle IDs are unique for individual
+            # merge operations. Reusing shuffles between merges is dangerous because of
+            # required coordination and complexity introduced through dynamic clusters.
+            self._name,
             self.right._name,
             self.shuffle_right_on,
-            self.npartitions,
-            self._partitions,
+            self.right_index,
         )
         _barrier_key_left = barrier_key(ShuffleId(token_left))
         _barrier_key_right = barrier_key(ShuffleId(token_right))
@@ -610,7 +524,7 @@ class HashJoinP2P(Merge, PartitionsFiltered):
             )
         return dsk
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         return
 
 
@@ -643,7 +557,7 @@ class BroadcastJoin(Merge, PartitionsFiltered):
             return self.right._divisions()
         return self.left._divisions()
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         return
 
     def _lower(self):
@@ -770,14 +684,16 @@ class BlockwiseMerge(Merge, Blockwise):
         return dep.npartitions == 1
 
     def _task(self, index: int):
+        kwargs = self.kwargs.copy()
+        kwargs["result_meta"] = self._meta
         return (
             apply,
-            M.merge,
+            merge_chunk,
             [
                 self._blockwise_arg(self.left, index),
                 self._blockwise_arg(self.right, index),
             ],
-            self.kwargs,
+            kwargs,
         )
 
 
