@@ -548,3 +548,10 @@ def test_from_pandas_chunksize():
     df = from_pandas(pdf, chunksize=4)
     assert df.npartitions == 3
     assert_eq(df, pdf)
+
+    df = from_pandas(pdf)
+    assert df.npartitions == 1
+    assert_eq(df, pdf)
+
+    with pytest.raises(TypeError, match="chunksize and npartitions"):
+        from_pandas(pdf, npartitions=2, chunksize=2)
