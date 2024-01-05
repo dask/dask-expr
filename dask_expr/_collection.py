@@ -1665,9 +1665,10 @@ class Series(FrameBase):
     def map(self, arg, na_action=None, meta=None):
         if isinstance(arg, Series):
             if not expr.are_co_aligned(self.expr, arg.expr):
-                raise NotImplementedError(
-                    "passing a Series as arg isn't implemented yet"
-                )
+                if not self.divisions == arg.divisions:
+                    raise NotImplementedError(
+                        "passing a Series as arg isn't implemented yet"
+                    )
         return new_collection(expr.Map(self, arg=arg, na_action=na_action, meta=meta))
 
     def __repr__(self):
