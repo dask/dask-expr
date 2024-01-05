@@ -27,6 +27,7 @@ from dask.dataframe.dispatch import meta_nonempty
 from dask.dataframe.utils import has_known_categories, index_summary
 from dask.utils import (
     IndexCallable,
+    get_default_shuffle_method,
     memory_repr,
     put_lines,
     random_state_data,
@@ -1076,10 +1077,22 @@ class DataFrame(FrameBase):
         return new_collection(MemoryUsageFrame(self.expr, deep=deep, _index=index))
 
     def drop_duplicates(
-        self, subset=None, ignore_index=False, split_out=True, keep="first"
+        self,
+        subset=None,
+        ignore_index=False,
+        split_out=True,
+        keep=None,
     ):
         if keep is False:
             raise NotImplementedError("drop_duplicates with keep=False")
+        if keep is not None and get_default_shuffle_method() == "p2p":
+            warnings.warn(
+                "P2P shuffle doesn't have ordering guarantees, so keep='first' and "
+                "keep='last' might return unexpected results",
+                UserWarning,
+            )
+        elif keep is None:
+            keep = "first"
         # Fail early if subset is not valid, e.g. missing columns
         subset = _convert_to_list(subset)
         meta_nonempty(self._meta).drop_duplicates(subset=subset, keep=keep)
