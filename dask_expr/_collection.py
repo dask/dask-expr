@@ -903,9 +903,10 @@ class FrameBase(DaskMethodsMixin):
         if lengths is True:
             lengths = tuple(self.map_partitions(len).compute())
 
-        records = to_records(self)
+        frame = self.to_dask_dataframe()
+        records = to_records(frame)
 
-        chunks = self._validate_chunks(records, lengths)
+        chunks = frame._validate_chunks(records, lengths)
         records._chunks = (chunks[0],)
 
         return records
