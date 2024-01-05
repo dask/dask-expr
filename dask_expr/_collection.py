@@ -54,12 +54,10 @@ from dask_expr._describe import DescribeNonNumeric, DescribeNumeric
 from dask_expr._expr import (
     BFill,
     Diff,
-    DiffColumns,
     Eval,
     FFill,
     Query,
     Shift,
-    ShiftColumns,
     ToDatetime,
     ToNumeric,
     ToTimedelta,
@@ -780,16 +778,29 @@ class FrameBase(DaskMethodsMixin):
 
         axis = _validate_axis(axis)
         if axis == 0:
-            return new_collection(Shift(self.expr, periods, freq))
-        else:
-            return new_collection(ShiftColumns(self.expr, periods, freq))
+            return new_collection(Shift(self, periods, freq))
+
+        return self.map_partitions(
+            func=Shift.func,
+            enforce_metadata=False,
+            transform_divisions=False,
+            periods=periods,
+            axis=axis,
+            freq=freq,
+        )
 
     def diff(self, periods=1, axis=0):
         axis = _validate_axis(axis)
         if axis == 0:
-            return new_collection(Diff(self.expr, periods))
-        else:
-            return new_collection(DiffColumns(self.expr, periods))
+            return new_collection(Diff(self, periods))
+        return self.map_partitions(
+            func=Diff.func,
+            enforce_metadata=False,
+            transform_divisions=False,
+            clear_divisions=False,
+            periods=periods,
+            axis=axis,
+        )
 
     def rename_axis(
         self, mapper=no_default, index=no_default, columns=no_default, axis=0
