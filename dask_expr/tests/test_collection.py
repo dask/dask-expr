@@ -1556,6 +1556,26 @@ def test_unknown_partitions_different_root():
         df.align(df2)
 
 
+@pytest.mark.parametrize("split_every", [None, 2])
+def test_split_out_drop_duplicates(split_every):
+    x = np.concatenate([np.arange(10)] * 100)[:, None]
+    y = x.copy()
+    z = np.concatenate([np.arange(20)] * 50)[:, None]
+    rs = np.random.RandomState(1)
+    rs.shuffle(x)
+    rs.shuffle(y)
+    rs.shuffle(z)
+    df = lib.DataFrame(np.concatenate([x, y, z], axis=1), columns=["x", "y", "z"])
+    ddf = from_pandas(df, npartitions=20)
+
+    sol = df.drop_duplicates(subset=["x", "z"], keep="first")
+    res = ddf.drop_duplicates(
+        subset=["x", "z"], keep="first", split_every=split_every, split_out=10
+    )
+    assert res.npartitions == 10
+    assert_eq(sol, res, check_index=False)
+
+
 @pytest.mark.parametrize("dropna", [False, True])
 def test_nunique(pdf, dropna):
     pdf["z"] = pdf.y.astype(float)

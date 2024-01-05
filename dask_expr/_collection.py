@@ -14,7 +14,6 @@ from dask import compute
 from dask.array import Array
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
 from dask.dataframe import methods
-from dask.dataframe._pyarrow import is_object_string_dtype
 from dask.dataframe.accessor import CachedAccessor
 from dask.dataframe.core import (
     _concat,
@@ -85,7 +84,9 @@ from dask_expr._str_accessor import StringAccessor
 from dask_expr._util import (
     _BackendData,
     _convert_to_list,
+    _get_shuffle_preferring_order,
     _maybe_from_pandas,
+    _raise_if_object_series,
     _validate_axis,
     is_scalar,
 )
@@ -361,8 +362,13 @@ class FrameBase(DaskMethodsMixin):
             out = out.compute()
         return out
 
-    def copy(self):
+    def copy(self, deep=False):
         """Return a copy of this object"""
+        if deep is not False:
+            raise ValueError(
+                "The `deep` value must be False. This is strictly a shallow copy "
+                "of the underlying computational graph."
+            )
         return new_collection(self.expr)
 
     def eq(self, other):
@@ -679,16 +685,19 @@ class FrameBase(DaskMethodsMixin):
         )
 
     def var(self, axis=0, skipna=True, ddof=1, numeric_only=False, split_every=False):
+        _raise_if_object_series(self, "var")
         return new_collection(
             self.expr.var(axis, skipna, ddof, numeric_only, split_every=split_every)
         )
 
     def std(self, axis=0, skipna=True, ddof=1, numeric_only=False, split_every=False):
+        _raise_if_object_series(self, "std")
         return new_collection(
             self.expr.std(axis, skipna, ddof, numeric_only, split_every=split_every)
         )
 
     def mean(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
+        _raise_if_object_series(self, "mean")
         return new_collection(
             self.expr.mean(skipna, numeric_only, split_every=split_every)
         )
@@ -720,6 +729,7 @@ class FrameBase(DaskMethodsMixin):
 
     def abs(self):
         # Raise pandas errors
+        _raise_if_object_series(self, "abs")
         meta_nonempty(self._meta).abs()
         return new_collection(self.expr.abs())
 
@@ -1129,8 +1139,10 @@ class DataFrame(FrameBase):
         ignore_index=False,
         split_every=None,
         split_out=True,
+        shuffle_method=None,
         keep=None,
     ):
+        shuffle_method = _get_shuffle_preferring_order(shuffle_method)
         if keep is False:
             raise NotImplementedError("drop_duplicates with keep=False")
         if keep is not None and get_default_shuffle_method() == "p2p":
@@ -1151,6 +1163,7 @@ class DataFrame(FrameBase):
                 ignore_index=ignore_index,
                 split_out=split_out,
                 split_every=split_every,
+                shuffle_method=shuffle_method,
                 keep=keep,
             )
         )
@@ -1221,6 +1234,8 @@ class DataFrame(FrameBase):
         return new_collection(self.expr[columns])
 
     def eval(self, expr, **kwargs):
+        if "inplace" in kwargs:
+            raise NotImplementedError("inplace is not supported for eval")
         return new_collection(Eval(self, _expr=expr, expr_kwargs=kwargs))
 
     def set_index(
@@ -1648,6 +1663,8 @@ class Series(FrameBase):
         return self.index
 
     def map(self, arg, na_action=None, meta=None):
+        if isinstance(arg, Series):
+            raise NotImplementedError("passing a Series as arg isn't implemented yet")
         return new_collection(expr.Map(self, arg=arg, na_action=na_action, meta=meta))
 
     def __repr__(self):
@@ -1688,8 +1705,9 @@ class Series(FrameBase):
             self.expr.prod(skipna, numeric_only, min_count, split_every)
         )
 
-    def unique(self, split_every=None, split_out=True):
-        return new_collection(Unique(self, split_every, split_out))
+    def unique(self, split_every=None, split_out=True, shuffle_method=None):
+        shuffle_method = _get_shuffle_preferring_order(shuffle_method)
+        return new_collection(Unique(self, split_every, split_out, shuffle_method))
 
     def nunique(self, dropna=True):
         uniqs = self.drop_duplicates()
@@ -1702,8 +1720,14 @@ class Series(FrameBase):
             return uniqs.size
 
     def drop_duplicates(
-        self, ignore_index=False, split_every=None, split_out=True, keep=None
+        self,
+        ignore_index=False,
+        split_every=None,
+        split_out=True,
+        shuffle_method=None,
+        keep=None,
     ):
+        shuffle_method = _get_shuffle_preferring_order(shuffle_method)
         if keep is False:
             raise NotImplementedError("drop_duplicates with keep=False")
         if keep is not None and get_default_shuffle_method() == "p2p":
@@ -1720,6 +1744,7 @@ class Series(FrameBase):
                 ignore_index=ignore_index,
                 split_out=split_out,
                 split_every=split_every,
+                shuffle_method=shuffle_method,
                 keep=keep,
             )
         )
@@ -1770,8 +1795,7 @@ class Series(FrameBase):
             algorithm (``'dask'``).  If set to ``'tdigest'`` will use tdigest
             for floats and ints and fallback to the ``'dask'`` otherwise.
         """
-        if is_object_string_dtype(self.dtype):
-            raise TypeError(f"quantile() on non-numeric dtype {self.dtype}")
+        _raise_if_object_series(self, "quantile")
         allowed_methods = ["default", "dask", "tdigest"]
         if method not in allowed_methods:
             raise ValueError("method can only be 'default', 'dask' or 'tdigest'")
