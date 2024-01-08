@@ -94,4 +94,16 @@ class FunctionMap(Elemwise):
 
 class FunctionMapIndex(FunctionMap):
     def _divisions(self):
+        try:
+            divisions = self.operation(
+                type(self.frame._meta)(self.frame.divisions),
+                self.accessor,
+                self.attr,
+                self.args,
+                self.kwargs,
+            )
+            if not divisions.isna().any():
+                return tuple(divisions.tolist())
+        except Exception:
+            pass
         return (None,) * (self.frame.npartitions + 1)
