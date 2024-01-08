@@ -616,4 +616,4 @@ def test_pairwise_merge_results_in_identical_output_df(
     ddf_pairwise = ddf_pairwise.join(dfs_to_merge, how=how)
 
     # recursive join doesn't yet respect divisions in dask-expr
-    assert_eq(ddf_pairwise, ddf_loop, check_divisions=False)
+    assert_eq(ddf_pairwise, ddf_loop)

@@ -681,11 +681,16 @@ class BlockwiseMerge(Merge, Blockwise):
 
     def _divisions(self):
         if self.left.npartitions == self.right.npartitions:
-            return self.left.divisions
+            return super()._divisions()
+        is_unknown = any(d is None for d in super()._divisions())
         if self.left.npartitions > self.right.npartitions:
             # Broadcast blockwise merge
+            if is_unknown:
+                return (None,) * (self.left.npartitions + 1)
             return self.left.divisions
         else:
+            if is_unknown:
+                return (None,) * (self.right.npartitions + 1)
             return self.right.divisions
 
     def _lower(self):
