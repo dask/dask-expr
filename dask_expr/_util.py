@@ -190,6 +190,7 @@ def _get_shuffle_preferring_order(shuffle):
     if shuffle is not None:
         return shuffle
 
+    # Choose tasks over disk since it keeps the order
     shuffle = get_default_shuffle_method()
     if shuffle == "disk":
         return "tasks"
