@@ -18,7 +18,7 @@ K = TypeVar("K", bound=Hashable)
 V = TypeVar("V")
 
 DASK_VERSION = Version(dask.__version__)
-DASK_GT_20231000 = DASK_VERSION > Version("2023.10.0")
+DASK_GT_20231201 = DASK_VERSION > Version("2023.12.1")
 
 
 def _calc_maybe_new_divisions(df, periods, freq):
