@@ -1,5 +1,11 @@
 import functools
 
+import pandas as pd
+from dask.dataframe.categorical import (
+    _categorize_block,
+    _get_categories,
+    _get_categories_agg,
+)
 from dask.dataframe.utils import (
     AttributeNotImplementedError,
     clear_known_categories,
@@ -8,7 +14,8 @@ from dask.dataframe.utils import (
 from dask.utils import M
 
 from dask_expr._accessor import Accessor, PropertyMap
-from dask_expr._expr import Elemwise
+from dask_expr._expr import Blockwise, Elemwise, Projection
+from dask_expr._reductions import ApplyConcatApply
 
 
 class CategoricalAccessor(Accessor):
@@ -69,7 +76,7 @@ class CategoricalAccessor(Accessor):
         from dask_expr._collection import new_collection
 
         categories = (
-            new_collection(PropertyMap(self._series.expr, "cat", "categories"))
+            new_collection(PropertyMap(self._series, "cat", "categories"))
             .unique()
             .compute()
         )
@@ -82,7 +89,7 @@ class CategoricalAccessor(Accessor):
 
         from dask_expr import new_collection
 
-        return new_collection(AsUnknown(self._series.expr))
+        return new_collection(AsUnknown(self._series))
 
     @property
     def ordered(self):
@@ -117,7 +124,7 @@ class CategoricalAccessor(Accessor):
             raise AttributeNotImplementedError(msg)
         from dask_expr._collection import new_collection
 
-        return new_collection(PropertyMap(self._series.expr, "cat", "codes"))
+        return new_collection(PropertyMap(self._series, "cat", "codes"))
 
 
 class AsUnknown(Elemwise):
@@ -127,3 +134,42 @@ class AsUnknown(Elemwise):
     @functools.cached_property
     def _meta(self):
         return clear_known_categories(self.frame._meta)
+
+
+class Categorize(Blockwise):
+    _parameters = ["frame", "categories", "index"]
+    operation = staticmethod(_categorize_block)
+    _projection_passthrough = True
+
+    @functools.cached_property
+    def _meta(self):
+        meta = _categorize_block(
+            self.frame._meta, self.operand("categories"), self.operand("index")
+        )
+        return meta
+
+
+class GetCategories(ApplyConcatApply):
+    _parameters = ["frame", "columns", "index", "split_every"]
+
+    chunk = staticmethod(_get_categories)
+    aggregate = staticmethod(_get_categories_agg)
+
+    @property
+    def chunk_kwargs(self):
+        return {"columns": self.operand("columns"), "index": self.operand("index")}
+
+    @functools.cached_property
+    def _meta(self):
+        return ({}, pd.Series())
+
+    def _simplify_down(self):
+        if set(self.frame.columns) == set(self.operand("columns")):
+            return None
+
+        return GetCategories(
+            Projection(self.frame, self.operand("columns")),
+            columns=self.operand("columns"),
+            index=self.operand("index"),
+            split_every=self.operand("split_every"),
+        )

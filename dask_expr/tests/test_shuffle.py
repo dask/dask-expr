@@ -1,12 +1,13 @@
 from collections import OrderedDict
 
 import dask
+import numpy as np
 import pytest
 
 from dask_expr import SetIndexBlockwise, from_pandas
 from dask_expr._expr import Blockwise
 from dask_expr._repartition import RepartitionToFewer
-from dask_expr._shuffle import divisions_lru
+from dask_expr._shuffle import TaskShuffle, divisions_lru
 from dask_expr.io import FromPandas
 from dask_expr.tests._util import _backend_library, assert_eq
 
@@ -139,6 +140,40 @@ def test_shuffle_reductions_after_projection(df):
     assert df.shuffle("x").y.sum().simplify()._name == df.y.sum()._name
 
 
+@pytest.mark.parametrize("ascending", [True, False])
+@pytest.mark.parametrize("by", ["a", "b", ["a", "b"]])
+@pytest.mark.parametrize("nelem", [10, 500])
+def test_sort_values_(nelem, by, ascending):
+    np.random.seed(0)
+    df = lib.DataFrame()
+    df["a"] = np.ascontiguousarray(np.arange(nelem)[::-1])
+    df["b"] = np.arange(100, nelem + 100)
+    ddf = from_pandas(df, npartitions=10)
+
+    # run on single-threaded scheduler for debugging purposes
+    with dask.config.set(scheduler="single-threaded"):
+        got = ddf.sort_values(by=by, ascending=ascending)
+    expect = df.sort_values(by=by, ascending=ascending)
+    assert_eq(got, expect, check_index=False, sort_results=False)
+
+
+@pytest.mark.parametrize("ascending", [True, False, [False, True], [True, False]])
+@pytest.mark.parametrize("by", [["a", "b"], ["b", "a"]])
+@pytest.mark.parametrize("nelem", [10, 500])
+def test_sort_values_single_partition(nelem, by, ascending):
+    np.random.seed(0)
+    df = lib.DataFrame()
+    df["a"] = np.ascontiguousarray(np.arange(nelem)[::-1])
+    df["b"] = np.arange(100, nelem + 100)
+    ddf = from_pandas(df, npartitions=1)
+
+    # run on single-threaded scheduler for debugging purposes
+    with dask.config.set(scheduler="single-threaded"):
+        got = ddf.sort_values(by=by, ascending=ascending)
+    expect = df.sort_values(by=by, ascending=ascending)
+    assert_eq(got, expect, check_index=False)
+
+
 @pytest.mark.parametrize("partition_size", [128e6, 128e5])
 @pytest.mark.parametrize("upsample", [1.0, 2.0])
 def test_set_index(df, pdf, upsample, partition_size):
@@ -151,7 +186,7 @@ def test_set_index(df, pdf, upsample, partition_size):
         pdf.set_index(pdf.x),
     )
 
-    with pytest.raises(TypeError, match="can't be of type DataFrame"):
+    with pytest.raises(NotImplementedError, match="does not yet support"):
         df.set_index(df)
 
 
@@ -179,9 +214,9 @@ def test_set_index_sorted(pdf):
     assert result._name == expected._name
 
     with pytest.raises(TypeError, match="not supported by set_index"):
-        df.set_index([df["y"]], sorted=True)
+        df.set_index([df["y"], df["x"]], sorted=True)
 
-    with pytest.raises(NotImplementedError, match="requires sorted=True"):
+    with pytest.raises(NotImplementedError, match="does not yet support"):
         df.set_index(["y", "z"], sorted=False)
 
 
@@ -203,6 +238,30 @@ def test_set_index_pre_sorted(pdf):
     assert q._name == expected._name
 
 
+@pytest.mark.parametrize("drop", (True, False))
+@pytest.mark.parametrize("append", (True, False))
+def test_set_index_no_sort(drop, append):
+    df = lib.DataFrame({"col1": [2, 4, 1, 3, 5], "col2": [1, 2, 3, 4, 5]})
+    ddf = from_pandas(df, npartitions=2)
+
+    assert ddf.npartitions > 1
+
+    # Default is sort=True
+    # Index in ddf will be same values, but sorted
+    df_result = df.set_index("col1")
+    ddf_result = ddf.set_index("col1")
+    assert ddf_result.known_divisions
+    assert_eq(ddf_result, df_result.sort_index(), sort_results=False)
+
+    # Unknown divisions and index remains unsorted when sort is False
+    # and thus equal to pandas set_index, adding extra kwargs also supported by
+    # pandas set_index to ensure they're forwarded.
+    df_result = df.set_index("col1", drop=drop, append=append)
+    ddf_result = ddf.set_index("col1", sort=False, drop=drop, append=append)
+    assert not ddf_result.known_divisions
+    assert_eq(ddf_result, df_result, sort_results=False)
+
+
 def test_set_index_repartition(df, pdf):
     result = df.set_index("x", npartitions=2)
     assert result.npartitions == 2
@@ -218,6 +277,18 @@ def test_set_index_simplify(df, pdf):
     q = df.set_index(df.x)["y"].optimize(fuse=False)
     expected = df[["y"]].set_index(df.x)["y"].optimize(fuse=False)
     assert q._name == expected._name
+
+
+def test_set_index_numeric_columns():
+    pdf = lib.DataFrame(
+        {
+            0: list("ABAABBABAA"),
+            1: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            2: [1, 2, 3, 2, 1, 3, 2, 4, 2, 3],
+        }
+    )
+    ddf = from_pandas(pdf, 3)
+    assert_eq(ddf.set_index(0), pdf.set_index(0))
 
 
 def test_set_index_without_sort(df, pdf):
@@ -241,19 +312,23 @@ def test_set_index_without_sort(df, pdf):
 
 @pytest.mark.parametrize("shuffle", [None, "tasks"])
 def test_sort_values(df, pdf, shuffle):
-    assert_eq(df.sort_values("x", shuffle=shuffle), pdf.sort_values("x"))
-    assert_eq(df.sort_values("x", shuffle=shuffle, npartitions=2), pdf.sort_values("x"))
+    assert_eq(df.sort_values("x", shuffle_method=shuffle), pdf.sort_values("x"))
+    assert_eq(
+        df.sort_values("x", shuffle_method=shuffle, npartitions=2), pdf.sort_values("x")
+    )
     pdf.iloc[5, 0] = -10
     df = from_pandas(pdf, npartitions=10)
-    assert_eq(df.sort_values("x", shuffle=shuffle, upsample=2.0), pdf.sort_values("x"))
+    assert_eq(
+        df.sort_values("x", shuffle_method=shuffle, upsample=2.0), pdf.sort_values("x")
+    )
 
     with pytest.raises(NotImplementedError, match="a single boolean for ascending"):
-        df.sort_values(by=["x", "y"], shuffle=shuffle, ascending=[True, True])
+        df.sort_values(by=["x", "y"], shuffle_method=shuffle, ascending=[True, True])
     with pytest.raises(NotImplementedError, match="sorting by named columns"):
-        df.sort_values(by=1, shuffle=shuffle)
+        df.sort_values(by=1, shuffle_method=shuffle)
 
     with pytest.raises(ValueError, match="must be either 'first' or 'last'"):
-        df.sort_values(by="x", shuffle=shuffle, na_position="bla")
+        df.sort_values(by="x", shuffle_method=shuffle, na_position="bla")
 
 
 @pytest.mark.parametrize("shuffle", [None, "tasks"])
@@ -262,7 +337,7 @@ def test_sort_values_temporary_column_dropped(shuffle):
         {"x": range(10), "y": [1, 2, 3, 4, 5] * 2, "z": ["cat", "dog"] * 5}
     )
     df = from_pandas(pdf, npartitions=2)
-    _sorted = df.sort_values(["z"], shuffle=shuffle)
+    _sorted = df.sort_values(["z"], shuffle_method=shuffle)
     result = _sorted.compute()
     assert "_partitions" not in result.columns
 
@@ -280,6 +355,10 @@ def test_sort_values_optimize(df, pdf):
 def test_set_index_single_partition(pdf):
     df = from_pandas(pdf, npartitions=1)
     assert_eq(df.set_index("x"), pdf.set_index("x"))
+
+
+def test_set_index_list(df, pdf):
+    assert_eq(df.set_index(["x"]), pdf.set_index(["x"]))
 
 
 def test_sort_values_descending(df, pdf):
@@ -384,6 +463,18 @@ def test_index_nulls(null_value):
         ).compute()
 
 
+def test_set_index_sort_values_shuffle_options(df, pdf):
+    q = df.set_index("x", shuffle_method="tasks", max_branch=10)
+    shuffle = list(q.optimize().find_operations(TaskShuffle))[0]
+    assert shuffle.options == {"max_branch": 10}
+    assert_eq(q, pdf.set_index("x"))
+
+    q = df.sort_values("x", shuffle_method="tasks", max_branch=10)
+    sorter = list(q.optimize().find_operations(TaskShuffle))[0]
+    assert sorter.options == {"max_branch": 10}
+    assert_eq(q, pdf)
+
+
 def test_set_index_predicate_pushdown(df, pdf):
     pdf = pdf.set_index("x")
     query = df.set_index("x")
@@ -400,11 +491,26 @@ def test_set_index_predicate_pushdown(df, pdf):
     assert_eq(result, pdf[(pdf.index > 5) & (pdf.y > -1)])
 
 
+def test_set_index_with_explicit_divisions():
+    pdf = lib.DataFrame({"x": [4, 1, 2, 5]}, index=[10, 20, 30, 40])
+
+    df = from_pandas(pdf, npartitions=2)
+
+    result = df.set_index("x", divisions=[1, 3, 5])
+    assert result.divisions == (1, 3, 5)
+    assert_eq(result, pdf.set_index("x"))
+
+
 def test_set_index_npartitions_changes(pdf):
     df = from_pandas(pdf, npartitions=30)
-    result = df.set_index("x")
+    result = df.set_index("x", shuffle_method="disk")
     assert result.npartitions == result.optimize().npartitions
     assert_eq(result, pdf.set_index("x"))
+
+
+def test_set_index_sorted_divisions(df):
+    with pytest.raises(ValueError, match="must be the same length"):
+        df.set_index("x", divisions=(1, 2, 3), sorted=True)
 
 
 def test_set_index_sort_values_one_partition(pdf):
@@ -427,3 +533,40 @@ def test_set_index_sort_values_one_partition(pdf):
     assert_eq(pdf.set_index("x"), query)
     assert len(divisions_lru) == 0
     assert len(list(query.expr.find_operations(RepartitionToFewer))) > 0
+
+
+def test_shuffle(df, pdf):
+    result = df.shuffle(df.x)
+    assert result.npartitions == df.npartitions
+    assert_eq(result, pdf)
+
+    result = df.shuffle(df[["x"]])
+    assert result.npartitions == df.npartitions
+    assert_eq(result, pdf)
+
+    result = df[["y"]].shuffle(df[["x"]])
+    assert result.npartitions == df.npartitions
+    assert_eq(result, pdf[["y"]])
+
+    with pytest.raises(TypeError, match="index must be aligned"):
+        df.shuffle(df.x.repartition(npartitions=2))
+
+    result = df.shuffle(df.x, npartitions=2)
+    assert result.npartitions == 2
+    assert_eq(result, pdf)
+
+
+def test_empty_partitions():
+    # See https://github.com/dask/dask/issues/2408
+    df = lib.DataFrame({"a": list(range(10))})
+    df["b"] = df["a"] % 3
+    df["c"] = df["b"].astype(str)
+
+    ddf = from_pandas(df, npartitions=3)
+    ddf = ddf.set_index("b")
+    ddf = ddf.repartition(npartitions=3)
+    ddf.get_partition(0).compute()
+    assert_eq(ddf, df.set_index("b"))
+
+    ddf = ddf.set_index("c")
+    assert_eq(ddf, df.set_index("b").set_index("c"))

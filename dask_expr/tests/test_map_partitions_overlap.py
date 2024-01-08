@@ -154,3 +154,82 @@ def test_map_overlap_divisions(df, pdf):
     result = df.shift(freq="2s")
     assert result.known_divisions
     assert not result.optimize().known_divisions
+
+
+def test_map_partitions_partition_info(df):
+    partitions = {i: df.get_partition(i).compute() for i in range(df.npartitions)}
+
+    def f(x, partition_info=None):
+        assert partition_info is not None
+        assert "number" in partition_info
+        assert "division" in partition_info
+        assert partitions[partition_info["number"]].equals(x)
+        assert partition_info["division"] == x.index.min()
+        return x
+
+    df = df.map_partitions(f, meta=df._meta)
+    result = df.compute(scheduler="single-threaded")
+    assert type(result) == lib.DataFrame
+
+
+def test_map_overlap_provide_meta():
+    df = lib.DataFrame(
+        {"x": [1, 2, 4, 7, 11], "y": [1.0, 2.0, 3.0, 4.0, 5.0]}
+    ).rename_axis("myindex")
+    ddf = from_pandas(df, npartitions=2)
+
+    # Provide meta spec, but not full metadata
+    res = ddf.map_overlap(
+        lambda df: df.rolling(2).sum(), 2, 0, meta={"x": "i8", "y": "i8"}
+    )
+    sol = df.rolling(2).sum()
+    assert_eq(res, sol)
+
+
+def test_map_overlap_errors(df):
+    # Non-integer
+    func = lambda x, *args, **kwargs: x
+    with pytest.raises(ValueError):
+        df.map_overlap(func, 0.5, 3, 0, 2, c=2)
+
+    # Negative
+    with pytest.raises(ValueError):
+        df.map_overlap(func, 0, -5, 0, 2, c=2)
+
+    # Partition size < window size
+    with pytest.raises(NotImplementedError):
+        df.map_overlap(func, 0, 100, 0, 100, c=2).compute()
+
+    # Timedelta offset with non-datetime
+    with pytest.raises(TypeError):
+        df.map_overlap(func, lib.Timedelta("1s"), lib.Timedelta("1s"), 0, 2, c=2)
+
+    # String timedelta offset with non-datetime
+    with pytest.raises(TypeError):
+        df.map_overlap(func, "1s", "1s", 0, 2, c=2)
+
+
+@pytest.mark.parametrize("clear_divisions", [True, False])
+def test_align_dataframes(clear_divisions):
+    df1 = lib.DataFrame({"A": [1, 2, 3, 3, 2, 3], "B": [1, 2, 3, 4, 5, 6]})
+    df2 = lib.DataFrame({"A": [3, 1, 2], "C": [1, 2, 3]})
+    ddf1 = from_pandas(df1, npartitions=2)
+    ddf2 = from_pandas(df2, npartitions=1)
+
+    actual = ddf1.map_partitions(
+        lib.merge, df2, align_dataframes=False, left_on="A", right_on="A", how="left"
+    )
+    expected = lib.merge(df1, df2, left_on="A", right_on="A", how="left")
+    assert_eq(actual, expected, check_index=False, check_divisions=False)
+
+    actual = ddf2.map_partitions(
+        lib.merge,
+        ddf1,
+        align_dataframes=False,
+        clear_divisions=clear_divisions,
+        left_on="A",
+        right_on="A",
+        how="right",
+    )
+    expected = lib.merge(df2, df1, left_on="A", right_on="A", how="right")
+    assert_eq(actual, expected, check_index=False, check_divisions=False)

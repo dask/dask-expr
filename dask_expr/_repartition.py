@@ -7,13 +7,13 @@ import numpy as np
 import pandas as pd
 from dask.base import tokenize
 from dask.dataframe import methods
-from dask.dataframe.core import _map_freq_to_period_start, split_evenly
+from dask.dataframe.core import _concat, _map_freq_to_period_start, split_evenly
 from dask.dataframe.utils import is_series_like
 from dask.utils import iter_chunks, parse_bytes
 from pandas.api.types import is_datetime64_any_dtype, is_numeric_dtype
 from tlz import unique
 
-from dask_expr._expr import Expr, Filter, Projection
+from dask_expr._expr import Expr, Projection, plain_column_projection
 from dask_expr._reductions import TotalMemoryUsageFrame
 from dask_expr._util import LRU
 
@@ -121,13 +121,9 @@ class Repartition(Expr):
         else:
             raise NotImplementedError()
 
-    def _combine_similar(self, root: Expr):
-        return self._combine_similar_branches(root, (Filter, Projection))
-
-    def _simplify_up(self, parent):
-        # Reorder with column projection
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+            return plain_column_projection(self, parent, dependents)
 
     @functools.cached_property
     def new_partitions(self):
@@ -165,7 +161,7 @@ class RepartitionToFewer(Repartition):
         new_partitions_boundaries = self._partitions_boundaries
         return {
             (self._name, i): (
-                methods.concat,
+                _concat,
                 [(self.frame._name, j) for j in range(start, end)],
             )
             for i, (start, end) in enumerate(
@@ -461,7 +457,7 @@ def _clean_new_division_boundaries(new_partitions_boundaries, frame_npartitions)
     if new_partitions_boundaries[0] > 0:
         new_partitions_boundaries.insert(0, 0)
     if new_partitions_boundaries[-1] < frame_npartitions:
-        new_partitions_boundaries.append(frame_npartitions)
+        new_partitions_boundaries[-1] = frame_npartitions
     return new_partitions_boundaries
 
 

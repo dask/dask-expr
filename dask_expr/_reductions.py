@@ -30,6 +30,8 @@ from dask_expr._expr import (
     RenameSeries,
     ResetIndex,
     ToFrame,
+    determine_column_projection,
+    plain_column_projection,
 )
 from dask_expr._util import _tokenize_deterministic, is_scalar
 
@@ -128,11 +130,15 @@ class ShuffleReduce(Expr):
         "split_every",
         "split_out",
         "sort",
+        "shuffle_by_index",
+        "shuffle_method",
     ]
     _defaults = {
         "split_every": 8,
         "split_out": True,
         "sort": None,
+        "shuffle_by_index": None,
+        "shuffle_method": None,
     }
 
     @property
@@ -182,6 +188,8 @@ class ShuffleReduce(Expr):
         # Sort or shuffle
         split_every = getattr(self, "split_every", 0) or chunked.npartitions
         ignore_index = getattr(self, "ignore_index", True)
+        if self.shuffle_by_index is not None:
+            ignore_index = not self.shuffle_by_index
         shuffle_npartitions = max(
             chunked.npartitions // split_every,
             self.split_out,
@@ -199,6 +207,8 @@ class ShuffleReduce(Expr):
                 split_by,
                 shuffle_npartitions,
                 ignore_index=ignore_index,
+                index_shuffle=not split_by_index and self.shuffle_by_index,
+                backend=self.shuffle_method,
             )
 
         # Unmap column names if necessary
@@ -282,9 +292,12 @@ class TreeReduce(Expr):
 
     @functools.cached_property
     def split_every(self):
-        if self.operand("split_every") is None:
+        out = self.operand("split_every")
+        if out is None:
             return 8
-        return self.operand("split_every")
+        if out is False or out >= 2:
+            return out
+        raise ValueError("split_every must be greater than 1 or False")
 
     def _layer(self):
         # apply combine to batches of intermediate results
@@ -376,6 +389,8 @@ class ApplyConcatApply(Expr):
             split_out = self.operand("split_out")
             if isinstance(split_out, Callable):
                 split_out = split_out(self.frame.npartitions)
+            if split_out is None:
+                raise ValueError("split_out can't be None")
             return split_out
         else:
             return 1
@@ -464,12 +479,14 @@ class ApplyConcatApply(Expr):
             split_out=self.split_out,
             split_every=split_every,
             sort=sort,
+            shuffle_by_index=getattr(self, "shuffle_by_index", None),
+            shuffle_method=getattr(self, "shuffle_method", None),
         )
 
 
 class Unique(ApplyConcatApply):
-    _parameters = ["frame", "split_every", "split_out"]
-    _defaults = {"split_every": None, "split_out": True}
+    _parameters = ["frame", "split_every", "split_out", "shuffle_method"]
+    _defaults = {"split_every": None, "split_out": True, "shuffle_method": "tasks"}
     chunk = staticmethod(methods.unique)
     aggregate_func = staticmethod(methods.unique)
 
@@ -500,20 +517,24 @@ class Unique(ApplyConcatApply):
         df = _concat(inputs)
         return cls.aggregate_func(df, **kwargs)
 
-    def _simplify_up(self, parent):
-        return
-
-    def __dask_postcompute__(self):
-        return _concat, ()
-
 
 class DropDuplicates(Unique):
-    _parameters = ["frame", "subset", "ignore_index", "split_every", "split_out"]
+    _parameters = [
+        "frame",
+        "subset",
+        "ignore_index",
+        "split_every",
+        "split_out",
+        "shuffle_method",
+        "keep",
+    ]
     _defaults = {
         "subset": None,
         "ignore_index": False,
         "split_every": None,
-        "split_out": 1,
+        "split_out": True,
+        "shuffle_method": "tasks",
+        "keep": "first",
     }
     chunk = M.drop_duplicates
     aggregate_func = M.drop_duplicates
@@ -528,16 +549,18 @@ class DropDuplicates(Unique):
 
     @property
     def chunk_kwargs(self):
-        out = {}
+        out = {"keep": self.keep}
         if is_dataframe_like(self.frame._meta):
             out["subset"] = self.subset
         if PANDAS_GE_200 and not is_index_like(self.frame._meta):
             out["ignore_index"] = self.ignore_index
         return out
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if self.subset is not None and isinstance(parent, Projection):
-            columns = set(parent.columns).union(self.subset)
+            columns = determine_column_projection(
+                self, parent, dependents, additional_columns=self.subset
+            )
             if columns == set(self.frame.columns):
                 # Don't add unnecessary Projections, protects against loops
                 return
@@ -680,6 +703,10 @@ class Reduction(ApplyConcatApply):
     reduction_combine = None
     reduction_aggregate = None
 
+    @property
+    def _projection_columns(self):
+        return self.frame.columns
+
     @classmethod
     def chunk(cls, df, **kwargs):
         out = cls.reduction_chunk(df, **kwargs)
@@ -718,9 +745,9 @@ class Reduction(ApplyConcatApply):
             base = "(" + base + ")"
         return f"{base}.{self.__class__.__name__.lower()}({s})"
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+            return plain_column_projection(self, parent, dependents)
 
 
 class Sum(Reduction):
@@ -858,7 +885,7 @@ class Len(Reduction):
         if self.frame.ndim == 2 and len(self.frame.columns):
             return Len(self.frame.index)
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         return
 
 
@@ -875,7 +902,7 @@ class Size(Reduction):
         else:
             return Len(self.frame)
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         return
 
 
@@ -892,8 +919,8 @@ class NBytes(Reduction):
 class Var(Reduction):
     # Uses the parallel version of Welford's online algorithm (Chan 79')
     # (http://i.stanford.edu/pub/cstr/reports/cs/tr/79/773/CS-TR-79-773.pdf)
-    _parameters = ["frame", "skipna", "ddof", "numeric_only"]
-    _defaults = {"skipna": True, "ddof": 1, "numeric_only": False}
+    _parameters = ["frame", "skipna", "ddof", "numeric_only", "split_every"]
+    _defaults = {"skipna": True, "ddof": 1, "numeric_only": False, "split_every": False}
 
     @functools.cached_property
     def _meta(self):
@@ -956,8 +983,8 @@ class Var(Reduction):
 
 
 class Mean(Reduction):
-    _parameters = ["frame", "skipna", "numeric_only"]
-    _defaults = {"skipna": True, "numeric_only": False}
+    _parameters = ["frame", "skipna", "numeric_only", "split_every"]
+    _defaults = {"skipna": True, "numeric_only": False, "split_every": False}
 
     @functools.cached_property
     def _meta(self):
@@ -966,15 +993,16 @@ class Mean(Reduction):
         )
 
     def _lower(self):
-        return (
-            self.frame.sum(skipna=self.skipna, numeric_only=self.numeric_only)
-            / self.frame.count()
-        )
+        return self.frame.sum(
+            skipna=self.skipna,
+            numeric_only=self.numeric_only,
+            split_every=self.split_every,
+        ) / self.frame.count(split_every=self.split_every)
 
 
 class Count(Reduction):
     _parameters = ["frame", "numeric_only", "split_every"]
-    _defaults = {"split_every": False}
+    _defaults = {"split_every": False, "numeric_only": False}
     reduction_chunk = M.count
 
     @classmethod
@@ -1017,7 +1045,8 @@ class Mode(ApplyConcatApply):
 
 
 class NuniqueApprox(Reduction):
-    _parameters = ["frame", "b"]
+    _parameters = ["frame", "b", "split_every"]
+    _defaults = {"b": 16, "split_every": None}
     reduction_chunk = hyperloglog.compute_hll_array
     reduction_combine = hyperloglog.reduce_state
     reduction_aggregate = hyperloglog.estimate_count
@@ -1144,15 +1173,26 @@ class ValueCounts(ReductionConstantDim):
     def combine_kwargs(self):
         return self.chunk_kwargs
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         # We are already a Series
         return
+
+    @functools.cached_property
+    def split_by(self):
+        return self.frame._meta.name
+
+    def _divisions(self):
+        if self.sort:
+            return (None, None)
+        if self.split_out is True:
+            return (None,) * (self.frame.npartitions + 1)
+        return (None,) * (self.split_out + 1)
 
 
 class MemoryUsage(Reduction):
     reduction_chunk = M.memory_usage
     reduction_aggregate = M.sum
-    split_every = 0
+    split_every = False
 
     def _divisions(self):
         # TODO: We can do better, but not high priority

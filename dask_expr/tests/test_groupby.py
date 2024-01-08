@@ -219,6 +219,16 @@ def test_groupby_group_keys(group_keys, pdf):
     )
 
 
+def test_dataframe_aggregations_multilevel(df, pdf):
+    grouper = lambda df: [df["x"] > 2, df["y"] > 1]
+
+    with dask.config.set({"dataframe.shuffle.method": "tasks"}):
+        assert_eq(
+            pdf.groupby(grouper(pdf)).sum(),
+            df.groupby(grouper(df)).sum(split_out=2),
+        )
+
+
 @pytest.mark.parametrize(
     "spec",
     [
@@ -664,7 +674,7 @@ def test_rolling_groupby_projection():
     assert_eq(expected, actual, check_divisions=False)
 
     optimal = (
-        ddf[["group1", "column1"]].groupby("group1").rolling("1D").sum()["column1"]
+        ddf[["column1", "group1"]].groupby("group1").rolling("1D").sum()["column1"]
     )
 
     assert actual.optimize()._name == (optimal.optimize()._name)
@@ -726,3 +736,52 @@ def test_groupby_index_array(pdf):
         pdf.groupby(pdf.index.month).x.nunique(),
         check_names=False,
     )
+
+
+def test_groupby_median_numeric_only():
+    pdf = lib.DataFrame({"a": [1, 2, 3], "b": 1, "c": "a"})
+    df = from_pandas(pdf, npartitions=2)
+
+    assert_eq(
+        df.groupby("b").median(numeric_only=True),
+        pdf.groupby("b").median(numeric_only=True),
+    )
+
+
+def test_groupby_median_series():
+    pdf = lib.DataFrame({"a": [1, 2, 3], "b": 1})
+    df = from_pandas(pdf, npartitions=2)
+    assert_eq(
+        df.a.groupby(df.b).median(),
+        pdf.a.groupby(pdf.b).median(),
+    )
+
+
+@pytest.mark.parametrize("min_count", [0, 1, 2, 3])
+@pytest.mark.parametrize("op", ("prod", "sum"))
+def test_with_min_count(min_count, op):
+    dfs = [
+        lib.DataFrame(
+            {
+                "group": ["A", "A", "B"],
+                "val1": [np.nan, 2, 3],
+                "val2": [np.nan, 5, 6],
+                "val3": [5, 4, 9],
+            }
+        ),
+        lib.DataFrame(
+            {
+                "group": ["A", "A", "B"],
+                "val1": [2, np.nan, np.nan],
+                "val2": [np.nan, 5, 6],
+                "val3": [5, 4, 9],
+            }
+        ),
+    ]
+    ddfs = [from_pandas(df, npartitions=4) for df in dfs]
+
+    for df, ddf in zip(dfs, ddfs):
+        assert_eq(
+            getattr(df.groupby("group"), op)(min_count=min_count),
+            getattr(ddf.groupby("group"), op)(min_count=min_count),
+        )

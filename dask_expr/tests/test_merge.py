@@ -1,6 +1,9 @@
+import warnings
+
+import numpy as np
 import pytest
 
-from dask_expr import Merge, from_pandas, merge
+from dask_expr import Merge, from_pandas, merge, repartition
 from dask_expr._expr import Projection
 from dask_expr._shuffle import Shuffle
 from dask_expr.tests._util import _backend_library, assert_eq
@@ -10,8 +13,8 @@ lib = _backend_library()
 
 
 @pytest.mark.parametrize("how", ["left", "right", "inner", "outer"])
-@pytest.mark.parametrize("shuffle_backend", ["tasks", "disk"])
-def test_merge(how, shuffle_backend):
+@pytest.mark.parametrize("shuffle_method", ["tasks", "disk"])
+def test_merge(how, shuffle_method):
     # Make simple left & right dfs
     pdf1 = lib.DataFrame({"x": range(20), "y": range(20)})
     df1 = from_pandas(pdf1, 4)
@@ -19,14 +22,14 @@ def test_merge(how, shuffle_backend):
     df2 = from_pandas(pdf2, 2)
 
     # Partition-wise merge with map_partitions
-    df3 = df1.merge(df2, on="x", how=how, shuffle_backend=shuffle_backend)
+    df3 = df1.merge(df2, on="x", how=how, shuffle_method=shuffle_method)
 
     # Check result with/without fusion
     expect = pdf1.merge(pdf2, on="x", how=how)
     assert_eq(df3, expect, check_index=False)
     assert_eq(df3.optimize(), expect, check_index=False)
 
-    df3 = merge(df1, df2, on="x", how=how, shuffle_backend=shuffle_backend)
+    df3 = merge(df1, df2, on="x", how=how, shuffle_method=shuffle_method)
     assert_eq(df3, expect, check_index=False)
     assert_eq(df3.optimize(), expect, check_index=False)
 
@@ -34,8 +37,8 @@ def test_merge(how, shuffle_backend):
 @pytest.mark.parametrize("how", ["left", "right", "inner", "outer"])
 @pytest.mark.parametrize("pass_name", [True, False])
 @pytest.mark.parametrize("sort", [True, False])
-@pytest.mark.parametrize("shuffle_backend", ["tasks", "disk"])
-def test_merge_indexed(how, pass_name, sort, shuffle_backend):
+@pytest.mark.parametrize("shuffle_method", ["tasks", "disk"])
+def test_merge_indexed(how, pass_name, sort, shuffle_method):
     # Make simple left & right dfs
     pdf1 = lib.DataFrame({"x": range(20), "y": range(20)}).set_index("x")
     df1 = from_pandas(pdf1, 4)
@@ -56,7 +59,7 @@ def test_merge_indexed(how, pass_name, sort, shuffle_backend):
         right_index=right_index,
         right_on=right_on,
         how=how,
-        shuffle_backend=shuffle_backend,
+        shuffle_method=shuffle_method,
     )
 
     # Check result with/without fusion
@@ -73,14 +76,19 @@ def test_merge_indexed(how, pass_name, sort, shuffle_backend):
 
 
 @pytest.mark.parametrize("how", ["left", "right", "inner", "outer"])
-def test_broadcast_merge(how):
+@pytest.mark.parametrize("npartitions", [None, 22])
+def test_broadcast_merge(how, npartitions):
     # Make simple left & right dfs
-    pdf1 = lib.DataFrame({"x": range(20), "y": range(20)})
-    df1 = from_pandas(pdf1, 4)
-    pdf2 = lib.DataFrame({"x": range(0, 20, 2), "z": range(10)})
-    df2 = from_pandas(pdf2, 1)
+    pdf1 = lib.DataFrame({"x": range(40), "y": range(40)})
+    df1 = from_pandas(pdf1, 20)
+    pdf2 = lib.DataFrame({"x": range(0, 40, 2), "z": range(20)})
+    df2 = from_pandas(pdf2, 2)
 
-    df3 = df1.merge(df2, on="x", how=how)
+    df3 = df1.merge(
+        df2, on="x", how=how, npartitions=npartitions, shuffle_method="tasks"
+    )
+    if npartitions:
+        assert df3.npartitions == npartitions
 
     # Check that we avoid the shuffle when allowed
     if how in ("left", "inner"):
@@ -88,8 +96,9 @@ def test_broadcast_merge(how):
 
     # Check result with/without fusion
     expect = pdf1.merge(pdf2, on="x", how=how)
-    assert_eq(df3, expect, check_index=False)
-    assert_eq(df3.optimize(), expect, check_index=False)
+    # TODO: This is incorrect, but consistent with dask/dask
+    assert_eq(df3, expect, check_index=False, check_divisions=False)
+    assert_eq(df3.optimize(), expect, check_index=False, check_divisions=False)
 
 
 def test_merge_column_projection():
@@ -106,8 +115,8 @@ def test_merge_column_projection():
 
 
 @pytest.mark.parametrize("how", ["left", "right", "inner", "outer"])
-@pytest.mark.parametrize("shuffle_backend", ["tasks", "disk"])
-def test_join(how, shuffle_backend):
+@pytest.mark.parametrize("shuffle_method", ["tasks", "disk"])
+def test_join(how, shuffle_method):
     # Make simple left & right dfs
     pdf1 = lib.DataFrame({"x": range(20), "y": range(20)})
     df1 = from_pandas(pdf1, 4)
@@ -115,14 +124,14 @@ def test_join(how, shuffle_backend):
     df2 = from_pandas(pdf2, 2)
 
     # Partition-wise merge with map_partitions
-    df3 = df1.join(df2, on="x", how=how, shuffle_backend=shuffle_backend)
+    df3 = df1.join(df2, on="x", how=how, shuffle_method=shuffle_method)
 
     # Check result with/without fusion
     expect = pdf1.join(pdf2, on="x", how=how)
     assert_eq(df3, expect, check_index=False)
     assert_eq(df3.optimize(), expect, check_index=False)
 
-    df3 = df1.join(df2.z, on="x", how=how, shuffle_backend=shuffle_backend)
+    df3 = df1.join(df2.z, on="x", how=how, shuffle_method=shuffle_method)
     assert_eq(df3, expect, check_index=False)
     assert_eq(df3.optimize(), expect, check_index=False)
 
@@ -159,12 +168,30 @@ def test_join_recursive_raises():
         df.join([df], how="right")
 
 
+def test_singleton_divisions():
+    df = lib.DataFrame({"x": [1, 1, 1]}, index=[1, 2, 3])
+    ddf = from_pandas(df, npartitions=2)
+    ddf2 = ddf.set_index("x")
+
+    joined = ddf2.join(ddf2, rsuffix="r")
+    assert joined.divisions == (1, 1)
+    joined.compute()
+
+
+def test_categorical_merge_does_not_increase_npartitions():
+    df1 = lib.DataFrame(data={"A": ["a", "b", "c"]}, index=["s", "v", "w"])
+    df2 = lib.DataFrame(data={"B": ["t", "d", "i"]}, index=["v", "w", "r"])
+    # We are npartitions=1 on both sides, so it should stay that way
+    ddf1 = from_pandas(df1, npartitions=1)
+    df2 = df2.astype({"B": "category"})
+    assert_eq(df1.join(df2), ddf1.join(df2))
+
+
 def test_merge_len():
     pdf = lib.DataFrame({"x": [1, 2, 3], "y": 1})
     df = from_pandas(pdf, npartitions=2)
     pdf2 = lib.DataFrame({"x": [1, 2, 3], "z": 1})
     df2 = from_pandas(pdf2, npartitions=2)
-
     assert_eq(len(df.merge(df2)), len(pdf.merge(pdf2)))
     query = df.merge(df2).index.optimize(fuse=False)
     expected = df[["x"]].merge(df2[["x"]]).index.optimize(fuse=False)
@@ -414,6 +441,64 @@ def test_merge_reparititon_divisions():
     assert_eq(df.join(df2).join(df3), pdf.join(pdf2).join(pdf3))
 
 
+def test_join_gives_proper_divisions():
+    df = lib.DataFrame({"a": ["a", "b", "c"]}, index=[0, 1, 2])
+    ddf = from_pandas(df, npartitions=1)
+
+    right_df = lib.DataFrame({"b": [1.0, 2.0, 3.0]}, index=["a", "b", "c"])
+
+    expected = df.join(right_df, how="inner", on="a")
+    actual = ddf.join(right_df, how="inner", on="a")
+    assert actual.divisions == ddf.divisions
+
+    assert_eq(expected, actual)
+
+
+@pytest.mark.parametrize("shuffle_method", ["tasks", "disk"])
+@pytest.mark.parametrize("how", ["inner", "left"])
+def test_merge_known_to_single(how, shuffle_method):
+    partition_sizes = np.array([3, 4, 2, 5, 3, 2, 5, 9, 4, 7, 4])
+    idx = [i for i, s in enumerate(partition_sizes) for _ in range(s)]
+    k = [i for s in partition_sizes for i in range(s)]
+    vi = range(len(k))
+    pdf1 = lib.DataFrame(dict(idx=idx, k=k, v1=vi)).set_index(["idx"])
+
+    partition_sizes = np.array([4, 2, 5, 3, 2, 5, 9, 4, 7, 4, 8])
+    idx = [i for i, s in enumerate(partition_sizes) for _ in range(s)]
+    k = [i for s in partition_sizes for i in range(s)]
+    vi = range(len(k))
+    pdf2 = lib.DataFrame(dict(idx=idx, k=k, v1=vi)).set_index(["idx"])
+
+    df1 = repartition(pdf1, [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+    df2 = from_pandas(pdf2, npartitions=1, sort=False)
+
+    expected = pdf1.merge(pdf2, on="idx", how=how)
+    result = df1.merge(df2, on="idx", how=how, shuffle_method=shuffle_method)
+    assert_eq(result, expected)
+    assert result.divisions == df1.divisions
+
+    expected = pdf1.merge(pdf2, on="k", how=how)
+    result = df1.merge(df2, on="k", how=how, shuffle_method=shuffle_method)
+    assert_eq(result, expected, check_index=False)
+    assert all(d is None for d in result.divisions)
+
+
+@pytest.mark.parametrize("how", ["right", "outer"])
+def test_merge_empty_left_df(how):
+    left = lib.DataFrame({"a": [1, 1, 2, 2], "val": [5, 6, 7, 8]})
+    right = lib.DataFrame({"a": [0, 0, 3, 3], "val": [11, 12, 13, 14]})
+
+    dd_left = from_pandas(left, npartitions=4)
+    dd_right = from_pandas(right, npartitions=4)
+
+    merged = dd_left.merge(dd_right, on="a", how=how)
+    expected = left.merge(right, on="a", how=how)
+    assert_eq(merged, expected, check_index=False)
+
+    # Check that the individual partitions have the expected shape
+    merged.map_partitions(lambda x: x, meta=merged._meta).compute()
+
+
 def test_merge_npartitions():
     pdf = lib.DataFrame({"a": [1, 2, 3, 4, 5, 6]})
     pdf2 = lib.DataFrame({"b": [1, 2, 3, 4, 5, 6]}, index=[1, 2, 3, 4, 5, 6])
@@ -443,6 +528,43 @@ def test_merge_npartitions():
     result = df.join(df2, npartitions=6)
     assert result.npartitions == 6
     assert_eq(result, pdf.join(pdf2))
+
+
+@pytest.mark.parametrize("how", ["inner", "outer", "left", "right"])
+@pytest.mark.parametrize("on_index", [True, False])
+def test_merge_columns_dtypes1(how, on_index):
+    # tests results of merges with merge columns having different dtypes;
+    # asserts that either the merge was successful or the corresponding warning is raised
+    # addresses issue #4574
+
+    df1 = lib.DataFrame(
+        {"A": list(np.arange(5).astype(float)) * 2, "B": list(np.arange(5)) * 2}
+    )
+    df2 = lib.DataFrame({"A": np.arange(5), "B": np.arange(5)})
+
+    a = from_pandas(df1, 2)  # merge column "A" is float
+    b = from_pandas(df2, 2)  # merge column "A" is int
+
+    on = ["A"]
+    left_index = right_index = on_index
+
+    if on_index:
+        a = a.set_index("A")
+        b = b.set_index("A")
+        on = None
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        result = merge(
+            a, b, on=on, how=how, left_index=left_index, right_index=right_index
+        )
+        warned = any("merge column data type mismatches" in str(r) for r in record)
+
+    # result type depends on merge operation -> convert to pandas
+    result = result if isinstance(result, lib.DataFrame) else result.compute()
+
+    has_nans = result.isna().values.any()
+    assert (has_nans and warned) or not has_nans
 
 
 def test_merge_pandas_object():

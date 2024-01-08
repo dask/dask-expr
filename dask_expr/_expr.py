@@ -15,6 +15,7 @@ from dask.dataframe import methods
 from dask.dataframe.core import (
     _get_divisions_map_partitions,
     _get_meta_map_partitions,
+    _rename,
     apply_and_enforce,
     is_dataframe_like,
     is_index_like,
@@ -26,12 +27,13 @@ from dask.dataframe.dispatch import meta_nonempty
 from dask.dataframe.rolling import CombinedOutput, _head_timedelta, overlap_chunk
 from dask.dataframe.utils import clear_known_categories, drop_by_shallow_copy
 from dask.typing import no_default
-from dask.utils import M, apply, funcname
+from dask.utils import M, apply, funcname, has_keyword
 from tlz import merge_sorted, unique
 
 from dask_expr import _core as core
 from dask_expr._util import (
     _calc_maybe_new_divisions,
+    _convert_to_list,
     _tokenize_deterministic,
     _tokenize_partial,
     is_scalar,
@@ -92,122 +94,6 @@ class Expr(core.Expr):
                 "This often means that you are attempting to use an unsupported "
                 f"API function. Current API coverage is documented here: {link}."
             )
-
-    def combine_similar(
-        self, root: Expr | None = None, _cache: dict | None = None
-    ) -> Expr:
-        """Combine similar expression nodes using global information
-
-        This leverages the ``._combine_similar`` method defined
-        on each class. The global expression-tree traversal will
-        change IO leaves first, and finish with the root expression.
-        The primary purpose of this method is to allow column
-        projections to be "pushed back up" the expression graph
-        in the case that simlar IO & Blockwise operations can
-        be captured by the same operations.
-
-        Parameters
-        ----------
-        root:
-            The root node of the global expression graph. If not
-            specified, the root is assumed to be ``self``.
-        _cache:
-            Optional dictionary to use for caching.
-
-        Returns
-        -------
-        expr:
-            output expression
-        """
-        expr = self
-        update_root = root is None
-        root = root if root is not None else self
-
-        if _cache is None:
-            _cache = {}
-        elif (self._name, root._name) in _cache:
-            return _cache[(self._name, root._name)]
-
-        seen = set()
-        while expr._name not in seen:
-            # Call combine_similar on each dependency
-            new_operands = []
-            changed_dependency = False
-            for operand in expr.operands:
-                if isinstance(operand, Expr):
-                    new = operand.combine_similar(root=root, _cache=_cache)
-                    if new._name != operand._name:
-                        changed_dependency = True
-                else:
-                    new = operand
-                new_operands.append(new)
-
-            if changed_dependency:
-                expr = type(expr)(*new_operands)
-                if isinstance(expr, Projection):
-                    # We might introduce stacked Projections (merge for example).
-                    # So get rid of them here again
-                    expr_simplify_down = expr._simplify_down()
-                    if expr_simplify_down is not None:
-                        expr = expr_simplify_down
-                if update_root:
-                    root = expr
-                continue
-
-            # Execute "_combine_similar" on expr
-            out = expr._combine_similar(root)
-            if out is None:
-                out = expr
-            if not isinstance(out, Expr):
-                _cache[(self._name, root._name)] = out
-                return out
-            seen.add(expr._name)
-            if expr._name != out._name and update_root:
-                root = expr
-            expr = out
-
-        _cache[(self._name, root._name)] = expr
-        return expr
-
-    def _combine_similar(self, root: Expr):
-        return
-
-    def _combine_similar_branches(self, root, remove_ops, skip_ops=None):
-        # We have to go back until we reach an operation that was not pushed down
-        frame, operations = self._remove_operations(self.frame, remove_ops, skip_ops)
-        try:
-            common = type(self)(frame, *self.operands[1:])
-        except ValueError:
-            # May have encountered a problem with `_required_attribute`.
-            # (There is no guarentee that the same method will exist for
-            # both a Series and DataFrame)
-            return None
-
-        others = self._find_similar_operations(root, ignore=self._parameters)
-
-        others_compatible = []
-        for op in others:
-            if (
-                isinstance(op.frame, remove_ops)
-                and (common._name == type(op)(op.frame.frame, *op.operands[1:])._name)
-            ) or common._name == op._name:
-                others_compatible.append(op)
-
-        if isinstance(self.frame, Filter) and all(
-            isinstance(op.frame, Filter) for op in others_compatible
-        ):
-            # Avoid pushing filters up if all similar ops
-            # are acting on a Filter-based expression anyway
-            return None
-
-        if len(others_compatible) > 0:
-            # Add operations back in the same order
-            for i, op in enumerate(reversed(operations)):
-                common = common[op]
-                if i > 0:
-                    # Combine stacked projections
-                    common = common._simplify_down() or common
-            return common
 
     @property
     def index(self):
@@ -317,25 +203,33 @@ class Expr(core.Expr):
     def __pos__(self):
         return Pos(self)
 
+    def __mod__(self, other):
+        return Mod(self, other)
+
+    def __rmod__(self, other):
+        return Mod(other, self)
+
     def sum(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
         return Sum(self, skipna, numeric_only, min_count, split_every)
 
     def prod(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
         return Prod(self, skipna, numeric_only, min_count, split_every)
 
-    def var(self, axis=0, skipna=True, ddof=1, numeric_only=False):
+    def var(self, axis=0, skipna=True, ddof=1, numeric_only=False, split_every=False):
         if axis == 0:
-            return Var(self, skipna, ddof, numeric_only)
+            return Var(self, skipna, ddof, numeric_only, split_every)
         elif axis == 1:
             return VarColumns(self, skipna, ddof, numeric_only)
         else:
             raise ValueError(f"axis={axis} not supported. Please specify 0 or 1")
 
-    def std(self, axis=0, skipna=True, ddof=1, numeric_only=False):
-        return Sqrt(self.var(axis, skipna, ddof, numeric_only))
+    def std(self, axis=0, skipna=True, ddof=1, numeric_only=False, split_every=False):
+        return Sqrt(self.var(axis, skipna, ddof, numeric_only, split_every=split_every))
 
-    def mean(self, skipna=True, numeric_only=False, min_count=0):
-        return Mean(self, skipna=skipna, numeric_only=numeric_only)
+    def mean(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
+        return Mean(
+            self, skipna=skipna, numeric_only=numeric_only, split_every=split_every
+        )
 
     def max(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
         return Max(self, skipna, numeric_only, min_count, split_every)
@@ -426,11 +320,11 @@ class Expr(core.Expr):
     ):
         return RenameAxis(self, mapper=mapper, index=index, columns=columns, axis=axis)
 
-    def align(self, other, join="outer", fill_value=None):
+    def align(self, other, join="outer", axis=None, fill_value=None):
         from dask_expr._collection import new_collection
         from dask_expr._repartition import Repartition
 
-        if are_co_aligned(self, other):
+        if are_co_aligned(self, other) or axis in (1, "columns"):
             left = self
 
         else:
@@ -448,14 +342,14 @@ class Expr(core.Expr):
 
             left = Repartition(self, new_divisions=divisions, force=True)
             other = Repartition(other, new_divisions=divisions, force=True)
-        aligned = _Align(left, other, join=join, fill_value=fill_value)
+        aligned = _Align(left, other, join=join, axis=axis, fill_value=fill_value)
 
         return new_collection(AlignGetitem(aligned, position=0)), new_collection(
             AlignGetitem(aligned, position=1)
         )
 
-    def nunique_approx(self):
-        return NuniqueApprox(self, b=16)
+    def nunique_approx(self, split_every=None):
+        return NuniqueApprox(self, b=16, split_every=split_every)
 
     def memory_usage_per_partition(self, index=True, deep=False):
         return MemoryUsagePerPartition(self, index, deep)
@@ -488,6 +382,12 @@ class Expr(core.Expr):
             if self.ndim == 1:
                 return [self.name]
             return []
+        except Exception:
+            raise
+
+    @property
+    def _projection_columns(self):
+        return self.columns
 
     @property
     def name(self):
@@ -615,21 +515,9 @@ class Blockwise(Expr):
         else:
             return (self.operation,) + tuple(args)
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if self._projection_passthrough and isinstance(parent, Projection):
-            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
-
-    def _combine_similar(self, root: Expr):
-        # Push projections back up through `_projection_passthrough`
-        # operations if it reduces the number of unique expression nodes.
-        if (
-            self._projection_passthrough
-            and isinstance(self.frame, Projection)
-            or self._filter_passthrough
-            and isinstance(self.frame, Filter)
-        ):
-            return self._combine_similar_branches(root, (Filter, Projection))
-        return None
+            return plain_column_projection(self, parent, dependents)
 
 
 class MapPartitions(Blockwise):
@@ -640,9 +528,10 @@ class MapPartitions(Blockwise):
         "enforce_metadata",
         "transform_divisions",
         "clear_divisions",
+        "align_dataframes",
         "kwargs",
     ]
-    _defaults = {"kwargs": None}
+    _defaults = {"kwargs": None, "align_dataframes": True}
 
     def __str__(self):
         return f"MapPartitions({funcname(self.func)})"
@@ -658,18 +547,23 @@ class MapPartitions(Blockwise):
     @functools.cached_property
     def _meta(self):
         meta = self.operand("meta")
-        args = [arg._meta if isinstance(arg, Expr) else arg for arg in self.args]
+        args = [
+            meta_nonempty(arg._meta) if isinstance(arg, Expr) else arg
+            for arg in self.args
+        ]
         return _get_meta_map_partitions(args, [], self.func, self.kwargs, meta, None)
 
     def _divisions(self):
         # Unknown divisions
+        dfs = [arg for arg in self.args if isinstance(arg, Expr)]
+
         if self.clear_divisions:
-            return (None,) * (self.frame.npartitions + 1)
+            max_partitions = max(df.npartitions for df in dfs)
+            return (None,) * (max_partitions + 1)
 
         # (Possibly) known divisions
-        dfs = [arg for arg in self.args if isinstance(arg, Expr)]
         return _get_divisions_map_partitions(
-            True,  # Partitions must already be "aligned"
+            self.align_dataframes,
             self.transform_divisions,
             dfs,
             self.func,
@@ -677,11 +571,20 @@ class MapPartitions(Blockwise):
             self.kwargs,
         )
 
+    @functools.cached_property
+    def _has_partition_info(self):
+        return has_keyword(self.func, "partition_info")
+
     def _task(self, index: int):
         args = [self._blockwise_arg(op, index) for op in self.args]
-        kwargs = self.kwargs if self.kwargs is not None else {}
+        kwargs = (self.kwargs if self.kwargs is not None else {}).copy()
+        if self._has_partition_info:
+            kwargs["partition_info"] = {
+                "number": index,
+                "division": self.divisions[index],
+            }
+
         if self.enforce_metadata:
-            kwargs = kwargs.copy()
             kwargs.update(
                 {
                     "_func": self.func,
@@ -708,6 +611,7 @@ class MapOverlap(MapPartitions):
         "enforce_metadata",
         "transform_divisions",
         "clear_divisions",
+        "align_dataframes",
         "kwargs",
     ]
     _defaults = {
@@ -716,6 +620,7 @@ class MapOverlap(MapPartitions):
         "transform_divisions": True,
         "kwargs": None,
         "clear_divisions": False,
+        "align_dataframes": False,
     }
 
     @functools.cached_property
@@ -740,16 +645,20 @@ class MapOverlap(MapPartitions):
             arg._meta if isinstance(arg, Expr) else arg
             for arg in self.operands[len(self._parameters) :]
         ]
-        return _get_meta_map_partitions(args, [], self.func, self.kwargs, meta, None)
+        return _get_meta_map_partitions(
+            args,
+            [self.frame],
+            self.func,
+            self.kwargs,
+            meta,
+            self.kwargs.pop("parent_meta", None),
+        )
 
     @functools.cached_property
     def before(self):
         before = self.operand("before")
         if isinstance(before, str):
             return pd.to_timedelta(before)
-        elif isinstance(before, numbers.Integral):
-            if before < 0:
-                raise ValueError("before must be positive integer")
         return before
 
     @functools.cached_property
@@ -757,9 +666,6 @@ class MapOverlap(MapPartitions):
         after = self.operand("after")
         if isinstance(after, str):
             return pd.to_timedelta(after)
-        elif isinstance(after, numbers.Integral):
-            if after < 0:
-                raise ValueError("after must be positive integer")
         return after
 
     def _lower(self):
@@ -772,6 +678,7 @@ class MapOverlap(MapPartitions):
             self.enforce_metadata,
             self.transform_divisions,
             self.clear_divisions,
+            self.align_dataframes,
             self._kwargs,
             *self.args[1:],
         )
@@ -900,9 +807,9 @@ def _combined_parts(prev_part, current_part, next_part, before, after):
 
 
 class _Align(Blockwise):
-    _parameters = ["frame", "other", "join", "fill_value"]
-    _defaults = {"join": "outer", "fill_value": None}
-    _keyword_only = ["join", "fill_value"]
+    _parameters = ["frame", "other", "join", "axis", "fill_value"]
+    _defaults = {"join": "outer", "fill_value": None, "axis": None}
+    _keyword_only = ["join", "fill_value", "axis"]
     operation = M.align
 
     def _divisions(self):
@@ -919,7 +826,10 @@ class AlignGetitem(Blockwise):
         return self.frame._meta[self.position]
 
     def _divisions(self):
-        return self.frame._divisions()
+        if self.position == 0:
+            return self.frame.frame._divisions()
+        else:
+            return self.frame.other._divisions()
 
 
 class ScalarToSeries(Blockwise):
@@ -942,14 +852,17 @@ class DropnaFrame(Blockwise):
     _keyword_only = ["how", "subset", "thresh"]
     operation = M.dropna
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if self.subset is not None:
-            columns = set(parent.columns).union(self.subset)
-            if columns == set(self.frame.columns):
+            columns = determine_column_projection(
+                self, parent, dependents, additional_columns=self.subset
+            )
+            columns = [col for col in self.frame.columns if col in columns]
+
+            if columns == self.frame.columns:
                 # Don't add unnecessary Projections
                 return
 
-            columns = [col for col in self.frame.columns if col in columns]
             return type(parent)(
                 type(self)(self.frame[columns], *self.operands[1:]),
                 *parent.operands[1:],
@@ -969,19 +882,17 @@ class CombineFirst(Blockwise):
             ),
         )
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            columns = parent.columns
-            frame_columns = sorted(set(columns).intersection(self.frame.columns))
-            other_columns = sorted(set(columns).intersection(self.other.columns))
+            columns = determine_column_projection(self, parent, dependents)
+            frame_columns = [col for col in self.frame.columns if col in columns]
+            other_columns = [col for col in self.other.columns if col in columns]
             if (
                 self.frame.columns == frame_columns
                 and self.other.columns == other_columns
             ):
                 return
 
-            frame_columns = [col for col in self.frame.columns if col in columns]
-            other_columns = [col for col in self.other.columns if col in columns]
             return type(parent)(
                 type(self)(self.frame[frame_columns], self.other[other_columns]),
                 *parent.operands[1:],
@@ -1040,51 +951,69 @@ class Elemwise(Blockwise):
     _filter_passthrough = True
     _is_length_preserving = True
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if self._filter_passthrough and isinstance(parent, Filter):
+            parents = [x() for x in dependents[self._name] if x() is not None]
+            if not all(isinstance(p, Filter) for p in parents):
+                return
             return type(self)(
                 self.frame[parent.operand("predicate")], *self.operands[1:]
             )
-        return super()._simplify_up(parent)
+        return super()._simplify_up(parent, dependents)
 
 
 class RenameFrame(Elemwise):
     _parameters = ["frame", "columns"]
-    _keyword_only = ["columns"]
-    operation = M.rename
 
-    def _simplify_up(self, parent):
+    @staticmethod
+    def operation(df, columns):
+        return df.rename(columns=columns)
+
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection) and isinstance(
             self.operand("columns"), Mapping
         ):
             reverse_mapping = {val: key for key, val in self.operand("columns").items()}
             if is_series_like(parent._meta):
-                # Fill this out when Series.rename is implemented
                 return
-            else:
-                columns = [
-                    reverse_mapping[col] if col in reverse_mapping else col
-                    for col in parent.columns
-                ]
-            return type(self)(self.frame[columns], *self.operands[1:])
+
+            columns = determine_column_projection(self, parent, dependents)
+            columns = [
+                reverse_mapping[col] if col in reverse_mapping else col
+                for col in columns
+            ]
+            columns = [col for col in self.frame.columns if col in columns]
+            if columns == self.frame.columns:
+                return
+
+            return type(parent)(
+                type(self)(self.frame[columns], *self.operands[1:]),
+                *parent.operands[1:],
+            )
+
+
+class ColumnsSetter(RenameFrame):
+    @staticmethod
+    def operation(df, columns):
+        return _rename(columns, df)
 
 
 class RenameSeries(Elemwise):
     _parameters = ["frame", "index", "sorted_index"]
-    _keyword_only = ["index", "sorted_index"]
     _defaults = {"sorted_index": False}
-    operation = M.rename
 
     @functools.cached_property
     def _meta(self):
-        return make_meta(meta_nonempty(self.frame._meta).rename(**self._kwargs))
+        args = [
+            meta_nonempty(op._meta) if isinstance(op, Expr) else op for op in self._args
+        ]
+        return self.operation(*args, **self._kwargs)
 
-    @property
-    def _kwargs(self) -> dict:
-        if is_series_like(self.frame._meta):
-            return {"index": self.operand("index")}
-        else:
-            return {"name": self.operand("index")}
+    @staticmethod
+    def operation(df, index, sorted_index):
+        if is_series_like(df):
+            return df.rename(index=index)
+        return df.rename(name=index)
 
     def _divisions(self):
         index = self.operand("index")
@@ -1131,12 +1060,9 @@ class Clip(Elemwise):
     _defaults = {"lower": None, "upper": None}
     operation = M.clip
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            if self.frame.columns == parent.columns:
-                # Don't introduce unnecessary projections
-                return
-            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+            return plain_column_projection(self, parent, dependents)
 
 
 class Between(Elemwise):
@@ -1208,16 +1134,22 @@ class AsType(Elemwise):
             meta = clear_known_categories(meta)
         return meta
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
             dtypes = self.operand("dtypes")
+            columns = determine_column_projection(self, parent, dependents)
             if isinstance(dtypes, dict):
-                dtypes = {
-                    key: val for key, val in dtypes.items() if key in parent.columns
-                }
+                dtypes = {key: val for key, val in dtypes.items() if key in columns}
                 if not dtypes:
                     return type(parent)(self.frame, *parent.operands[1:])
-            return type(self)(self.frame[parent.operand("columns")], dtypes)
+            if isinstance(columns, list):
+                columns = [col for col in self.frame.columns if col in columns]
+            if self.frame.columns == columns:
+                return
+            result = type(self)(self.frame[columns], dtypes)
+            if not isinstance(columns, list):
+                return result
+            return type(parent)(result, *parent.operands[1:])
 
 
 class IsNa(Elemwise):
@@ -1384,18 +1316,9 @@ class ExplodeSeries(Blockwise):
 class ExplodeFrame(ExplodeSeries):
     _parameters = ["frame", "column"]
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            columns = set(parent.columns).union(self.column)
-            if columns == set(self.frame.columns):
-                # Don't add unnecessary Projections, protects against loops
-                return
-
-            columns = [col for col in self.frame.columns if col in columns]
-            return type(parent)(
-                type(self)(self.frame[columns], *self.operands[1:]),
-                *parent.operands[1:],
-            )
+            return plain_column_projection(self, parent, dependents, [self.column])
 
 
 class Drop(Elemwise):
@@ -1426,12 +1349,13 @@ class Assign(Elemwise):
     def _node_label_args(self):
         return [self.frame, self.key, self.value]
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            if self.key not in parent.columns:
+            columns = determine_column_projection(self, parent, dependents)
+            if self.key not in columns:
                 return type(parent)(self.frame, *parent.operands[1:])
 
-            columns = set(parent.columns) - {self.key}
+            columns = set(columns) - {self.key}
             if columns == set(self.frame.columns):
                 # Protect against pushing the same projection twice
                 return
@@ -1459,9 +1383,9 @@ class Filter(Blockwise):
     _parameters = ["frame", "predicate"]
     operation = operator.getitem
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            return self.frame[parent.operand("columns")][self.predicate]
+            return plain_column_projection(self, parent, dependents)
         if isinstance(parent, Index):
             return self.frame.index[self.predicate]
 
@@ -1547,12 +1471,28 @@ class Index(Elemwise):
             return self.frame._meta.index
         return meta
 
+    @property
+    def _projection_columns(self):
+        return []
+
     def _task(self, index: int):
         return (
             getattr,
             (self.frame._name, index),
             "index",
         )
+
+
+def _return_input(df):
+    return df
+
+
+class ClearDivisions(Elemwise):
+    _parameters = ["frame"]
+    operation = staticmethod(_return_input)
+
+    def _divisions(self):
+        return (None,) * (self.frame.npartitions + 1)
 
 
 class Lengths(Expr):
@@ -1625,11 +1565,14 @@ class AddPrefix(Elemwise):
         len_prefix = len(self.prefix)
         return [col[len_prefix:] for col in columns]
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            columns = self._convert_columns(parent.columns)
-            if columns == self.frame.columns:
+            columns = determine_column_projection(self, parent, dependents)
+            columns = self._convert_columns(_convert_to_list(columns))
+            if set(columns) == set(self.frame.columns):
                 return
+
+            columns = [col for col in self.frame.columns if col in columns]
             return type(parent)(
                 type(self)(self.frame[columns], self.operands[1]),
                 parent.operand("columns"),
@@ -1645,11 +1588,19 @@ class AddSuffix(AddPrefix):
         return [col[:-len_suffix] for col in columns]
 
 
+class AssignIndex(Elemwise):
+    _parameters = ["frame", "value"]
+    operation = staticmethod(methods.assign_index)
+
+    def _divisions(self):
+        return self.value.divisions
+
+
 class Head(Expr):
     """Take the first `n` rows of the first partition"""
 
-    _parameters = ["frame", "n"]
-    _defaults = {"n": 5}
+    _parameters = ["frame", "n", "npartitions"]
+    _defaults = {"n": 5, "npartitions": 1}
 
     @functools.cached_property
     def _meta(self):
@@ -1664,14 +1615,14 @@ class Head(Expr):
     def _simplify_down(self):
         if isinstance(self.frame, Elemwise):
             operands = [
-                Head(op, self.n) if isinstance(op, Expr) else op
+                Head(op, self.n, self.npartitions) if isinstance(op, Expr) else op
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
         if isinstance(self.frame, Head):
-            return Head(self.frame.frame, min(self.n, self.frame.n))
+            return Head(self.frame.frame, min(self.n, self.frame.n), self.npartitions)
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         from dask_expr import Repartition
 
         if isinstance(parent, Repartition) and parent.new_partitions == 1:
@@ -1680,9 +1631,21 @@ class Head(Expr):
     def _lower(self):
         if not isinstance(self, BlockwiseHead):
             # Lower to Blockwise
+            if self.operand("npartitions") > self.frame.npartitions:
+                raise ValueError(
+                    f"only {self.frame.npartitions} partitions, head received {self.npartitions}"
+                )
+
+            if isinstance(self, PartitionsFiltered):
+                partitions = self.frame._partitions[: self.operand("npartitions")]
+            else:
+                partitions = list(
+                    range(self.frame.npartitions)[: self.operand("npartitions")]
+                )
+
             if is_index_like(self._meta):
-                return BlockwiseHeadIndex(Partitions(self.frame, [0]), self.n)
-            return BlockwiseHead(Partitions(self.frame, [0]), self.n)
+                return BlockwiseHeadIndex(Partitions(self.frame, partitions), self.n)
+            return BlockwiseHead(Partitions(self.frame, partitions), self.n)
 
 
 class BlockwiseHead(Head, Blockwise):
@@ -1730,7 +1693,7 @@ class Tail(Expr):
         if isinstance(self.frame, Tail):
             return Tail(self.frame.frame, min(self.n, self.frame.n))
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         from dask_expr import Repartition
 
         if isinstance(parent, Repartition) and parent.new_partitions == 1:
@@ -1774,19 +1737,34 @@ class Binop(Elemwise):
     def __str__(self):
         return f"{self.left} {self._operator_repr} {self.right}"
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            if isinstance(self.left, Expr) and self.left.ndim:
-                left = self.left[
-                    parent.operand("columns")
-                ]  # TODO: filter just the correct columns
+            changed = False
+            columns = determine_column_projection(self, parent, dependents)
+            columns = _convert_to_list(columns)
+            columns = [col for col in self.columns if col in columns]
+            if (
+                isinstance(self.left, Expr)
+                and self.left.ndim > 1
+                and self.left.columns != columns
+            ):
+                left = self.left[columns]  # TODO: filter just the correct columns
+                changed = True
             else:
                 left = self.left
-            if isinstance(self.right, Expr) and self.right.ndim:
-                right = self.right[parent.operand("columns")]
+            if (
+                isinstance(self.right, Expr)
+                and self.right.ndim > 1
+                and self.right.columns != columns
+            ):
+                right = self.right[columns]  # TODO: filter just the correct columns
+                changed = True
             else:
                 right = self.right
-            return type(self)(left, right)
+            if not changed:
+                return
+
+            return type(parent)(type(self)(left, right), *parent.operands[1:])
 
     def _node_label_args(self):
         return [self.left, self.right]
@@ -1892,18 +1870,21 @@ class XOr(Binop):
     _operator_repr = "^"
 
 
+class Mod(Binop):
+    operation = operator.mod
+    _operator_repr = "%"
+
+
 class Unaryop(Elemwise):
     _parameters = ["frame"]
 
     def __str__(self):
         return f"{self._operator_repr} {self.frame}"
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
             if isinstance(self.frame, Expr):
-                frame = self.frame[
-                    parent.operand("columns")
-                ]  # TODO: filter just the correct columns
+                return plain_column_projection(self, parent, dependents)
             else:
                 frame = self.frame
             return type(self)(frame)
@@ -2033,38 +2014,29 @@ def normalize_expression(expr):
     return expr._name
 
 
-def optimize(expr: Expr, combine_similar: bool = True, fuse: bool = True) -> Expr:
+def optimize(expr: Expr, fuse: bool = True) -> Expr:
     """High level query optimization
 
     This leverages three optimization passes:
 
     1.  Class based simplification using the ``_simplify`` function and methods
-    2.  Combine similar operations
-    3.  Blockwise fusion
+    2.  Blockwise fusion
 
     Parameters
     ----------
     expr:
         Input expression to optimize
-    combine_similar:
-        whether or not to combine similar operations
-        (like `ReadParquet`) to aggregate redundant work.
     fuse:
         whether or not to turn on blockwise fusion
 
     See Also
     --------
     simplify
-    combine_similar
     optimize_blockwise_fusion
     """
 
     # Simplify
     result = expr.simplify()
-
-    # Combine similar
-    if combine_similar:
-        result = result.combine_similar()
 
     # Manipulate Expression to make it more efficient
     result = result.rewrite(kind="tune")
@@ -2108,7 +2080,7 @@ def non_blockwise_ancestors(expr):
 
 
 def are_co_aligned(*exprs):
-    """Do inputs come from different parents, modulo blockwise?"""
+    """Do inputs come from the same parents, modulo blockwise?"""
     ancestors = [set(non_blockwise_ancestors(e)) for e in exprs]
     unique_ancestors = {
         # Account for column projection within IO expressions
@@ -2239,6 +2211,7 @@ class Diff(MapOverlap):
     enforce_metadata = True
     transform_divisions = False
     clear_divisions = False
+    align_dataframes = True
 
     def _divisions(self):
         return self.frame.divisions
@@ -2247,9 +2220,9 @@ class Diff(MapOverlap):
     def _meta(self):
         return meta_nonempty(self.frame._meta).diff(**self.kwargs)
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+            return plain_column_projection(self, parent, dependents)
 
     @functools.cached_property
     def kwargs(self):
@@ -2271,6 +2244,7 @@ class FFill(MapOverlap):
     enforce_metadata = True
     transform_divisions = False
     clear_divisions = False
+    align_dataframes = True
 
     def _divisions(self):
         return self.frame.divisions
@@ -2279,9 +2253,9 @@ class FFill(MapOverlap):
     def _meta(self):
         return self.frame._meta
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+            return plain_column_projection(self, parent, dependents)
 
     @functools.cached_property
     def kwargs(self):
@@ -2319,6 +2293,7 @@ class Shift(MapOverlap):
     func = M.shift
     enforce_metadata = True
     transform_divisions = False
+    align_dataframes = True
 
     @functools.cached_property
     def clear_divisions(self):
@@ -2342,9 +2317,9 @@ class Shift(MapOverlap):
     def kwargs(self):
         return dict(periods=self.periods, freq=self.freq)
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
-            return type(self)(self.frame[parent.operand("columns")], *self.operands[1:])
+            return plain_column_projection(self, parent, dependents)
 
     @property
     def before(self):
@@ -2486,6 +2461,56 @@ class Fused(Blockwise):
         for i, dep in enumerate(deps):
             graph["_" + str(i)] = dep
         return dask.core.get(graph, name)
+
+
+# Used for sorting with None
+@functools.total_ordering
+class MinType:
+    def __le__(self, other):
+        return True
+
+
+def determine_column_projection(expr, parent, dependents, additional_columns=None):
+    if isinstance(parent, Index):
+        column_union = []
+    else:
+        column_union = parent.columns.copy()
+    parents = [x() for x in dependents[expr._name] if x() is not None]
+
+    for p in parents:
+        if len(p.columns) > 0:
+            column_union.append(p._projection_columns)
+
+    if additional_columns is not None:
+        column_union.append(additional_columns)
+
+    # We can end up with MultiIndex columns from groupby ops, needs to be
+    # accounted for in the sort
+    column_union = sorted(
+        set(flatten(column_union, container=list)),
+        key=lambda x: x[0] if isinstance(x, tuple) else x or MinType(),
+    )
+    if (
+        len(column_union) == 1
+        and parent.ndim == 1
+        and all(p.ndim == 1 for p in parents)
+    ):
+        return column_union[0]
+    return column_union
+
+
+def plain_column_projection(expr, parent, dependents, additional_columns=None):
+    column_union = determine_column_projection(
+        expr, parent, dependents, additional_columns=additional_columns
+    )
+    if column_union == expr.frame.columns:
+        return
+    if isinstance(column_union, list):
+        column_union = [col for col in expr.frame.columns if col in column_union]
+    result = type(expr)(expr.frame[column_union], *expr.operands[1:])
+    if column_union == parent.operand("columns"):
+        return result
+    return type(parent)(result, parent.operand("columns"))
 
 
 from dask_expr._reductions import (

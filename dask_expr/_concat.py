@@ -8,7 +8,14 @@ from dask.dataframe.multi import concat_and_check
 from dask.dataframe.utils import check_meta, strip_unknown_categories
 from dask.utils import apply, is_dataframe_like, is_series_like
 
-from dask_expr._expr import AsType, Blockwise, Expr, Projection, are_co_aligned
+from dask_expr._expr import (
+    AsType,
+    Blockwise,
+    Expr,
+    Projection,
+    are_co_aligned,
+    determine_column_projection,
+)
 
 
 class Concat(Expr):
@@ -46,12 +53,18 @@ class Concat(Expr):
 
     @functools.cached_property
     def _meta(self):
+        # ignore DataFrame without columns to avoid dtype upcasting
         meta = make_meta(
             methods.concat(
-                [meta_nonempty(df._meta) for df in self._frames],
+                [
+                    meta_nonempty(df._meta)
+                    for df in self._frames
+                    if df.ndim < 2 or len(df._meta.columns) > 0
+                ],
                 join=self.join,
                 filter_warning=False,
                 axis=self.axis,
+                ignore_order=self.ignore_order,
                 **self._kwargs,
             )
         )
@@ -134,13 +147,13 @@ class Concat(Expr):
             *cast_dfs,
         )
 
-    def _simplify_up(self, parent):
+    def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
 
             def get_columns_or_name(e: Expr):
                 return e.columns if e.ndim == 2 else [e.name]
 
-            columns = parent.columns
+            columns = determine_column_projection(self, parent, dependents)
             columns_frame = [
                 [col for col in get_columns_or_name(frame) if col in columns]
                 for frame in self._frames
@@ -181,6 +194,9 @@ class StackPartition(Concat):
 
     def _layer(self):
         dsk, i = {}, 0
+        kwargs = self._kwargs.copy()
+        kwargs["ignore_order"] = self.ignore_order
+        ctr = 0
         for df in self._frames:
             try:
                 check_meta(df._meta, self._meta)
@@ -188,17 +204,23 @@ class StackPartition(Concat):
             except (ValueError, TypeError):
                 match = False
 
-            for key in df.__dask_keys__():
+            for i in range(df.npartitions):
                 if match:
-                    dsk[(self._name, i)] = key
+                    dsk[(self._name, ctr)] = df._name, i
                 else:
-                    dsk[(self._name, i)] = (
+                    dsk[(self._name, ctr)] = (
                         apply,
                         methods.concat,
-                        [[self._meta, key], self.axis, self.join, False, True],
-                        self._kwargs,
+                        [
+                            [self._meta, (df._name, i)],
+                            self.axis,
+                            self.join,
+                            False,
+                            True,
+                        ],
+                        kwargs,
                     )
-                i += 1
+                ctr += 1
         return dsk
 
     def _lower(self):

@@ -4,12 +4,14 @@ import functools
 from collections import OrderedDict, UserDict
 from collections.abc import Hashable, Sequence
 from types import LambdaType
-from typing import Any, Literal, TypeVar, cast
+from typing import Any, Literal, NoReturn, TypeVar, cast
 
 import dask
 import pandas as pd
 from dask import config
 from dask.base import normalize_token, tokenize
+from dask.dataframe._compat import is_string_dtype
+from dask.utils import get_default_shuffle_method
 from packaging.version import Version
 from pandas.api.types import is_datetime64_dtype, is_numeric_dtype
 
@@ -83,7 +85,7 @@ def is_scalar(x):
         return False
     if isinstance(x, dict):
         return False
-    if isinstance(x, (str, int)):
+    if isinstance(x, (str, int)) or x is None:
         return True
 
     from dask_expr._expr import Expr
@@ -182,3 +184,50 @@ def _maybe_from_pandas(dfs):
         for df in dfs
     ]
     return dfs
+
+
+def _get_shuffle_preferring_order(shuffle):
+    if shuffle is not None:
+        return shuffle
+
+    # Choose tasks over disk since it keeps the order
+    shuffle = get_default_shuffle_method()
+    if shuffle == "disk":
+        return "tasks"
+
+    return shuffle
+
+
+def _raise_if_object_series(x, funcname):
+    """
+    Utility function to raise an error if an object column does not support
+    a certain operation like `mean`.
+    """
+    if x.ndim == 1 and hasattr(x, "dtype"):
+        if x.dtype == object:
+            raise ValueError("`%s` not supported with object series" % funcname)
+        elif is_string_dtype(x):
+            raise ValueError("`%s` not supported with string series" % funcname)
+
+
+class RaiseAttributeError:
+    """Method or property defined on superclass, but not on subclass.
+
+    Usage::
+
+        class A:
+            def x(self): ...
+
+        class B(A):
+            x = RaiseAttributeError()
+    """
+
+    name: str
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        self.name = name
+
+    def __get__(self, instance: object | None, owner: type) -> NoReturn:
+        raise AttributeError(
+            f"{owner.__name__!r} object has no attribute {self.name!r}"
+        )
