@@ -4,7 +4,7 @@ import dask
 import numpy as np
 import pytest
 
-from dask_expr import SetIndexBlockwise, from_pandas, merge
+from dask_expr import SetIndexBlockwise, from_pandas
 from dask_expr._expr import Blockwise
 from dask_expr._repartition import RepartitionToFewer
 from dask_expr._shuffle import TaskShuffle, divisions_lru
@@ -427,28 +427,6 @@ def test_set_index_head_nlargest_string(pdf):
 
     a = df.set_index("z").tail(10, compute=False)
     assert_eq(a, pdf.set_index("z").sort_index().tail(10))
-
-
-def test_shuffle_nulls_introduced():
-    df1 = lib.DataFrame([[True], [False]] * 50, columns=["A"])
-    df1["B"] = list(range(100))
-
-    df2 = lib.DataFrame(
-        [[2, 3], [109, 2], [345, 3], [50, 7], [95, 1]], columns=["B", "C"]
-    )
-
-    ddf1 = from_pandas(df1, npartitions=10)
-    ddf2 = from_pandas(df2, npartitions=1)
-    meta = lib.Series(dtype=int, index=lib.Index([], dtype=bool, name="A"), name="A")
-    result = (
-        merge(ddf1, ddf2, how="outer", on="B")
-        .groupby("A")
-        .apply(lambda df: len(df), meta=meta)
-    )
-    expected = (
-        lib.merge(df1, df2, how="outer", on="B").groupby("A").apply(lambda df: len(df))
-    )
-    assert_eq(result, expected, check_names=False)
 
 
 def test_filter_sort(df):

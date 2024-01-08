@@ -270,10 +270,14 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
                         for i in range(len(partitioning_index.columns))
                     ]
                 drop_columns = partitioning_index.copy()
+            elif index_shuffle and expr.backend != "tasks":
+                frame = Assign(frame, "_partitions_0", frame.index)
+                partitioning_index = ["_partitions_0"]
+                drop_columns = partitioning_index.copy()
+                index_shuffle = False
 
-            # Assign new "_partitions" column
             dtypes = {}
-            if expr.cast_types:
+            if expr.cast_types and not index_shuffle:
                 cols = [
                     c
                     for c in frame.columns
@@ -285,6 +289,7 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
             if not dtypes:
                 dtypes = None
 
+            # Assign new "_partitions" column
             index_added = AssignPartitioningIndex(
                 frame,
                 partitioning_index,
