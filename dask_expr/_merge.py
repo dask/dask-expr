@@ -284,12 +284,14 @@ class Merge(Expr):
                             left,
                             shuffle_left_on,
                             npartitions_out=left.npartitions,
+                            cast_types=False,
                         )
                     else:
                         right = Shuffle(
                             right,
                             shuffle_right_on,
                             npartitions_out=right.npartitions,
+                            cast_types=False,
                         )
 
                 return BroadcastJoin(

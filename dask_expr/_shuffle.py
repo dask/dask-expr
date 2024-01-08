@@ -85,12 +85,14 @@ class Shuffle(Expr):
         "backend",
         "options",
         "index_shuffle",
+        "cast_types",
     ]
     _defaults = {
         "ignore_index": False,
         "backend": None,
         "options": None,
         "index_shuffle": None,
+        "cast_types": True,
     }
     _is_length_preserving = True
 
@@ -270,12 +272,26 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
                 drop_columns = partitioning_index.copy()
 
             # Assign new "_partitions" column
+            dtypes = {}
+            if expr.cast_types:
+                cols = [
+                    c
+                    for c in frame.columns
+                    if c in _convert_to_list(partitioning_index)
+                ]
+                for col, dtype in frame[cols].dtypes.items():
+                    if pd.api.types.is_numeric_dtype(dtype):
+                        dtypes[col] = np.float64
+            if not dtypes:
+                dtypes = None
+
             index_added = AssignPartitioningIndex(
                 frame,
                 partitioning_index,
                 "_partitions",
                 npartitions_out,
                 index_shuffle,
+                dtypes,
             )
         else:
             index_added = frame
@@ -653,10 +669,12 @@ class AssignPartitioningIndex(Blockwise):
         "index_name",
         "npartitions_out",
         "assign_index",
+        "cast_dtype",
     ]
+    _defaults = {"cast_dtype": None}
 
     @staticmethod
-    def operation(df, index, name: str, npartitions: int, assign_index):
+    def operation(df, index, name: str, npartitions: int, assign_index, cast_dtype):
         """Construct a hash-based partitioning index"""
         if assign_index:
             # columns take precedence over index in _select_columns_or_index, so
@@ -670,9 +688,9 @@ class AssignPartitioningIndex(Blockwise):
         if isinstance(index, (str, list, tuple)):
             # Assume column selection from df
             index = [index] if isinstance(index, str) else list(index)
-            index = partitioning_index(df[index], npartitions)
+            index = partitioning_index(df[index], npartitions, cast_dtype)
         else:
-            index = partitioning_index(index, npartitions)
+            index = partitioning_index(index, npartitions, cast_dtype)
         return df.assign(**{name: index})
 
 
