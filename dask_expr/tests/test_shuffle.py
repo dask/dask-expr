@@ -535,7 +535,7 @@ def test_set_index_sort_values_one_partition(pdf):
     divisions_lru.data = OrderedDict()
     df = from_pandas(pdf, sort=False)
     query = df.sort_values("x").optimize(fuse=False)
-    assert query.divisions == (None, None)
+    assert query.divisions == (0, 99)
     assert_eq(pdf.sort_values("x"), query, sort_results=False)
     assert len(divisions_lru) == 0
 
