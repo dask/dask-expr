@@ -62,6 +62,8 @@ def test_monotonic(series, reverse, cls):
         pds = pds.index
         ds = ds.index
 
+    # assert_eq fails due to numpy.bool vs. plain bool mismatch
+    # See https://github.com/dask/dask/pull/10671
     assert ds.is_monotonic_increasing.compute() == pds.is_monotonic_increasing
     assert ds.is_monotonic_decreasing.compute() == pds.is_monotonic_decreasing
 
