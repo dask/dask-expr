@@ -190,10 +190,11 @@ def _get_shuffle_preferring_order(shuffle):
     if shuffle is not None:
         return shuffle
 
-    if get_default_shuffle_method() == "disk":
+    shuffle = get_default_shuffle_method()
+    if shuffle == "disk":
         return "tasks"
 
-    return get_default_shuffle_method()
+    return shuffle
 
 
 def _raise_if_object_series(x, funcname):
