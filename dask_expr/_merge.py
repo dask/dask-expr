@@ -679,6 +679,15 @@ class BlockwiseMerge(Merge, Blockwise):
 
     is_broadcast_join = False
 
+    def _divisions(self):
+        if self.left.npartitions == self.right.npartitions:
+            return self.left.divisions
+        if self.left.npartitions > self.right.npartitions:
+            # Broadcast blockwise merge
+            return self.left.divisions
+        else:
+            return self.right.divisions
+
     def _lower(self):
         return None
 
@@ -713,8 +722,7 @@ class JoinRecursive(Expr):
             )
 
     def _divisions(self):
-        npartitions = [frame.npartitions for frame in self.frames]
-        return (None,) * (max(npartitions) + 1)
+        return self.lower_completely().divisions
 
     def _lower(self):
         if self.how == "left":
