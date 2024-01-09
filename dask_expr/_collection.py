@@ -744,7 +744,9 @@ class FrameBase(DaskMethodsMixin):
         return new_collection(self.expr.clip(lower, upper))
 
     def combine_first(self, other):
-        return new_collection(self.expr.combine_first(other.expr))
+        other = self._create_alignable_frame(other, "outer")
+        left, right = self.expr._align_divisions(other.expr, axis=0)
+        return new_collection(left.combine_first(right))
 
     def to_timestamp(self, freq=None, how="start"):
         return new_collection(self.expr.to_timestamp(freq, how))
@@ -820,8 +822,20 @@ class FrameBase(DaskMethodsMixin):
     ):
         return new_collection(self.expr.rename_axis(mapper, index, columns, axis))
 
+    def _create_alignable_frame(self, other, join):
+        if not is_dask_collection(other):
+            if join in ("inner", "left"):
+                npartitions = 1
+            else:
+                # We have to trigger alignment, otherwise pandas will add
+                # the same values to every partition
+                npartitions = 2
+            other = from_pandas(other, npartitions=npartitions)
+        return other
+
     def align(self, other, join="outer", axis=None, fill_value=None):
-        return self.expr.align(other, join, axis, fill_value)
+        other = self._create_alignable_frame(other, join)
+        return self.expr.align(other.expr, join, axis, fill_value)
 
     def nunique_approx(self, split_every=None):
         return new_collection(self.expr.nunique_approx(split_every=split_every))
@@ -1138,6 +1152,13 @@ class DataFrame(FrameBase):
 
     def memory_usage(self, deep=False, index=True):
         return new_collection(MemoryUsageFrame(self, deep=deep, _index=index))
+
+    def combine(self, other, func, fill_value=None, overwrite=True):
+        other = self._create_alignable_frame(other, "outer")
+        left, right = self.expr._align_divisions(other.expr, axis=0)
+        return new_collection(
+            expr.CombineFrame(left, right, func, fill_value, overwrite)
+        )
 
     def drop_duplicates(
         self,
@@ -1557,8 +1578,6 @@ class DataFrame(FrameBase):
         """
         Concise summary of a Dask DataFrame
         """
-        mem_use = memory_usage
-
         if buf is None:
             import sys
 
@@ -1574,12 +1593,9 @@ class DataFrame(FrameBase):
         # Group and execute the required computations
         computations = {}
         if verbose:
-            memory_usage = True
             computations.update({"index": self.index, "count": self.count()})
-        if mem_use:
-            computations.update(
-                {"memory_usage": self.memory_usage(deep=True, index=True)}
-            )
+        if memory_usage:
+            computations["memory_usage"] = self.memory_usage(deep=True, index=True)
 
         computations = dict(zip(computations.keys(), compute(*computations.values())))
 
@@ -1633,7 +1649,7 @@ class DataFrame(FrameBase):
         ]
         lines.append("dtypes: {}".format(", ".join(dtype_counts)))
 
-        if mem_use:
+        if memory_usage:
             memory_int = computations["memory_usage"].sum()
             lines.append(f"memory usage: {memory_repr(memory_int)}\n")
 
@@ -1706,9 +1722,14 @@ class Series(FrameBase):
         split_every=None,
         split_out=1,
     ):
+        length = None
+        if (split_out > 1 or split_out is True) and normalize:
+            frame = self if not dropna else self.dropna()
+            length = Len(frame)
+
         return new_collection(
             ValueCounts(
-                self, sort, ascending, dropna, normalize, split_every, split_out
+                self, sort, ascending, dropna, normalize, split_every, split_out, length
             )
         )
 
@@ -1780,6 +1801,11 @@ class Series(FrameBase):
         return new_collection(
             expr.Between(self, left=left, right=right, inclusive=inclusive)
         )
+
+    def combine(self, other, func, fill_value=None):
+        other = self._create_alignable_frame(other, "outer")
+        left, right = self.expr._align_divisions(other.expr, axis=0)
+        return new_collection(expr.CombineSeries(left, right, func, fill_value))
 
     def explode(self):
         return new_collection(expr.ExplodeSeries(self))
@@ -2212,8 +2238,6 @@ def concat(
     interleave_partitions=False,
     **kwargs,
 ):
-    if interleave_partitions is True:
-        raise NotImplementedError("interleave_partitions=True isn't implemented yet")
     if not isinstance(dfs, list):
         raise TypeError("dfs must be a list of DataFrames/Series objects")
     if len(dfs) == 0:
@@ -2238,6 +2262,7 @@ def concat(
             kwargs,
             axis,
             ignore_unknown_divisions,
+            interleave_partitions,
             *dfs,
         )
     )
