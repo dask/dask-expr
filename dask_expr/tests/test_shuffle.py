@@ -9,7 +9,7 @@ from dask_expr._expr import Blockwise
 from dask_expr._repartition import RepartitionToFewer
 from dask_expr._shuffle import TaskShuffle, divisions_lru
 from dask_expr.io import FromPandas
-from dask_expr.tests._util import _backend_library, assert_eq
+from dask_expr.tests._util import _backend_library, assert_eq, xfail_gpu
 
 # Set DataFrame backend for this module
 lib = _backend_library()
@@ -45,7 +45,7 @@ def test_disk_shuffle(ignore_index, npartitions, df):
     # If any values of "x" can be found in multiple
     # partitions, this will fail
     df3 = df2["x"].map_partitions(lambda x: x.drop_duplicates())
-    assert sorted(df3.compute().tolist()) == list(range(20))
+    assert sorted(df3.compute().values) == list(range(20))
 
     # Check `partitions` after shuffle
     a = df2.partitions[1]
@@ -55,7 +55,9 @@ def test_disk_shuffle(ignore_index, npartitions, df):
         npartitions=npartitions,
         ignore_index=ignore_index,
     ).partitions[1]
-    assert set(a["x"].compute()).issubset(b["y"].compute())
+    assert set(a["x"].compute().values.tolist()).issubset(
+        b["y"].compute().values.tolist()
+    )
 
     # Check for culling
     assert len(a.optimize().dask) < len(df2.optimize().dask)
@@ -83,7 +85,7 @@ def test_task_shuffle(ignore_index, npartitions, max_branch, df):
     # If any values of "x" can be found in multiple
     # partitions, this will fail
     df3 = df2["x"].map_partitions(lambda x: x.drop_duplicates())
-    assert sorted(df3.compute().tolist()) == list(range(20))
+    assert sorted(df3.compute().values) == list(range(20))
 
     # Check `partitions` after shuffle
     a = df2.partitions[1]
@@ -93,7 +95,9 @@ def test_task_shuffle(ignore_index, npartitions, max_branch, df):
         npartitions=npartitions,
         ignore_index=ignore_index,
     ).partitions[1]
-    assert set(a["x"].compute()).issubset(b["y"].compute())
+    assert set(a["x"].compute().values.tolist()).issubset(
+        b["y"].compute().values.tolist()
+    )
 
     # Check for culling
     assert len(a.optimize().dask) < len(df2.optimize().dask)
@@ -122,7 +126,7 @@ def test_task_shuffle_index(npartitions, max_branch, pdf):
     # If any values of "x" can be found in multiple
     # partitions, this will fail
     df3 = df2.index.map_partitions(lambda x: x.drop_duplicates())
-    assert sorted(df3.compute().tolist()) == list(range(20))
+    assert sorted(df3.compute().index) == list(range(20))
 
 
 def test_shuffle_column_projection(df):
@@ -387,6 +391,7 @@ def test_sort_head_nlargest(df):
     assert a.optimize()._name == b.optimize()._name
 
 
+@xfail_gpu("cudf udf support")
 def test_sort_head_nlargest_string(pdf):
     pdf["z"] = "a" + pdf.x.map(str)
     df = from_pandas(pdf, npartitions=5)
@@ -417,6 +422,7 @@ def test_set_index_head_nlargest(df, pdf):
     # df.set_index([df.x, df.y]).head(3)
 
 
+@xfail_gpu("cudf udf support")
 def test_set_index_head_nlargest_string(pdf):
     pdf["z"] = "a" + pdf.x.map(str)
     df = from_pandas(pdf, npartitions=5)
