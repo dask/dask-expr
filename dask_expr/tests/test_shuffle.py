@@ -562,7 +562,6 @@ def test_shuffle(df, pdf):
     assert_eq(result, pdf)
 
 
-@xfail_gpu("cudf groupby bug")
 def test_empty_partitions():
     # See https://github.com/dask/dask/issues/2408
     df = lib.DataFrame({"a": list(range(10))})
