@@ -320,8 +320,7 @@ class Expr(core.Expr):
     ):
         return RenameAxis(self, mapper=mapper, index=index, columns=columns, axis=axis)
 
-    def align(self, other, join="outer", axis=None, fill_value=None):
-        from dask_expr._collection import new_collection
+    def _align_divisions(self, other, axis=None):
         from dask_expr._repartition import Repartition
 
         if are_co_aligned(self, other) or axis in (1, "columns"):
@@ -342,6 +341,12 @@ class Expr(core.Expr):
 
             left = Repartition(self, new_divisions=divisions, force=True)
             other = Repartition(other, new_divisions=divisions, force=True)
+        return left, other
+
+    def align(self, other, join="outer", axis=None, fill_value=None):
+        from dask_expr._collection import new_collection
+
+        left, other = self._align_divisions(other, axis)
         aligned = _Align(left, other, join=join, axis=axis, fill_value=fill_value)
 
         return new_collection(AlignGetitem(aligned, position=0)), new_collection(
@@ -1081,6 +1086,25 @@ class ToTimestamp(Elemwise):
         return tuple(
             pd.Index(self.frame.divisions).to_timestamp(freq=self.freq, how=self.how)
         )
+
+
+class CombineSeries(Elemwise):
+    _parameters = ["frame", "other", "func", "fill_value"]
+    _defaults = {"fill_value": None}
+    operation = M.combine
+
+    @functools.cached_property
+    def _meta(self):
+        return make_meta(
+            meta_nonempty(self.frame._meta).combine(
+                meta_nonempty(self.other._meta), func=self.func
+            )
+        )
+
+
+class CombineFrame(CombineSeries):
+    _parameters = CombineSeries._parameters + ["overwrite"]
+    _defaults = {"fill_value": None, "overwrite": True}
 
 
 class ToNumeric(Elemwise):
@@ -2079,7 +2103,7 @@ def non_blockwise_ancestors(expr):
             yield e
 
 
-def are_co_aligned(*exprs):
+def are_co_aligned(*exprs, allow_broadcast=True):
     """Do inputs come from the same parents, modulo blockwise?"""
     ancestors = [set(non_blockwise_ancestors(e)) for e in exprs]
     unique_ancestors = {
@@ -2089,6 +2113,8 @@ def are_co_aligned(*exprs):
     }
     if len(unique_ancestors) <= 1:
         return True
+    if not allow_broadcast:
+        return False
     # We tried avoiding an `npartitions` check above, but
     # now we need to consider "broadcastable" expressions.
     exprs_except_broadcast = [expr for expr in exprs if not is_broadcastable(expr)]
