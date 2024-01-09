@@ -800,7 +800,7 @@ class Prod(Reduction):
 
 
 class Max(Reduction):
-    _parameters = ["frame", "skipna", "numeric_only", "min_count", "split_every"]
+    _parameters = ["frame", "skipna", "numeric_only", "split_every"]
     _defaults = {
         "split_every": False,
         "numeric_only": False,
@@ -811,9 +811,10 @@ class Max(Reduction):
 
     @property
     def chunk_kwargs(self):
-        return dict(
-            skipna=self.skipna,
-        )
+        if self.frame._meta.ndim < 2:
+            return dict(skipna=self.skipna)
+        else:
+            return dict(skipna=self.skipna, numeric_only=self.numeric_only)
 
 
 class Min(Max):

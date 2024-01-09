@@ -42,6 +42,13 @@ def test_median(pdf, df):
         df.x.median()
 
 
+def test_min_dt(pdf):
+    pdf["dt"] = "a"
+    df = from_pandas(pdf, npartitions=10)
+    assert_eq(df.min(numeric_only=True), pdf.min(numeric_only=True))
+    assert_eq(df.max(numeric_only=True), pdf.max(numeric_only=True))
+
+
 @pytest.mark.parametrize(
     "series",
     [

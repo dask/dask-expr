@@ -706,10 +706,8 @@ class FrameBase(DaskMethodsMixin):
             self.expr.mean(skipna, numeric_only, split_every=split_every)
         )
 
-    def max(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
-        return new_collection(
-            self.expr.max(skipna, numeric_only, min_count, split_every)
-        )
+    def max(self, skipna=True, numeric_only=False, split_every=False):
+        return new_collection(self.expr.max(skipna, numeric_only, split_every))
 
     def any(self, skipna=True, split_every=False):
         return new_collection(self.expr.any(skipna, split_every))
@@ -723,10 +721,8 @@ class FrameBase(DaskMethodsMixin):
     def idxmax(self, skipna=True, numeric_only=False):
         return new_collection(self.expr.idxmax(skipna, numeric_only))
 
-    def min(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
-        return new_collection(
-            self.expr.min(skipna, numeric_only, min_count, split_every)
-        )
+    def min(self, skipna=True, numeric_only=False, split_every=False):
+        return new_collection(self.expr.min(skipna, numeric_only, split_every))
 
     def count(self, numeric_only=False, split_every=False):
         return new_collection(self.expr.count(numeric_only, split_every))
