@@ -77,7 +77,10 @@ class Concat(Expr):
         dfs = self._frames
 
         if self.axis == 1:
-            if self._all_known_divisions:
+            if (
+                not self._are_co_alinged_or_single_partition
+                and self._all_known_divisions
+            ):
                 divisions = list(unique(merge_sorted(*[df.divisions for df in dfs])))
                 if len(divisions) == 1:  # single value for index
                     divisions = (divisions[0], divisions[0])
@@ -99,6 +102,12 @@ class Concat(Expr):
         return [None] * (sum(df.npartitions for df in dfs) + 1)
 
     @functools.cached_property
+    def interleave_partitions(self):
+        if "interleave_partitions" in self._parameters:
+            return self.operand("interleave_partitions")
+        return False
+
+    @functools.cached_property
     def _all_known_divisions(self):
         dfs = self._frames
         return all(df.known_divisions for df in dfs)
@@ -115,12 +124,16 @@ class Concat(Expr):
             )
         return False
 
+    @functools.cached_property
+    def _are_co_alinged_or_single_partition(self):
+        return are_co_aligned(*self._frames, allow_broadcast=False) or {
+            df.npartitions for df in self._frames
+        } == {1}
+
     def _lower(self):
         dfs = self._frames
         if self.axis == 1:
-            if are_co_aligned(*self._frames, allow_broadcast=False) or {
-                df.npartitions for df in dfs
-            } == {1}:
+            if self._are_co_alinged_or_single_partition:
                 return ConcatIndexed(self.ignore_order, self._kwargs, self.axis, *dfs)
 
             elif (
@@ -242,6 +255,7 @@ class Concat(Expr):
                     self._kwargs,
                     self.axis,
                     self.ignore_unknown_divisions,
+                    self.interleave_partitions,
                     *frames,
                 ),
                 *parent.operands[1:],
