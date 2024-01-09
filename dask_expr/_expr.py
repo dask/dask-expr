@@ -2079,7 +2079,7 @@ def non_blockwise_ancestors(expr):
             yield e
 
 
-def are_co_aligned(*exprs):
+def are_co_aligned(*exprs, allow_broadcast=True):
     """Do inputs come from the same parents, modulo blockwise?"""
     ancestors = [set(non_blockwise_ancestors(e)) for e in exprs]
     unique_ancestors = {
@@ -2089,6 +2089,8 @@ def are_co_aligned(*exprs):
     }
     if len(unique_ancestors) <= 1:
         return True
+    if not allow_broadcast:
+        return False
     # We tried avoiding an `npartitions` check above, but
     # now we need to consider "broadcastable" expressions.
     exprs_except_broadcast = [expr for expr in exprs if not is_broadcastable(expr)]
