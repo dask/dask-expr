@@ -246,7 +246,10 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
                 # Don't need to assign "_partitions" column
                 # if we are shuffling on a list of columns
                 nset = set(partitioning_index)
-                if nset & set(frame.columns) == nset and not index_shuffle:
+                if (
+                    nset & nset.intersection(set(frame.columns)) == nset
+                    and not index_shuffle
+                ):
                     return cls(
                         frame,
                         partitioning_index,
