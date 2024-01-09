@@ -679,14 +679,32 @@ class FrameBase(DaskMethodsMixin):
         return self.to_dask_array()
 
     def sum(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
-        return new_collection(
+        result = new_collection(
             self.expr.sum(skipna, numeric_only, min_count, split_every)
         )
+        return self._apply_min_count(result, min_count)
+
+    def _apply_min_count(self, result, min_count):
+        if min_count:
+            cond = self.notnull().sum() >= min_count
+            cond_meta = cond._meta
+            if not is_series_like(cond_meta):
+                result = result.to_series()
+                cond = cond.to_series()
+
+            result = result.where(cond, other=np.nan)
+            if not is_series_like(cond_meta):
+                return result.min()
+            else:
+                return result
+        else:
+            return result
 
     def prod(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
-        return new_collection(
+        result = new_collection(
             self.expr.prod(skipna, numeric_only, min_count, split_every)
         )
+        return self._apply_min_count(result, min_count)
 
     product = prod
 

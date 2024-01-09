@@ -212,6 +212,25 @@ def test_value_counts_split_out_normalize(df, pdf):
     assert_eq(result, expected)
 
 
+@pytest.mark.parametrize("method", ["sum", "prod", "product"])
+@pytest.mark.parametrize("min_count", [0, 9])
+def test_series_agg_with_min_count(method, min_count):
+    df = lib.DataFrame([[1]], columns=["a"])
+    ddf = from_pandas(df, npartitions=1)
+    func = getattr(ddf["a"], method)
+    result = func(min_count=min_count).compute()
+    if min_count == 0:
+        assert result == 1
+    else:
+        # TODO: dtype is wrong
+        assert_eq(result, np.nan, check_dtype=False)
+
+    assert_eq(
+        getattr(ddf, method)(min_count=min_count),
+        getattr(df, method)(min_count=min_count),
+    )
+
+
 @pytest.mark.parametrize(
     "func",
     [
