@@ -683,7 +683,9 @@ class BlockwiseMerge(Merge, Blockwise):
         if self.left.npartitions == self.right.npartitions:
             return super()._divisions()
         is_unknown = any(d is None for d in super()._divisions())
-        frame = self.left if self.left.npartitions > self.right.npartitions else self.right
+        frame = (
+            self.left if self.left.npartitions > self.right.npartitions else self.right
+        )
         if is_unknown:
             return (None,) * (frame.npartitions + 1)
         return frame.divisions
