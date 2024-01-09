@@ -126,7 +126,7 @@ def test_task_shuffle_index(npartitions, max_branch, pdf):
     # If any values of "x" can be found in multiple
     # partitions, this will fail
     df3 = df2.index.map_partitions(lambda x: x.drop_duplicates())
-    assert sorted(df3.compute().index) == list(range(20))
+    assert sorted(df3.compute().values) == list(range(20))
 
 
 def test_shuffle_column_projection(df):
@@ -562,6 +562,7 @@ def test_shuffle(df, pdf):
     assert_eq(result, pdf)
 
 
+@xfail_gpu("cudf groupby bug")
 def test_empty_partitions():
     # See https://github.com/dask/dask/issues/2408
     df = lib.DataFrame({"a": list(range(10))})
