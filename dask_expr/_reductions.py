@@ -970,8 +970,7 @@ class Var(Reduction):
         if numeric_only:
             # Workaround for cudf bug
             # (see: https://github.com/rapidsai/cudf/issues/13731)
-            x = x.select_dtypes("number")
-            n = n.loc[x.columns]
+            x = x[n.index]
         m2 = ((x - avg) ** 2).sum(**kwargs)
         return n, avg, m2
 
@@ -1009,7 +1008,9 @@ class Mean(Reduction):
             skipna=self.skipna,
             numeric_only=self.numeric_only,
             split_every=self.split_every,
-        ) / self.frame.count(split_every=self.split_every)
+        ) / self.frame.count(
+            split_every=self.split_every, numeric_only=self.numeric_only
+        )
 
 
 class Count(Reduction):
@@ -1020,6 +1021,13 @@ class Count(Reduction):
     @classmethod
     def reduction_aggregate(cls, df):
         return df.sum().astype("int64")
+
+    @property
+    def chunk_kwargs(self):
+        if self.frame._meta.ndim < 2:
+            return dict()
+        else:
+            return dict(numeric_only=self.numeric_only)
 
 
 class Mode(ApplyConcatApply):

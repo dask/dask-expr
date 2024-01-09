@@ -700,7 +700,7 @@ class FrameBase(DaskMethodsMixin):
             self.expr.std(axis, skipna, ddof, numeric_only, split_every=split_every)
         )
 
-    def mean(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
+    def mean(self, skipna=True, numeric_only=False, split_every=False):
         _raise_if_object_series(self, "mean")
         return new_collection(
             self.expr.mean(skipna, numeric_only, split_every=split_every)

@@ -226,7 +226,7 @@ class Expr(core.Expr):
     def std(self, axis=0, skipna=True, ddof=1, numeric_only=False, split_every=False):
         return Sqrt(self.var(axis, skipna, ddof, numeric_only, split_every=split_every))
 
-    def mean(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
+    def mean(self, skipna=True, numeric_only=False, split_every=False):
         return Mean(
             self, skipna=skipna, numeric_only=numeric_only, split_every=split_every
         )
