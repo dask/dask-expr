@@ -95,28 +95,28 @@ async def test_merge_index_precedence(c, s, a, b, shuffle, name):
 @gen_cluster(client=True)
 @pytest.mark.parametrize("shuffle", ["disk", "p2p", "tasks"])
 async def test_shuffle_nulls_introduced(c, s, a, b, shuffle):
-    df1 = lib.DataFrame([[True], [False]] * 50, columns=["A"])
+    df1 = pd.DataFrame([[True], [False]] * 50, columns=["A"])
     df1["B"] = list(range(100))
 
-    df2 = lib.DataFrame(
+    df2 = pd.DataFrame(
         [[2, 3], [109, 2], [345, 3], [50, 7], [95, 1]], columns=["B", "C"]
     )
 
     ddf1 = from_pandas(df1, npartitions=10)
     ddf2 = from_pandas(df2, npartitions=1)
-    meta = lib.Series(dtype=int, index=lib.Index([], dtype=bool, name="A"), name="A")
+    meta = pd.Series(dtype=int, index=pd.Index([], dtype=bool, name="A"), name="A")
     result = (
         merge(ddf1, ddf2, how="outer", on="B", shuffle_method=shuffle)
         .groupby("A")
         .apply(lambda df: len(df), meta=meta, shuffle_method=shuffle)
     )
     expected = (
-        lib.merge(df1, df2, how="outer", on="B").groupby("A").apply(lambda df: len(df))
+        pd.merge(df1, df2, how="outer", on="B").groupby("A").apply(lambda df: len(df))
     )
     print(expected)
     x = await c.compute(result)
 
-    lib.testing.assert_series_equal(
+    pd.testing.assert_series_equal(
         x.sort_index(), expected.sort_index(), check_names=False
     )
 
