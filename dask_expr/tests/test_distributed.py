@@ -113,7 +113,6 @@ async def test_shuffle_nulls_introduced(c, s, a, b, shuffle):
     expected = (
         pd.merge(df1, df2, how="outer", on="B").groupby("A").apply(lambda df: len(df))
     )
-    print(expected)
     x = await c.compute(result)
 
     pd.testing.assert_series_equal(
