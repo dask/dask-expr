@@ -2717,6 +2717,9 @@ def map_overlap(
     ):
         raise ValueError("before and after must be positive integers")
 
+    df = _maybe_from_pandas([df])[0]
+    args = _maybe_from_pandas(args)
+
     new_expr = expr.MapOverlap(
         df,
         func,
