@@ -41,6 +41,7 @@ class ReadCSV(PartitionsFiltered, BlockwiseIO):
             storage_options=self.storage_options,
             sep=self.sep,
             names=self.names,
+            engine=self.engine,
         )
 
     @functools.cached_property
