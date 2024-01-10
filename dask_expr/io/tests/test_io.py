@@ -111,7 +111,7 @@ def test_read_csv_keywords(tmpdir):
         header=None,
         dtype_backend="pyarrow",
     )
-    expected = lib.read_csv(
+    expected = pd.read_csv(
         fn,
         sep=",",
         names=["u", "v", "w", "x", "y", "z"],
