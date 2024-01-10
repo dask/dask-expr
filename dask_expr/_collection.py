@@ -616,8 +616,8 @@ class FrameBase(DaskMethodsMixin):
         **kwargs,
     ):
         return map_overlap(
-            self,
             func,
+            self,
             before,
             after,
             *args,
@@ -2677,8 +2677,8 @@ def map_partitions(
 
 
 def map_overlap(
-    df,
     func,
+    df,
     before,
     after,
     *args,
