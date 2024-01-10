@@ -57,6 +57,5 @@ def test_categorical_set_index():
 
     b = a.set_index("y", divisions=["a", "b", "c"], npartitions=a.npartitions)
     d1, d2 = b.get_partition(0), b.get_partition(1)
-    print(d1.index.optimize(fuse=False).pprint())
     assert list(d1.index.compute(fuse=False)) == ["a"]
     assert list(sorted(d2.index.compute())) == ["b", "b", "c"]
