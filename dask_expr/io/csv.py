@@ -13,6 +13,7 @@ class ReadCSV(PartitionsFiltered, BlockwiseIO):
         "sep",
         "names",
         "engine",
+        "dtype_backend",
         "_partitions",
         "storage_options",
         "_series",
@@ -23,6 +24,7 @@ class ReadCSV(PartitionsFiltered, BlockwiseIO):
         "sep": ",",
         "names": None,
         "engine": "c",
+        "dtype_backend": None,
         "_partitions": None,
         "storage_options": None,
         "_series": False,
@@ -34,6 +36,12 @@ class ReadCSV(PartitionsFiltered, BlockwiseIO):
         # Temporary hack to simplify logic
         import dask.dataframe as dd
 
+        kwargs = (
+            {"dtype_backend": self.dtype_backend}
+            if self.dtype_backend is not None
+            else {}
+        )
+
         return dd.read_csv(
             self.filename,
             usecols=_convert_to_list(self.operand("columns")),
@@ -42,6 +50,7 @@ class ReadCSV(PartitionsFiltered, BlockwiseIO):
             sep=self.sep,
             names=self.names,
             engine=self.engine,
+            **kwargs,
         )
 
     @functools.cached_property

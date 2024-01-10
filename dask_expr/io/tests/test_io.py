@@ -104,10 +104,20 @@ def test_io_fusion(tmpdir, fmt):
 def test_read_csv_keywords(tmpdir):
     fn = _make_file(tmpdir, format="csv")
     df = read_csv(
-        fn, sep=",", names=["u", "v", "w", "x", "y", "z"], engine="pyarrow", header=None
+        fn,
+        sep=",",
+        names=["u", "v", "w", "x", "y", "z"],
+        engine="pyarrow",
+        header=None,
+        dtype_backend="pyarrow",
     )
     expected = lib.read_csv(
-        fn, sep=",", names=["u", "v", "w", "x", "y", "z"], engine="pyarrow", header=None
+        fn,
+        sep=",",
+        names=["u", "v", "w", "x", "y", "z"],
+        engine="pyarrow",
+        header=None,
+        dtype_backend="pyarrow",
     )
     assert_eq(df, expected)
 
