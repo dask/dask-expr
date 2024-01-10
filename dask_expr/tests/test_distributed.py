@@ -93,7 +93,7 @@ async def test_merge_index_precedence(c, s, a, b, shuffle, name):
 
 
 @gen_cluster(client=True)
-@pytest.mark.parametrize("shuffle", ["disk", "p2p"])
+@pytest.mark.parametrize("shuffle", ["disk", "p2p", "tasks"])
 async def test_shuffle_nulls_introduced(c, s, a, b, shuffle):
     df1 = lib.DataFrame([[True], [False]] * 50, columns=["A"])
     df1["B"] = list(range(100))

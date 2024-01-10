@@ -85,14 +85,12 @@ class Shuffle(Expr):
         "backend",
         "options",
         "index_shuffle",
-        "cast_types",
     ]
     _defaults = {
         "ignore_index": False,
         "backend": None,
         "options": None,
         "index_shuffle": None,
-        "cast_types": True,
     }
     _is_length_preserving = True
 
@@ -261,7 +259,6 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
                 frame = Assign(frame, "_partitions_0", frame.index)
                 partitioning_index = ["_partitions_0"]
                 drop_columns = partitioning_index.copy()
-                index_shuffle = False
             else:
                 cs = [col for col in partitioning_index if col not in frame.columns]
                 if len(cs) == 1:
@@ -272,15 +269,12 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
                     drop_columns = ["_partitions_0"]
 
             dtypes = {}
-            if expr.cast_types and not index_shuffle:
-                cols = [
-                    c
-                    for c in frame.columns
-                    if c in _convert_to_list(partitioning_index)
-                ]
-                for col, dtype in frame[cols].dtypes.items():
-                    if pd.api.types.is_numeric_dtype(dtype):
-                        dtypes[col] = np.float64
+            cols = [
+                c for c in frame.columns if c in _convert_to_list(partitioning_index)
+            ]
+            for col, dtype in frame[cols].dtypes.items():
+                if pd.api.types.is_numeric_dtype(dtype):
+                    dtypes[col] = np.float64
             if not dtypes:
                 dtypes = None
 
@@ -290,7 +284,6 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
                 partitioning_index,
                 "_partitions",
                 npartitions_out,
-                index_shuffle,
                 dtypes,
             )
         else:
@@ -659,8 +652,8 @@ class AssignPartitioningIndex(Blockwise):
         New column name to assign.
     npartitions_out: int
         Number of partitions after repartitioning is finished.
-    assign_index : bool
-        Whether to use the index as partitioning column.
+    cast_dtype : dict, optional
+        The dtypes that we want to use for the hashing columns
     """
 
     _parameters = [
@@ -668,23 +661,14 @@ class AssignPartitioningIndex(Blockwise):
         "partitioning_index",
         "index_name",
         "npartitions_out",
-        "assign_index",
         "cast_dtype",
     ]
     _defaults = {"cast_dtype": None}
 
     @staticmethod
-    def operation(df, index, name: str, npartitions: int, assign_index, cast_dtype):
+    def operation(df, index, name: str, npartitions: int, cast_dtype):
         """Construct a hash-based partitioning index"""
-        if assign_index:
-            # columns take precedence over index in _select_columns_or_index, so
-            # circumvent that, to_frame doesn't work because it loses the index
-            names = index
-            index = df[[]]
-            index[names] = df.index.to_frame()
-        else:
-            index = _select_columns_or_index(df, index)
-
+        index = _select_columns_or_index(df, index)
         if isinstance(index, (str, list, tuple)):
             # Assume column selection from df
             index = [index] if isinstance(index, str) else list(index)
