@@ -9,12 +9,12 @@ from dask_expr._util import DASK_GT_20231201
 from dask_expr.tests._util import _backend_library, assert_eq, xfail_gpu
 
 # Set DataFrame backend for this module
-lib = _backend_library()
+pd = _backend_library()
 
 
 @pytest.fixture
 def pdf():
-    pdf = lib.DataFrame({"x": range(100)})
+    pdf = pd.DataFrame({"x": range(100)})
     pdf["y"] = pdf.x // 7  # Not unique; duplicates span different partitions
     yield pdf
 
@@ -43,6 +43,15 @@ def test_median(pdf, df):
         df.x.median()
 
 
+def test_min_dt(pdf):
+    pdf["dt"] = "a"
+    df = from_pandas(pdf, npartitions=10)
+    assert_eq(df.min(numeric_only=True), pdf.min(numeric_only=True))
+    assert_eq(df.max(numeric_only=True), pdf.max(numeric_only=True))
+    assert_eq(df.count(numeric_only=True), pdf.count(numeric_only=True))
+    assert_eq(df.mean(numeric_only=True), pdf.mean(numeric_only=True))
+
+
 @pytest.mark.parametrize(
     "series",
     [
@@ -58,7 +67,7 @@ def test_median(pdf, df):
 def test_monotonic(series, reverse, cls):
     if reverse:
         series = series[::-1]
-    pds = lib.Series(series, index=series)
+    pds = pd.Series(series, index=series)
     ds = from_pandas(pds, 2, sort=False)
     if cls == "Index":
         pds = pds.index
@@ -100,7 +109,7 @@ def test_value_counts(pdf, df, split_every, split_out):
 def test_unique(pdf, df, split_every, split_out):
     assert_eq(
         df.x.unique(split_every=split_every, split_out=split_out),
-        lib.Series(pdf.x.unique(), name="x"),
+        pd.Series(pdf.x.unique(), name="x"),
         check_index=split_out is not True,
     )
 
@@ -188,11 +197,11 @@ def test_unique_base(df, pdf):
         df.unique()
 
     # pandas returns a numpy array while we return a Series/Index
-    assert_eq(df.x.unique(), lib.Series(pdf.x.unique(), name="x"), check_index=False)
-    assert_eq(df.index.unique(split_out=1), lib.Index(pdf.index.unique()))
+    assert_eq(df.x.unique(), pd.Series(pdf.x.unique(), name="x"), check_index=False)
+    assert_eq(df.index.unique(split_out=1), pd.Index(pdf.index.unique()))
     np.testing.assert_array_equal(
         df.index.unique().compute().sort_values().values,
-        lib.Index(pdf.index.unique()).values,
+        pd.Index(pdf.index.unique()).values,
     )
 
 
@@ -201,6 +210,25 @@ def test_value_counts_split_out_normalize(df, pdf):
     result = df.x.value_counts(split_out=2, normalize=True)
     expected = pdf.x.value_counts(normalize=True)
     assert_eq(result, expected)
+
+
+@pytest.mark.parametrize("method", ["sum", "prod", "product"])
+@pytest.mark.parametrize("min_count", [0, 9])
+def test_series_agg_with_min_count(method, min_count):
+    df = pd.DataFrame([[1]], columns=["a"])
+    ddf = from_pandas(df, npartitions=1)
+    func = getattr(ddf["a"], method)
+    result = func(min_count=min_count).compute()
+    if min_count == 0:
+        assert result == 1
+    else:
+        # TODO: dtype is wrong
+        assert_eq(result, np.nan, check_dtype=False)
+
+    assert_eq(
+        getattr(ddf, method)(min_count=min_count),
+        getattr(df, method)(min_count=min_count),
+    )
 
 
 @pytest.mark.parametrize(
@@ -280,7 +308,7 @@ def test_unimplemented_on_index(func, pdf, df):
 
 
 def test_reduction_on_empty_df():
-    pdf = lib.DataFrame()
+    pdf = pd.DataFrame()
     df = from_pandas(pdf)
     assert_eq(df.sum(), pdf.sum())
 
@@ -297,7 +325,7 @@ def test_reduction_on_empty_df():
 )
 @pytest.mark.parametrize("ddof", [1, 2])
 def test_std_kwargs(axis, skipna, ddof):
-    pdf = lib.DataFrame(
+    pdf = pd.DataFrame(
         {"x": range(30), "y": [1, 2, None] * 10, "z": ["dog", "cat"] * 15}
     )
     df = from_pandas(pdf, npartitions=3)

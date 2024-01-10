@@ -8,16 +8,17 @@ from dask_expr import SetIndexBlockwise, from_pandas
 from dask_expr._expr import Blockwise
 from dask_expr._repartition import RepartitionToFewer
 from dask_expr._shuffle import TaskShuffle, divisions_lru
+from dask_expr._util import DASK_GT_20231201
 from dask_expr.io import FromPandas
 from dask_expr.tests._util import _backend_library, assert_eq
 
 # Set DataFrame backend for this module
-lib = _backend_library()
+pd = _backend_library()
 
 
 @pytest.fixture
 def pdf():
-    return lib.DataFrame({"x": list(range(20)) * 5, "y": range(100)})
+    return pd.DataFrame({"x": list(range(20)) * 5, "y": range(100)})
 
 
 @pytest.fixture
@@ -145,7 +146,7 @@ def test_shuffle_reductions_after_projection(df):
 @pytest.mark.parametrize("nelem", [10, 500])
 def test_sort_values_(nelem, by, ascending):
     np.random.seed(0)
-    df = lib.DataFrame()
+    df = pd.DataFrame()
     df["a"] = np.ascontiguousarray(np.arange(nelem)[::-1])
     df["b"] = np.arange(100, nelem + 100)
     ddf = from_pandas(df, npartitions=10)
@@ -162,7 +163,7 @@ def test_sort_values_(nelem, by, ascending):
 @pytest.mark.parametrize("nelem", [10, 500])
 def test_sort_values_single_partition(nelem, by, ascending):
     np.random.seed(0)
-    df = lib.DataFrame()
+    df = pd.DataFrame()
     df["a"] = np.ascontiguousarray(np.arange(nelem)[::-1])
     df["b"] = np.arange(100, nelem + 100)
     ddf = from_pandas(df, npartitions=1)
@@ -241,7 +242,7 @@ def test_set_index_pre_sorted(pdf):
 @pytest.mark.parametrize("drop", (True, False))
 @pytest.mark.parametrize("append", (True, False))
 def test_set_index_no_sort(drop, append):
-    df = lib.DataFrame({"col1": [2, 4, 1, 3, 5], "col2": [1, 2, 3, 4, 5]})
+    df = pd.DataFrame({"col1": [2, 4, 1, 3, 5], "col2": [1, 2, 3, 4, 5]})
     ddf = from_pandas(df, npartitions=2)
 
     assert ddf.npartitions > 1
@@ -280,7 +281,7 @@ def test_set_index_simplify(df, pdf):
 
 
 def test_set_index_numeric_columns():
-    pdf = lib.DataFrame(
+    pdf = pd.DataFrame(
         {
             0: list("ABAABBABAA"),
             1: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
@@ -333,7 +334,7 @@ def test_sort_values(df, pdf, shuffle):
 
 @pytest.mark.parametrize("shuffle", [None, "tasks"])
 def test_sort_values_temporary_column_dropped(shuffle):
-    pdf = lib.DataFrame(
+    pdf = pd.DataFrame(
         {"x": range(10), "y": [1, 2, 3, 4, 5] * 2, "z": ["cat", "dog"] * 5}
     )
     df = from_pandas(pdf, npartitions=2)
@@ -440,7 +441,7 @@ def test_filter_sort(df):
 
 
 def test_sort_values_add():
-    pdf = lib.DataFrame({"x": [1, 2, 3, 0, 1, 2, 4, 5], "y": 1})
+    pdf = pd.DataFrame({"x": [1, 2, 3, 0, 1, 2, 4, 5], "y": 1})
     df = from_pandas(pdf, npartitions=2, sort=False)
     with dask.config.set({"dataframe.shuffle.method": "tasks"}):
         df = df.sort_values("x")
@@ -450,10 +451,10 @@ def test_sort_values_add():
         assert_eq(df, pdf, sort_results=False)
 
 
-@pytest.mark.parametrize("null_value", [None, lib.NaT, lib.NA])
+@pytest.mark.parametrize("null_value", [None, pd.NaT, pd.NA])
 def test_index_nulls(null_value):
     "Setting the index with some non-numeric null raises error"
-    df = lib.DataFrame(
+    df = pd.DataFrame(
         {"numeric": [1, 2, 3, 4], "non_numeric": ["foo", "bar", "foo", "bar"]}
     )
     ddf = from_pandas(df, npartitions=2)
@@ -461,6 +462,25 @@ def test_index_nulls(null_value):
         ddf.set_index(
             ddf["non_numeric"].map({"foo": "foo", "bar": null_value})
         ).compute()
+
+
+@pytest.mark.xfail(not DASK_GT_20231201, reason="needed changes in dask/dask")
+@pytest.mark.parametrize("freq", ["16H", "-16H"])
+def test_set_index_with_dask_dt_index(freq):
+    values = {
+        "x": [1, 2, 3, 4] * 3,
+        "y": [10, 20, 30] * 4,
+        "name": ["Alice", "Bob"] * 6,
+    }
+    date_index = pd.date_range(
+        start="2022-02-22", freq=freq, periods=12
+    ) - pd.Timedelta(seconds=30)
+    df = pd.DataFrame(values, index=date_index)
+    ddf = from_pandas(df, npartitions=3, sort=False)
+    # specify a different date index entirely
+    day_index = ddf.index.dt.floor("D")
+    result = ddf.set_index(day_index)
+    assert_eq(result, pd.DataFrame(values, index=date_index.floor("D")))
 
 
 def test_set_index_sort_values_shuffle_options(df, pdf):
@@ -492,7 +512,7 @@ def test_set_index_predicate_pushdown(df, pdf):
 
 
 def test_set_index_with_explicit_divisions():
-    pdf = lib.DataFrame({"x": [4, 1, 2, 5]}, index=[10, 20, 30, 40])
+    pdf = pd.DataFrame({"x": [4, 1, 2, 5]}, index=[10, 20, 30, 40])
 
     df = from_pandas(pdf, npartitions=2)
 
@@ -517,7 +537,7 @@ def test_set_index_sort_values_one_partition(pdf):
     divisions_lru.data = OrderedDict()
     df = from_pandas(pdf, sort=False)
     query = df.sort_values("x").optimize(fuse=False)
-    assert query.divisions == (None, None)
+    assert query.divisions == (0, 99)
     assert_eq(pdf.sort_values("x"), query, sort_results=False)
     assert len(divisions_lru) == 0
 
@@ -558,7 +578,7 @@ def test_shuffle(df, pdf):
 
 def test_empty_partitions():
     # See https://github.com/dask/dask/issues/2408
-    df = lib.DataFrame({"a": list(range(10))})
+    df = pd.DataFrame({"a": list(range(10))})
     df["b"] = df["a"] % 3
     df["c"] = df["b"].astype(str)
 
