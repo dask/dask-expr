@@ -6,7 +6,7 @@ import inspect
 import warnings
 from collections.abc import Callable, Hashable, Mapping
 from numbers import Integral, Number
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Iterable, Literal
 
 import dask.dataframe.methods as methods
 import numpy as np
@@ -2554,6 +2554,25 @@ def from_map(
     if "token" in kwargs:
         # This option doesn't really make sense in dask-expr
         raise NotImplementedError("dask_expr does not support a token argument.")
+
+    lengths = set()
+    iterables = list(iterables)
+    for i, iterable in enumerate(iterables):
+        if not isinstance(iterable, Iterable):
+            raise ValueError(
+                f"All elements of `iterables` must be Iterable, got {type(iterable)}"
+            )
+        try:
+            lengths.add(len(iterable))
+        except (AttributeError, TypeError):
+            iterables[i] = list(iterable)
+            lengths.add(len(iterables[i]))
+    if len(lengths) == 0:
+        raise ValueError("`from_map` requires at least one Iterable input")
+    elif len(lengths) > 1:
+        raise ValueError("All `iterables` must have the same length")
+    if lengths == {0}:
+        raise ValueError("All `iterables` must have a non-zero length")
 
     # Check if `func` supports column projection
     allow_projection = True

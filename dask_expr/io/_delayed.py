@@ -30,7 +30,10 @@ class _DelayedExpr(Expr):
         return self.obj.key
 
     def _layer(self) -> dict:
-        return {(self.obj.key, 0): self.obj.dask.to_dict()[self.obj.key]}
+        dc = self.obj.dask.to_dict().copy()
+        dc[(self.obj.key, 0)] = dc[self.obj.key]
+        dc.pop(self.obj.key)
+        return dc
 
     def _divisions(self):
         return (None, None)
@@ -120,6 +123,10 @@ def from_delayed(
             "divisions='sorted' not supported, please calculate the divisions "
             "yourself."
         )
+    elif divisions is not None:
+        divs = list(divisions)
+        if len(divs) != len(dfs) + 1:
+            raise ValueError("divisions should be a tuple of len(dfs) + 1")
 
     dfs = [
         delayed(df) if not isinstance(df, Delayed) and hasattr(df, "key") else df
