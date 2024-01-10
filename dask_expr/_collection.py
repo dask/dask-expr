@@ -8,12 +8,12 @@ from collections.abc import Callable, Hashable, Mapping
 from numbers import Integral, Number
 from typing import Any, ClassVar, Literal
 
+import dask.dataframe.methods as methods
 import numpy as np
 import pandas as pd
 from dask import compute
 from dask.array import Array
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
-from dask.dataframe import methods
 from dask.dataframe.accessor import CachedAccessor
 from dask.dataframe.core import (
     _concat,
@@ -1005,6 +1005,25 @@ class FrameBase(DaskMethodsMixin):
         from dask_expr.io.hdf import to_hdf
 
         return to_hdf(self, path_or_buf, key, mode, append, **kwargs)
+
+    def to_delayed(self):
+        """Convert into a list of ``dask.delayed`` objects, one per partition.
+
+        Parameters
+        ----------
+        optimize_graph : bool, optional
+            If True [default], the graph is optimized before converting into
+            ``dask.delayed`` objects.
+
+        Examples
+        --------
+        >>> partitions = df.to_delayed()  # doctest: +SKIP
+
+        See Also
+        --------
+        dask.dataframe.from_delayed
+        """
+        return self.to_dask_dataframe().to_delayed()
 
 
 # Add operator attributes
@@ -2398,6 +2417,7 @@ def read_parquet(
             filesystem=filesystem,
             engine=_set_parquet_engine(engine),
             kwargs=kwargs,
+            _series=isinstance(columns, str),
         )
     )
 

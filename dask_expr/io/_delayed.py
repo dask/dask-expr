@@ -30,7 +30,7 @@ class _DelayedExpr(Expr):
         return self.obj.key
 
     def _layer(self) -> dict:
-        return self.obj.dask.to_dict()
+        return {(self.obj.key, 0): self.obj.dask.to_dict()[self.obj.key]}
 
     def _divisions(self):
         return (None, None)
@@ -70,10 +70,10 @@ class FromDelayed(PartitionsFiltered, BlockwiseIO):
         if self.verify_meta:
             return (
                 functools.partial(check_meta, meta=self._meta, funcname="from_delayed"),
-                key,
+                (key, 0),
             )
         else:
-            return identity, key
+            return identity, (key, 0)
 
 
 def identity(x):
