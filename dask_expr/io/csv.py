@@ -10,6 +10,9 @@ class ReadCSV(PartitionsFiltered, BlockwiseIO):
         "filename",
         "columns",
         "header",
+        "sep",
+        "names",
+        "engine",
         "_partitions",
         "storage_options",
         "_series",
@@ -17,6 +20,9 @@ class ReadCSV(PartitionsFiltered, BlockwiseIO):
     _defaults = {
         "columns": None,
         "header": "infer",
+        "sep": ",",
+        "names": None,
+        "engine": "c",
         "_partitions": None,
         "storage_options": None,
         "_series": False,
@@ -33,6 +39,8 @@ class ReadCSV(PartitionsFiltered, BlockwiseIO):
             usecols=_convert_to_list(self.operand("columns")),
             header=self.header,
             storage_options=self.storage_options,
+            sep=self.sep,
+            names=self.names,
         )
 
     @functools.cached_property
