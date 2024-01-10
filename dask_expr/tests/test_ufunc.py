@@ -5,12 +5,12 @@ import pytest
 from dask_expr import Index, from_pandas
 from dask_expr.tests._util import _backend_library, assert_eq
 
-lib = _backend_library()
+pd = _backend_library()
 
 
 @pytest.fixture
 def pdf():
-    pdf = lib.DataFrame({"x": range(100)})
+    pdf = pd.DataFrame({"x": range(100)})
     pdf["y"] = pdf.x // 7  # Not unique; duplicates span different partitions
     yield pdf
 
