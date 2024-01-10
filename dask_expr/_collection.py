@@ -679,14 +679,34 @@ class FrameBase(DaskMethodsMixin):
         return self.to_dask_array()
 
     def sum(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
-        return new_collection(
+        result = new_collection(
             self.expr.sum(skipna, numeric_only, min_count, split_every)
         )
+        return self._apply_min_count(result, min_count)
+
+    def _apply_min_count(self, result, min_count):
+        if min_count:
+            cond = self.notnull().sum() >= min_count
+            cond_meta = cond._meta
+            if not is_series_like(cond_meta):
+                result = result.to_series()
+                cond = cond.to_series()
+
+            result = result.where(cond, other=np.nan)
+            if not is_series_like(cond_meta):
+                return result.min()
+            else:
+                return result
+        else:
+            return result
 
     def prod(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
-        return new_collection(
+        result = new_collection(
             self.expr.prod(skipna, numeric_only, min_count, split_every)
         )
+        return self._apply_min_count(result, min_count)
+
+    product = prod
 
     def var(self, axis=0, skipna=True, ddof=1, numeric_only=False, split_every=False):
         _raise_if_object_series(self, "var")
@@ -700,16 +720,14 @@ class FrameBase(DaskMethodsMixin):
             self.expr.std(axis, skipna, ddof, numeric_only, split_every=split_every)
         )
 
-    def mean(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
+    def mean(self, skipna=True, numeric_only=False, split_every=False):
         _raise_if_object_series(self, "mean")
         return new_collection(
             self.expr.mean(skipna, numeric_only, split_every=split_every)
         )
 
-    def max(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
-        return new_collection(
-            self.expr.max(skipna, numeric_only, min_count, split_every)
-        )
+    def max(self, skipna=True, numeric_only=False, split_every=False):
+        return new_collection(self.expr.max(skipna, numeric_only, split_every))
 
     def any(self, skipna=True, split_every=False):
         return new_collection(self.expr.any(skipna, split_every))
@@ -723,10 +741,8 @@ class FrameBase(DaskMethodsMixin):
     def idxmax(self, skipna=True, numeric_only=False):
         return new_collection(self.expr.idxmax(skipna, numeric_only))
 
-    def min(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
-        return new_collection(
-            self.expr.min(skipna, numeric_only, min_count, split_every)
-        )
+    def min(self, skipna=True, numeric_only=False, split_every=False):
+        return new_collection(self.expr.min(skipna, numeric_only, split_every))
 
     def count(self, numeric_only=False, split_every=False):
         return new_collection(self.expr.count(numeric_only, split_every))
@@ -872,6 +888,83 @@ class FrameBase(DaskMethodsMixin):
         cls, data, *, npartitions=1, orient="columns", dtype=None, columns=None
     ):
         return from_dict(data, npartitions, orient, dtype=dtype, columns=columns)
+
+    def to_json(self, filename, *args, **kwargs):
+        """See dd.to_json docstring for more information"""
+        from dask.dataframe.io import to_json
+
+        return to_json(self, filename, *args, **kwargs)
+
+    def to_sql(
+        self,
+        name: str,
+        uri: str,
+        schema=None,
+        if_exists: str = "fail",
+        index: bool = True,
+        index_label=None,
+        chunksize=None,
+        dtype=None,
+        method=None,
+        compute=True,
+        parallel=False,
+        engine_kwargs=None,
+    ):
+        from dask_expr.io.sql import to_sql
+
+        return to_sql(
+            self,
+            name,
+            uri,
+            schema=schema,
+            if_exists=if_exists,
+            index=index,
+            index_label=index_label,
+            chunksize=chunksize,
+            dtype=dtype,
+            method=method,
+            compute=compute,
+            parallel=parallel,
+            engine_kwargs=engine_kwargs,
+        )
+
+    def to_orc(self, path, *args, **kwargs):
+        """See dd.to_orc docstring for more information"""
+        from dask_expr.io.orc import to_orc
+
+        return to_orc(self, path, *args, **kwargs)
+
+    def to_csv(self, filename, **kwargs):
+        """See dd.to_csv docstring for more information"""
+        from dask_expr.io.csv import to_csv
+
+        return to_csv(self, filename, **kwargs)
+
+    def to_records(self, index=False, lengths=None):
+        from dask_expr.io.records import to_records
+
+        if lengths is True:
+            lengths = tuple(self.map_partitions(len).compute())
+
+        frame = self.to_dask_dataframe()
+        records = to_records(frame)
+
+        chunks = frame._validate_chunks(records, lengths)
+        records._chunks = (chunks[0],)
+
+        return records
+
+    def to_bag(self, index=False, format="tuple"):
+        """Create a Dask Bag from a Series"""
+        from dask_expr.io.bag import to_bag
+
+        return to_bag(self, index, format=format)
+
+    def to_hdf(self, path_or_buf, key, mode="a", append=False, **kwargs):
+        """See dd.to_hdf docstring for more information"""
+        from dask_expr.io.hdf import to_hdf
+
+        return to_hdf(self, path_or_buf, key, mode, append, **kwargs)
 
 
 # Add operator attributes
@@ -1745,11 +1838,6 @@ class Series(FrameBase):
     def memory_usage(self, deep=False, index=True):
         return new_collection(MemoryUsageFrame(self, deep=deep, _index=index))
 
-    def product(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
-        return new_collection(
-            self.expr.prod(skipna, numeric_only, min_count, split_every)
-        )
-
     def unique(self, split_every=None, split_out=True, shuffle_method=None):
         shuffle_method = _get_shuffle_preferring_order(shuffle_method)
         return new_collection(Unique(self, split_every, split_out, shuffle_method))
@@ -2179,6 +2267,9 @@ def read_csv(path, *args, usecols=None, **kwargs):
     if not isinstance(path, str):
         path = stringify_path(path)
     return new_collection(ReadCSV(path, *args, columns=usecols, **kwargs))
+
+
+read_table = read_csv
 
 
 def read_parquet(
