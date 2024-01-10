@@ -242,22 +242,6 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
         if isinstance(partitioning_index, Expr) or partitioning_index != [
             "_partitions"
         ]:
-            if cls.lazy_hash_support and not isinstance(partitioning_index, Expr):
-                # Don't need to assign "_partitions" column
-                # if we are shuffling on a list of columns
-                nset = set(partitioning_index)
-                if (
-                    nset & nset.intersection(set(frame.columns)) == nset
-                    and not index_shuffle
-                ):
-                    return cls(
-                        frame,
-                        partitioning_index,
-                        npartitions_out,
-                        ignore_index,
-                        options,
-                    )
-
             if isinstance(partitioning_index, Expr):
                 if partitioning_index.ndim == 1:
                     col = "_partitions_0"
@@ -273,11 +257,19 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
                         for i in range(len(partitioning_index.columns))
                     ]
                 drop_columns = partitioning_index.copy()
-            elif index_shuffle and expr.backend != "tasks":
+            elif index_shuffle:
                 frame = Assign(frame, "_partitions_0", frame.index)
                 partitioning_index = ["_partitions_0"]
                 drop_columns = partitioning_index.copy()
                 index_shuffle = False
+            else:
+                cs = [col for col in partitioning_index if col not in frame.columns]
+                if len(cs) == 1:
+                    frame = Assign(frame, "_partitions_0", frame.index)
+                    partitioning_index = partitioning_index.copy()
+                    idx = partitioning_index.index(cs[0])
+                    partitioning_index[idx] = "_partitions_0"
+                    drop_columns = ["_partitions_0"]
 
             dtypes = {}
             if expr.cast_types and not index_shuffle:
