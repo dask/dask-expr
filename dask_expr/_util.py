@@ -102,13 +102,13 @@ def is_valid_nth_dtype(dtype):
 
 @normalize_token.register(LambdaType)
 def _normalize_lambda(func):
-    # free functions also are instances of LambdaType
-    # to be more sure, check the name
+    # Free functions also are instances of LambdaType.
+    # To be more sure, check the name
     # and if cloudpickle can deterministically pickle it:
     # ref: https://github.com/cloudpipe/cloudpickle/issues/385
-    result = str(func)
-    if func.__name__ == "<lambda>" or "<locals>" in result:
-        return result
+    func_str = str(func)
+    if func.__name__ == "<lambda>" or "<locals>" in func_str:
+        return func_str
     return normalize_object(func)
 
 
