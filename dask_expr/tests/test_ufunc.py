@@ -47,6 +47,6 @@ def test_ufunc(df, pdf):
     if isinstance(npfunc, np.ufunc):
         assert isinstance(npfunc(df.index), Index)
     else:
-        assert isinstance(npfunc(df.index), lib.Index)
+        assert isinstance(npfunc(df.index), pd.Index)
 
     assert_eq(npfunc(df.index), npfunc(pdf.index))
