@@ -262,6 +262,13 @@ def test_nbytes(pdf, df):
     assert_eq(df.x.nbytes, pdf.x.nbytes)
 
 
+def test_pop(pdf, df):
+    s = df.pop("y")
+    assert s.name == "y"
+    assert df.columns == ["x"]
+    assert_eq(df, pdf[["x"]])
+
+
 def test_mode():
     pdf = pd.DataFrame({"x": [1, 2, 3, 1, 2]})
     df = from_pandas(pdf, npartitions=3)

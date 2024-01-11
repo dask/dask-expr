@@ -1766,6 +1766,11 @@ class DataFrame(FrameBase):
         ]
         return concat(stats, axis=1)
 
+    def pop(self, item):
+        out = self[item]
+        self._expr = expr.Drop(self, columns=[item])
+        return out
+
     def info(self, buf=None, verbose=False, memory_usage=False):
         """
         Concise summary of a Dask DataFrame
