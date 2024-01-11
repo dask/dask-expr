@@ -2830,7 +2830,7 @@ def handle_out(out, result):
             out = out[0]
         elif len(out) > 1:
             raise NotImplementedError(
-                "The `out` parameter with length > 1 is not supported",
+                "The `out` parameter with length > 1 is not supported"
             )
         else:
             out = None
