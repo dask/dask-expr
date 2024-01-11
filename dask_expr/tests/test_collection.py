@@ -300,6 +300,17 @@ def test_dot():
         dask_s1.dot(da.array([1, 2, 3, 4]))
 
 
+def test_pipe():
+    df = pd.DataFrame({"x": range(50), "y": range(50, 100)})
+    ddf = from_pandas(df, npartitions=4)
+
+    def f(x, y, z=0):
+        return x + y + z
+
+    assert_eq(ddf.pipe(f, 1, z=2), f(ddf, 1, z=2))
+    assert_eq(ddf.x.pipe(f, 1, z=2), f(ddf.x, 1, z=2))
+
+
 def test_mode():
     pdf = pd.DataFrame({"x": [1, 2, 3, 1, 2]})
     df = from_pandas(pdf, npartitions=3)
