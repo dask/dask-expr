@@ -1049,7 +1049,7 @@ class GroupByCumulative(Expr, GroupByBase):
         frame = MapPartitions(
             self.frame,
             _apply_chunk,
-            self._meta,
+            meta,
             True,
             True,
             False,
