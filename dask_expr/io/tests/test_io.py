@@ -239,6 +239,13 @@ def test_io_fusion_merge(tmpdir):
     )
 
 
+def test_io_fusion_zero(tmpdir):
+    pdf = pd.DataFrame({c: range(10) for c in "ab"})
+    dd.from_pandas(pdf, 10).to_parquet(tmpdir)
+    result = read_parquet(tmpdir, columns=[])
+    assert_eq(result, pdf[[]])
+
+
 @pytest.mark.parametrize("fmt", ["parquet", "csv", "pandas"])
 def test_io_culling(tmpdir, fmt):
     pdf = pd.DataFrame({c: range(10) for c in "abcde"})
@@ -574,5 +581,5 @@ def test_from_pandas_chunksize():
     assert df.npartitions == 1
     assert_eq(df, pdf)
 
-    with pytest.raises(TypeError, match="chunksize and npartitions"):
+    with pytest.raises(ValueError, match="Exactly one of npartitions and chunksize"):
         from_pandas(pdf, npartitions=2, chunksize=2)

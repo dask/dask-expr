@@ -6,19 +6,20 @@ import inspect
 import warnings
 from collections.abc import Callable, Hashable, Mapping
 from numbers import Integral, Number
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Iterable, Literal
 
+import dask.dataframe.methods as methods
 import numpy as np
 import pandas as pd
 from dask import compute
 from dask.array import Array
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
-from dask.dataframe import methods
 from dask.dataframe.accessor import CachedAccessor
 from dask.dataframe.core import (
     _concat,
     _Frame,
     check_divisions,
+    has_parallel_type,
     is_dataframe_like,
     is_index_like,
     is_series_like,
@@ -42,6 +43,7 @@ from dask.utils import (
 )
 from fsspec.utils import stringify_path
 from pandas.api.types import (
+    is_any_real_numeric_dtype,
     is_bool_dtype,
     is_datetime64_any_dtype,
     is_numeric_dtype,
@@ -977,6 +979,25 @@ class FrameBase(DaskMethodsMixin):
         from dask_expr.io.hdf import to_hdf
 
         return to_hdf(self, path_or_buf, key, mode, append, **kwargs)
+
+    def to_delayed(self):
+        """Convert into a list of ``dask.delayed`` objects, one per partition.
+
+        Parameters
+        ----------
+        optimize_graph : bool, optional
+            If True [default], the graph is optimized before converting into
+            ``dask.delayed`` objects.
+
+        Examples
+        --------
+        >>> partitions = df.to_delayed()  # doctest: +SKIP
+
+        See Also
+        --------
+        dask.dataframe.from_delayed
+        """
+        return self.to_dask_dataframe().to_delayed()
 
 
 # Add operator attributes
@@ -2265,9 +2286,27 @@ def optimize(collection, fuse=True):
 
 def from_pandas(data, npartitions=None, sort=True, chunksize=None):
     if chunksize is not None and npartitions is not None:
-        raise TypeError("can't pass chunksize and npartitions")
+        raise ValueError("Exactly one of npartitions and chunksize must be specified.")
     elif chunksize is None and npartitions is None:
         npartitions = 1
+
+    if not has_parallel_type(data):
+        raise TypeError("Input must be a pandas DataFrame or Series.")
+
+    if data.index.isna().any() and not is_any_real_numeric_dtype(data.index):
+        raise NotImplementedError(
+            "Index in passed data is non-numeric and contains nulls, which Dask does not entirely support.\n"
+            "Consider passing `data.loc[~data.isna()]` instead."
+        )
+
+    if npartitions is not None and not isinstance(npartitions, int):
+        raise TypeError(
+            "Please provide npartitions as an int, or possibly as None if you specify chunksize."
+        )
+    elif chunksize is not None and not isinstance(chunksize, int):
+        raise TypeError(
+            "Please provide chunksize as an int, or possibly as None if you specify npartitions."
+        )
 
     from dask_expr.io.io import FromPandas
 
@@ -2374,19 +2413,61 @@ def from_dask_dataframe(ddf: _Frame, optimize: bool = True) -> FrameBase:
 def from_dask_array(x, columns=None, index=None, meta=None):
     from dask.dataframe.io import from_dask_array
 
+    if isinstance(index, FrameBase):
+        index = index.to_dask_dataframe()
+
     df = from_dask_array(x, columns=columns, index=index, meta=meta)
     return from_dask_dataframe(df, optimize=True)
 
 
-def read_csv(path, *args, usecols=None, **kwargs):
+def read_csv(
+    path,
+    *args,
+    header="infer",
+    usecols=None,
+    dtype_backend=None,
+    storage_options=None,
+    **kwargs,
+):
     from dask_expr.io.csv import ReadCSV
 
     if not isinstance(path, str):
         path = stringify_path(path)
-    return new_collection(ReadCSV(path, *args, columns=usecols, **kwargs))
+    return new_collection(
+        ReadCSV(
+            path,
+            columns=usecols,
+            dtype_backend=dtype_backend,
+            storage_options=storage_options,
+            kwargs=kwargs,
+            header=header,
+        )
+    )
 
 
-read_table = read_csv
+def read_table(
+    path,
+    *args,
+    header="infer",
+    usecols=None,
+    dtype_backend=None,
+    storage_options=None,
+    **kwargs,
+):
+    from dask_expr.io.csv import ReadTable
+
+    if not isinstance(path, str):
+        path = stringify_path(path)
+    return new_collection(
+        ReadTable(
+            path,
+            columns=usecols,
+            dtype_backend=dtype_backend,
+            storage_options=storage_options,
+            kwargs=kwargs,
+            header=header,
+        )
+    )
 
 
 def read_parquet(
@@ -2433,6 +2514,7 @@ def read_parquet(
             filesystem=filesystem,
             engine=_set_parquet_engine(engine),
             kwargs=kwargs,
+            _series=isinstance(columns, str),
         )
     )
 
@@ -2569,6 +2651,25 @@ def from_map(
     if "token" in kwargs:
         # This option doesn't really make sense in dask-expr
         raise NotImplementedError("dask_expr does not support a token argument.")
+
+    lengths = set()
+    iterables = list(iterables)
+    for i, iterable in enumerate(iterables):
+        if not isinstance(iterable, Iterable):
+            raise ValueError(
+                f"All elements of `iterables` must be Iterable, got {type(iterable)}"
+            )
+        try:
+            lengths.add(len(iterable))
+        except (AttributeError, TypeError):
+            iterables[i] = list(iterable)
+            lengths.add(len(iterables[i]))
+    if len(lengths) == 0:
+        raise ValueError("`from_map` requires at least one Iterable input")
+    elif len(lengths) > 1:
+        raise ValueError("All `iterables` must have the same length")
+    if lengths == {0}:
+        raise ValueError("All `iterables` must have a non-zero length")
 
     # Check if `func` supports column projection
     allow_projection = True
@@ -2840,13 +2941,18 @@ def handle_out(out, result):
     """Handle out parameters
 
     If out is a dask.DataFrame, dask.Series or dask.Scalar then
-    this overwrites the contents of it with the result
+    this overwrites the contents of it with the result. The method
+    replaces the expression of the out parameter with the result
+    from this operation to perform something akin to an inplace
+    modification.
     """
     if isinstance(out, tuple):
         if len(out) == 1:
             out = out[0]
         elif len(out) > 1:
-            raise NotImplementedError("The out parameter is not fully supported")
+            raise NotImplementedError(
+                "The `out` parameter with length > 1 is not supported"
+            )
         else:
             out = None
 
