@@ -2820,7 +2820,10 @@ def handle_out(out, result):
     """Handle out parameters
 
     If out is a dask.DataFrame, dask.Series or dask.Scalar then
-    this overwrites the contents of it with the result
+    this overwrites the contents of it with the result. The method
+    replaces the expression of the out parameter with the result
+    from this operation to perform something akin to an inplace
+    modification.
     """
     if isinstance(out, tuple):
         if len(out) == 1:
