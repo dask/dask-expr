@@ -1403,8 +1403,25 @@ class DataFrame(FrameBase):
             expr.Sample(self, state_data=state_data, frac=frac, replace=replace)
         )
 
-    def rename(self, columns):
+    def rename(self, index=None, columns=None):
+        if index is not None:
+            raise ValueError("Cannot rename index.")
         return new_collection(expr.RenameFrame(self, columns=columns))
+
+    def squeeze(self, axis=None):
+        if axis in [None, 1]:
+            if len(self.columns) == 1:
+                return self[self.columns[0]]
+            else:
+                return self
+
+        elif axis == 0:
+            raise NotImplementedError(
+                f"{type(self)} does not support squeeze along axis 0"
+            )
+
+        else:
+            raise ValueError(f"No axis {axis} for object type {type(self)}")
 
     def explode(self, column):
         column = _convert_to_list(column)
@@ -2012,6 +2029,9 @@ class Series(FrameBase):
             )
         )
 
+    def squeeze(self):
+        return self
+
     def dropna(self):
         return new_collection(expr.DropnaSeries(self))
 
@@ -2216,6 +2236,19 @@ class Index(Series):
 
     def shift(self, periods=1, freq=None):
         return new_collection(expr.ShiftIndex(self, periods, freq))
+
+    def map(self, arg, na_action=None, meta=None, is_monotonic=False):
+        if isinstance(arg, Series):
+            if not expr.are_co_aligned(self.expr, arg.expr):
+                if not self.divisions == arg.divisions:
+                    raise NotImplementedError(
+                        "passing a Series as arg isn't implemented yet"
+                    )
+        return new_collection(
+            expr.Map(
+                self, arg=arg, na_action=na_action, meta=meta, is_monotonic=is_monotonic
+            )
+        )
 
     def __dir__(self):
         o = set(dir(type(self)))

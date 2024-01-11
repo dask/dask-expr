@@ -206,6 +206,55 @@ def test_bool(df):
             bool(cond)
 
 
+def test_map_index():
+    df = pd.DataFrame({"x": [1, 2, 3, 4, 5]})
+    ddf = from_pandas(df, npartitions=2)
+    assert ddf.known_divisions is True
+
+    cleared = ddf.index.map(lambda x: x * 10)
+    assert cleared.known_divisions is False
+
+    applied = ddf.index.map(lambda x: x * 10, is_monotonic=True)
+    assert applied.known_divisions is True
+    assert applied.divisions == tuple(x * 10 for x in ddf.divisions)
+
+
+def test_squeeze():
+    df = pd.DataFrame({"x": [1, 3, 6]})
+    df2 = pd.DataFrame({"x": [0]})
+    s = pd.Series({"test": 0, "b": 100})
+
+    ddf = from_pandas(df, 3)
+    ddf2 = from_pandas(df2, 3)
+    ds = from_pandas(s, 2)
+
+    assert_eq(df.squeeze(), ddf.squeeze())
+    assert_eq(pd.Series([0], name="x"), ddf2.squeeze())
+    assert_eq(ds.squeeze(), s.squeeze())
+
+    with pytest.raises(
+        NotImplementedError, match=f"{type(ddf)} does not support squeeze along axis 0"
+    ):
+        ddf.squeeze(axis=0)
+
+    with pytest.raises(ValueError, match=f"No axis {2} for object type {type(ddf)}"):
+        ddf.squeeze(axis=2)
+
+    with pytest.raises(ValueError, match=f"No axis test for object type {type(ddf)}"):
+        ddf.squeeze(axis="test")
+
+
+def test_index_divisions():
+    df = pd.DataFrame({"x": [1, 2, 3, 4, 5]})
+    ddf = from_pandas(df, npartitions=2)
+
+    assert_eq(ddf.index + 1, df.index + 1)
+    # dask-expr keeps the range index
+    assert_eq(ddf.index + ddf.index, df.index + df.index, check_dtype=False)
+    assert_eq(10 * ddf.index, 10 * df.index)
+    assert_eq(-ddf.index, -df.index)
+
+
 @xfail_gpu("nbytes not supported by cudf")
 def test_nbytes(pdf, df):
     with pytest.raises(NotImplementedError, match="nbytes is not implemented"):
