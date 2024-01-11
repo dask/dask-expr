@@ -1000,6 +1000,23 @@ class FrameBase(DaskMethodsMixin):
         """
         return self.to_dask_dataframe().to_delayed()
 
+    def to_backend(self, backend: str | None = None, **kwargs):
+        """Move to a new DataFrame backend
+
+        Parameters
+        ----------
+        backend : str, Optional
+            The name of the new backend to move to. The default
+            is the current "dataframe.backend" configuration.
+
+        Returns
+        -------
+        DataFrame, Series or Index
+        """
+        from dask.dataframe.io import to_backend
+
+        return to_backend(self.to_dask_dataframe(), backend=backend, **kwargs)
+
     def dot(self, other, meta=no_default):
         if not isinstance(other, FrameBase):
             raise TypeError("The second operand must be a dask dataframe")
