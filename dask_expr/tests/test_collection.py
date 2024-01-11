@@ -269,6 +269,37 @@ def test_pop(pdf, df):
     assert_eq(df, pdf[["x"]])
 
 
+def test_dot():
+    import dask.array as da
+
+    s1 = pd.Series([1, 2, 3, 4])
+    s2 = pd.Series([4, 5, 6, 6])
+    df = pd.DataFrame({"one": s1, "two": s2})
+
+    dask_s1 = from_pandas(s1, npartitions=1)
+    dask_df = from_pandas(df, npartitions=1)
+    dask_s2 = from_pandas(s2, npartitions=1)
+
+    assert_eq(s1.dot(s2), dask_s1.dot(dask_s2))
+    assert_eq(s1.dot(df), dask_s1.dot(dask_df))
+
+    # With partitions
+    partitioned_s1 = from_pandas(s1, npartitions=2)
+    partitioned_df = from_pandas(df, npartitions=2)
+    partitioned_s2 = from_pandas(s2, npartitions=2)
+
+    assert_eq(s1.dot(s2), partitioned_s1.dot(partitioned_s2))
+    assert_eq(s1.dot(df), partitioned_s1.dot(partitioned_df))
+
+    # Test passing meta kwarg
+    res = dask_s1.dot(dask_df, meta=pd.Series([1], name="test_series")).compute()
+    assert res.name == "test_series"
+
+    # Test validation of second operand
+    with pytest.raises(TypeError):
+        dask_s1.dot(da.array([1, 2, 3, 4]))
+
+
 def test_mode():
     pdf = pd.DataFrame({"x": [1, 2, 3, 1, 2]})
     df = from_pandas(pdf, npartitions=3)

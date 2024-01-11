@@ -35,6 +35,7 @@ from dask.dataframe.utils import (
 )
 from dask.utils import (
     IndexCallable,
+    M,
     get_default_shuffle_method,
     memory_repr,
     put_lines,
@@ -998,6 +999,24 @@ class FrameBase(DaskMethodsMixin):
         dask.dataframe.from_delayed
         """
         return self.to_dask_dataframe().to_delayed()
+
+    def dot(self, other, meta=no_default):
+        if not isinstance(other, FrameBase):
+            raise TypeError("The second operand must be a dask dataframe")
+
+        if isinstance(other, DataFrame):
+            s = self.map_partitions(M.dot, other, meta=meta)
+            return s.groupby(by=s.index).apply(
+                lambda x: x.sum(skipna=False), meta=s._meta_nonempty
+            )
+
+        return self.map_partitions(_dot_series, other, meta=meta).sum(skipna=False)
+
+
+def _dot_series(*args, **kwargs):
+    # .sum() is invoked on each partition before being applied to all
+    # partitions. The return type is expected to be a series, not a numpy object
+    return meta_series_constructor(args[0])(M.dot(*args, **kwargs))
 
 
 # Add operator attributes
