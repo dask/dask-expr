@@ -2826,7 +2826,7 @@ def handle_out(out, result):
         if len(out) == 1:
             out = out[0]
         elif len(out) > 1:
-            raise NotImplementedError("The out parameter is not fully supported")
+            raise NotImplementedError("The `out` parameter with length > 1 is not supported")
         else:
             out = None
 
