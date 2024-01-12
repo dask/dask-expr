@@ -1160,6 +1160,18 @@ def test_from_pandas(pdf):
     assert "pandas" in df._name
 
 
+def test_ffill_bfill_all_nan_partition():
+    ser = pd.Series([1, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, 2])
+    dser = from_pandas(ser, npartitions=3)
+    with pytest.raises(ValueError, match="All NaN partition"):
+        dser.bfill(limit=None).compute()
+    with pytest.raises(ValueError, match="All NaN partition"):
+        dser.ffill(limit=None).compute()
+
+    assert_eq(dser.bfill(limit=2), ser.bfill(limit=2))
+    assert_eq(dser.ffill(limit=2), ser.ffill(limit=2))
+
+
 def test_copy(df):
     original = df.copy()
     columns = tuple(original.columns)

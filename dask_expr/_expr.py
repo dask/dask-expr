@@ -2474,6 +2474,17 @@ class Diff(MapOverlap):
         return 0 if self.periods > 0 else -self.periods
 
 
+class FillnaCheck(Blockwise):
+    _parameters = ["frame", "method", "skip_check"]
+    operation = staticmethod(methods.fillna_check)
+    _projection_passthrough = True
+
+    def _task(self, index: int):
+        args = [self._blockwise_arg(op, index) for op in self._args]
+        args[-1] = args[-1] == self.skip_check
+        return (self.operation,) + tuple(args)
+
+
 class FFill(MapOverlap):
     _parameters = ["frame", "limit"]
     _defaults = {"limit": None}
