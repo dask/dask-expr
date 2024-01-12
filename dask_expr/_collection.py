@@ -1275,9 +1275,14 @@ class FrameBase(DaskMethodsMixin):
         -------
         DataFrame, Series or Index
         """
-        from dask.dataframe.io import to_backend
+        from dask.dataframe.backends import dataframe_creation_dispatch
 
-        return to_backend(self.to_dask_dataframe(), backend=backend, **kwargs)
+        # Get desired backend
+        backend = backend or dataframe_creation_dispatch.backend
+        # Check that "backend" has a registered entrypoint
+        backend_entrypoint = dataframe_creation_dispatch.dispatch(backend)
+        # Call `DataFrameBackendEntrypoint.to_backend`
+        return backend_entrypoint.to_backend(self, **kwargs)
 
     def dot(self, other, meta=no_default):
         if not isinstance(other, FrameBase):
