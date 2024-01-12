@@ -438,10 +438,7 @@ class Expr:
                 continue
             seen.add(expr._name)
 
-            try:
-                layers.append(expr._layer())
-            except Exception:
-                raise
+        layers.append(expr._layer())
             for operand in expr.dependencies():
                 stack.append(operand)
 
