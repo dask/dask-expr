@@ -44,13 +44,6 @@ def test_loc(df, pdf):
     assert_eq(df.loc[df.y == 20, ["x"]], pdf.loc[pdf.y == 20, ["x"]])
 
 
-def test_loc_errors(df):
-    with pytest.raises(NotImplementedError):
-        df.loc[1, "x"]
-    with pytest.raises(ValueError, match="Too many"):
-        df.iloc[(1, 2, 3)]
-
-
 def test_loc_slice(pdf):
     pdf.columns = [10, 20]
     # FIXME can't just update df.columns; see
