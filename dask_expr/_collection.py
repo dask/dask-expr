@@ -38,7 +38,6 @@ from dask.dataframe.utils import (
 from dask.utils import (
     IndexCallable,
     M,
-    get_default_shuffle_method,
     memory_repr,
     put_lines,
     random_state_data,
@@ -1658,12 +1657,6 @@ class DataFrame(FrameBase):
         shuffle_method = _get_shuffle_preferring_order(shuffle_method)
         if keep is False:
             raise NotImplementedError("drop_duplicates with keep=False")
-        if keep is not None and get_default_shuffle_method() == "p2p":
-            warnings.warn(
-                "P2P shuffle doesn't have ordering guarantees, so keep='first' and "
-                "keep='last' might return unexpected results",
-                UserWarning,
-            )
         elif keep is None:
             keep = "first"
         # Fail early if subset is not valid, e.g. missing columns
