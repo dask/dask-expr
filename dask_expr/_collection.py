@@ -275,7 +275,11 @@ class FrameBase(DaskMethodsMixin):
             is_integer_slice = any(
                 isinstance(i, Integral) for i in (other.start, other.step, other.stop)
             )
-            if is_integer_slice and not is_float_dtype(self.index.dtype):
+            if (
+                self.ndim == 2
+                and is_integer_slice
+                and not is_float_dtype(self.index.dtype)
+            ):
                 return self.iloc[other]
             else:
                 return self.loc[other]
