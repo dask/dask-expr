@@ -1850,7 +1850,7 @@ class DataFrame(FrameBase):
         if isinstance(other, list):
             if any([isinstance(c, FrameBase) for c in other]):
                 raise TypeError("List[FrameBase] not supported by set_index")
-            elif not sorted:
+            else:
                 raise NotImplementedError(
                     "Dask dataframe does not yet support multi-indexes.\n"
                     f"You tried to index with this index: {other}\n"
