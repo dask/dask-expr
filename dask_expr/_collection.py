@@ -76,6 +76,8 @@ from dask_expr._merge import JoinRecursive, Merge
 from dask_expr._quantile import SeriesQuantile
 from dask_expr._quantiles import RepartitionQuantiles
 from dask_expr._reductions import (
+    Corr,
+    Cov,
     DropDuplicates,
     IsMonotonicDecreasing,
     IsMonotonicIncreasing,
@@ -949,6 +951,40 @@ class FrameBase(DaskMethodsMixin):
             enforce_metadata=False,
         )
         return result
+
+    def _prepare_cov_corr(self, min_periods, numeric_only):
+        if min_periods is None:
+            min_periods = 2
+        elif min_periods < 2:
+            raise ValueError("min_periods must be >= 2")
+
+        self._meta.cov(numeric_only=numeric_only, min_periods=min_periods)
+
+        frame = self
+        if numeric_only:
+            numerics = self._meta._get_numeric_data()
+            if len(numerics.columns) != len(self.columns):
+                frame = frame[list(numerics.columns)]
+        return frame, min_periods
+
+    def _cov(
+        self, min_periods=None, numeric_only=False, split_every=False, scalar=False
+    ):
+        frame, min_periods = self._prepare_cov_corr(min_periods, numeric_only)
+        return new_collection(Cov(frame, min_periods, split_every, scalar))
+
+    def _corr(
+        self,
+        method="pearson",
+        min_periods=None,
+        numeric_only=False,
+        split_every=False,
+        scalar=False,
+    ):
+        if method != "pearson":
+            raise NotImplementedError("Only Pearson correlation has been implemented")
+        frame, min_periods = self._prepare_cov_corr(min_periods, numeric_only)
+        return new_collection(Corr(frame, min_periods, split_every, scalar))
 
     def mean(self, skipna=True, numeric_only=False, split_every=False):
         _raise_if_object_series(self, "mean")
@@ -2115,6 +2151,18 @@ class DataFrame(FrameBase):
 
         put_lines(buf, lines)
 
+    def cov(self, min_periods=None, numeric_only=False, split_every=False):
+        return self._cov(min_periods, numeric_only, split_every)
+
+    def corr(
+        self,
+        method="pearson",
+        min_periods=None,
+        numeric_only=False,
+        split_every=False,
+    ):
+        return self._corr(method, min_periods, numeric_only, split_every)
+
 
 class Series(FrameBase):
     """Series-like Expr Collection"""
@@ -2367,6 +2415,23 @@ class Series(FrameBase):
 
     def median_approximate(self, method="default"):
         return self.quantile(method=method)
+
+    def cov(self, other, min_periods=None, split_every=False):
+        if not isinstance(other, Series):
+            raise TypeError("other must be a dask.dataframe.Series")
+        df = concat([self, other], axis=1)
+        return df._cov(min_periods, True, split_every, scalar=True)
+
+    def corr(self, other, method="pearson", min_periods=None, split_every=False):
+        if not isinstance(other, Series):
+            raise TypeError("other must be a dask.dataframe.Series")
+        df = concat([self, other], axis=1)
+        return df._corr(method, min_periods, True, split_every, scalar=True)
+
+    def autocorr(self, lag=1, split_every=False):
+        if not isinstance(lag, Integral):
+            raise TypeError("lag must be an integer")
+        return self.corr(self if lag == 0 else self.shift(lag), split_every=split_every)
 
     def describe(
         self,
