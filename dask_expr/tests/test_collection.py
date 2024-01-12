@@ -1171,6 +1171,14 @@ def test_ffill_bfill_all_nan_partition():
     assert_eq(dser.bfill(limit=2), ser.bfill(limit=2))
     assert_eq(dser.ffill(limit=2), ser.ffill(limit=2))
 
+    ser = pd.Series([np.nan, np.nan, np.nan, 2, 3, np.nan])
+    dser = from_pandas(ser, npartitions=2)
+    assert_eq(dser.ffill(), ser.ffill())
+
+    ser = pd.Series([2, np.nan, 3, np.nan, np.nan, np.nan])
+    dser = from_pandas(ser, npartitions=2)
+    assert_eq(dser.bfill(), ser.bfill())
+
 
 def test_copy(df):
     original = df.copy()

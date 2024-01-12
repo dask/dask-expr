@@ -1081,7 +1081,7 @@ class FrameBase(DaskMethodsMixin):
             raise NotImplementedError("bfill on axis 1 not implemented")
         frame = self
         if limit is None:
-            frame = FillnaCheck(self, "ffill", lambda x: x.npartitions)
+            frame = FillnaCheck(self, "bfill", lambda x: x.npartitions - 1)
         return new_collection(BFill(frame, limit))
 
     def fillna(self, value=None):
