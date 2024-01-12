@@ -45,7 +45,6 @@ from dask.utils import (
 )
 from fsspec.utils import stringify_path
 from pandas.api.types import (
-    is_any_real_numeric_dtype,
     is_bool_dtype,
     is_datetime64_any_dtype,
     is_numeric_dtype,
@@ -104,6 +103,13 @@ from dask_expr._util import (
     is_scalar,
 )
 from dask_expr.io import FromPandasDivisions, FromScalars
+
+# Temporary/soft pandas<2 support to enable cudf dev
+try:
+    from pandas.api.types import is_any_real_numeric_dtype
+except ImportError:
+    is_any_real_numeric_dtype = None
+
 
 #
 # Utilities to wrap Expr API
@@ -2654,7 +2660,9 @@ def from_pandas(data, npartitions=None, sort=True, chunksize=None):
     if not has_parallel_type(data):
         raise TypeError("Input must be a pandas DataFrame or Series.")
 
-    if data.index.isna().any() and not is_any_real_numeric_dtype(data.index):
+    if is_any_real_numeric_dtype and (
+        data.index.isna().any() and not is_any_real_numeric_dtype(data.index)
+    ):
         raise NotImplementedError(
             "Index in passed data is non-numeric and contains nulls, which Dask does not entirely support.\n"
             "Consider passing `data.loc[~data.isna()]` instead."
