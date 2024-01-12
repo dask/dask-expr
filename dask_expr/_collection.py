@@ -55,6 +55,7 @@ from tlz import first
 
 from dask_expr import _expr as expr
 from dask_expr._align import AlignPartitions
+from dask_expr._backends import dataframe_creation_dispatch
 from dask_expr._categorical import CategoricalAccessor, Categorize, GetCategories
 from dask_expr._concat import Concat
 from dask_expr._datetime import DatetimeAccessor
@@ -1275,7 +1276,7 @@ class FrameBase(DaskMethodsMixin):
         -------
         DataFrame, Series or Index
         """
-        from dask.dataframe.backends import dataframe_creation_dispatch
+        from dask_expr._backends import dataframe_creation_dispatch
 
         # Get desired backend
         backend = backend or dataframe_creation_dispatch.backend
@@ -2710,6 +2711,7 @@ def from_graph(*args, **kwargs):
     return new_collection(FromGraph(*args, **kwargs))
 
 
+@dataframe_creation_dispatch.register_inplace("pandas")
 def from_dict(
     data,
     npartitions,
@@ -2786,6 +2788,7 @@ def from_dask_array(x, columns=None, index=None, meta=None):
     return from_dask_dataframe(df, optimize=True)
 
 
+@dataframe_creation_dispatch.register_inplace("pandas")
 def read_csv(
     path,
     *args,
@@ -2836,6 +2839,7 @@ def read_table(
     )
 
 
+@dataframe_creation_dispatch.register_inplace("pandas")
 def read_parquet(
     path=None,
     columns=None,
