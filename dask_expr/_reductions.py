@@ -1091,8 +1091,10 @@ class Mean(Reduction):
 
     @functools.cached_property
     def _meta(self):
-        return self.frame._meta.mean(
-            skipna=self.skipna, numeric_only=self.numeric_only, axis=self.axis
+        return make_meta(
+            meta_nonempty(self.frame._meta).mean(
+                skipna=self.skipna, numeric_only=self.numeric_only, axis=self.axis
+            )
         )
 
     def _lower(self):
