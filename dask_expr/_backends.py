@@ -8,7 +8,7 @@ dataframe_creation_dispatch = CreationDispatch(
     module_name="dataframe",
     default="pandas",
     entrypoint_class=DataFrameBackendEntrypoint,
-    entrypoint_root="dask-expr",  # Differs from `dask.dataframe`
+    entrypoint_root="dask_expr",  # Differs from `dask.dataframe`
     name="dataframe_creation_dispatch",
 )
 
