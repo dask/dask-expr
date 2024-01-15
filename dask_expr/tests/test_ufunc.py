@@ -103,3 +103,7 @@ def test_ufunc_with_2args(pdf, df):
 )
 def test_reducers(pdf, df, ufunc):
     assert_eq(ufunc(pdf, axis=0), ufunc(df, axis=0))
+
+
+def test_clip(pdf, df):
+    assert_eq(np.clip(pdf, 10, 20), np.clip(df, 10, 20))
