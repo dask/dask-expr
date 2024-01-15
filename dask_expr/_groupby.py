@@ -138,6 +138,8 @@ class GroupByApplyConcatApply(ApplyConcatApply, GroupByBase):
     @property
     def split_out(self):
         if self.operand("split_out") is None:
+            raise ValueError("split_out can't be None")
+        if self.operand("split_out") is no_default:
             return 1
         return super().split_out
 
@@ -146,7 +148,7 @@ class GroupByApplyConcatApply(ApplyConcatApply, GroupByBase):
         return self.frame.columns
 
     def _tune_down(self):
-        if len(self.by) > 1 and self.operand("split_out") is None:
+        if len(self.by) > 1 and self.operand("split_out") is no_default:
             return self.substitute_parameters(
                 {
                     "split_out": functools.partial(
@@ -202,7 +204,7 @@ class SingleAggregation(GroupByApplyConcatApply, GroupByBase):
         "aggregate_kwargs": None,
         "_slice": None,
         "split_every": 8,
-        "split_out": None,
+        "split_out": no_default,
         "sort": None,
         "shuffle_method": None,
     }
@@ -288,7 +290,7 @@ class GroupbyAggregation(GroupByApplyConcatApply, GroupByBase):
         "observed": None,
         "dropna": None,
         "split_every": 8,
-        "split_out": 1,
+        "split_out": no_default,
         "sort": None,
         "shuffle_method": None,
         "_slice": None,
@@ -1251,7 +1253,7 @@ class GroupBy:
         self,
         expr_cls,
         split_every=None,
-        split_out=None,
+        split_out=no_default,
         chunk_kwargs=None,
         aggregate_kwargs=None,
         shuffle_method=None,

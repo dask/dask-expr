@@ -440,6 +440,15 @@ def test_groupby_numeric_only_lambda_caller(df, pdf):
     )
 
 
+def test_groupby_raises_if_split_out_is_None(df):
+    df = df.groupby("x")
+    with pytest.raises(ValueError, match="can't be None"):
+        df.agg({"y": "sum"}, split_out=None).optimize()
+
+    with pytest.raises(ValueError, match="can't be None"):
+        df.sum("y", split_out=None).optimize()
+
+
 @pytest.mark.parametrize(
     "api", ["sum", "mean", "min", "max", "prod", "var", "std", "size"]
 )
