@@ -1840,6 +1840,12 @@ def test_columns_setter(df, pdf):
         df.columns = [1, 2, 3]
 
 
+def test_contains(df):
+    assert "x" in df
+    with pytest.raises(NotImplementedError, match="Using 'in' to test for membership"):
+        1 in df.x  # noqa: B015
+
+
 def test_filter_pushdown(df, pdf):
     indexer = df.x > 5
     result = df.replace(1, 5)[indexer].optimize(fuse=False)

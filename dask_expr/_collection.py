@@ -25,6 +25,7 @@ from dask.dataframe.core import (
     is_dataframe_like,
     is_index_like,
     is_series_like,
+    meta_warning,
     new_dd_object,
 )
 from dask.dataframe.dispatch import is_categorical_dtype, make_meta, meta_nonempty
@@ -724,9 +725,7 @@ class FrameBase(DaskMethodsMixin):
                 min_count=min_count,
             )
 
-        result = new_collection(
-            self.expr.sum(skipna, numeric_only, min_count, split_every)
-        )
+        result = new_collection(self.expr.sum(skipna, numeric_only, split_every))
         return self._apply_min_count(result, min_count)
 
     def _apply_min_count(self, result, min_count):
@@ -757,9 +756,7 @@ class FrameBase(DaskMethodsMixin):
                 axis=axis,
                 min_count=min_count,
             )
-        result = new_collection(
-            self.expr.prod(skipna, numeric_only, min_count, split_every)
-        )
+        result = new_collection(self.expr.prod(skipna, numeric_only, split_every))
         return self._apply_min_count(result, min_count)
 
     product = prod
@@ -1123,31 +1120,33 @@ class FrameBase(DaskMethodsMixin):
     def where(self, cond, other=np.nan):
         return new_collection(self.expr.where(cond, other))
 
-    def apply(self, function, *args, **kwargs):
-        return new_collection(self.expr.apply(function, *args, **kwargs))
-
     def replace(self, to_replace=None, value=no_default, regex=False):
         return new_collection(self.expr.replace(to_replace, value, regex))
 
-    def ffill(self, axis=0, _inplace=False, limit=None, _downcast=None):
+    def ffill(self, axis=0, limit=None):
         axis = _validate_axis(axis)
         if axis == 1:
-            raise NotImplementedError("ffill on axis 1 not implemented")
+            return self.map_partitions(M.ffill, axis=axis, limit=limit)
         frame = self
         if limit is None:
             frame = FillnaCheck(self, "ffill", lambda x: 0)
         return new_collection(FFill(frame, limit))
 
-    def bfill(self, axis=0, _inplace=False, limit=None, _downcast=None):
+    def bfill(self, axis=0, limit=None):
         axis = _validate_axis(axis)
         if axis == 1:
-            raise NotImplementedError("bfill on axis 1 not implemented")
+            return self.map_partitions(M.bfill, axis=axis, limit=limit)
         frame = self
         if limit is None:
             frame = FillnaCheck(self, "bfill", lambda x: x.npartitions - 1)
         return new_collection(BFill(frame, limit))
 
-    def fillna(self, value=None):
+    def fillna(self, value=None, axis=None):
+        axis = self._validate_axis(axis)
+        if axis == 1:
+            return self.map_partitions(M.fillna, value, axis=axis)
+        if isinstance(value, FrameBase):
+            value = value.expr
         return new_collection(self.expr.fillna(value))
 
     def shift(self, periods=1, freq=None, axis=0):
@@ -1393,7 +1392,7 @@ class FrameBase(DaskMethodsMixin):
 
         return to_hdf(self, path_or_buf, key, mode, append, **kwargs)
 
-    def to_delayed(self):
+    def to_delayed(self, optimize_graph=True):
         """Convert into a list of ``dask.delayed`` objects, one per partition.
 
         Parameters
@@ -1410,7 +1409,7 @@ class FrameBase(DaskMethodsMixin):
         --------
         dask.dataframe.from_delayed
         """
-        return self.to_dask_dataframe().to_delayed()
+        return self.to_dask_dataframe().to_delayed(optimize_graph=optimize_graph)
 
     def to_backend(self, backend: str | None = None, **kwargs):
         """Move to a new DataFrame backend
@@ -1523,6 +1522,9 @@ class DataFrame(FrameBase):
     @property
     def axes(self):
         return [self.index, self.columns]
+
+    def __contains__(self, key):
+        return key in self._meta
 
     @property
     def _elemwise(self):
@@ -1785,11 +1787,15 @@ class DataFrame(FrameBase):
     def __repr__(self):
         return f"<dask_expr.expr.DataFrame: expr={self.expr}>"
 
-    def nlargest(self, n=5, columns=None):
-        return new_collection(NLargest(self, n=n, _columns=columns))
+    def nlargest(self, n=5, columns=None, split_every=None):
+        return new_collection(
+            NLargest(self, n=n, _columns=columns, split_every=split_every)
+        )
 
-    def nsmallest(self, n=5, columns=None):
-        return new_collection(NSmallest(self, n=n, _columns=columns))
+    def nsmallest(self, n=5, columns=None, split_every=None):
+        return new_collection(
+            NSmallest(self, n=n, _columns=columns, split_every=split_every)
+        )
 
     def memory_usage(self, deep=False, index=True):
         return new_collection(MemoryUsageFrame(self, deep=deep, _index=index))
@@ -1826,6 +1832,23 @@ class DataFrame(FrameBase):
                 shuffle_method=shuffle_method,
                 keep=keep,
             )
+        )
+
+    def apply(self, function, *args, meta=no_default, axis=0, **kwargs):
+        axis = self._validate_axis(axis)
+        if axis == 0:
+            msg = (
+                "Dask DataFrame.apply only supports axis=1\n"
+                "  Try: df.apply(func, axis=1)"
+            )
+            raise NotImplementedError(msg)
+        if meta is no_default:
+            meta = make_meta(
+                meta_nonempty(self._meta).apply(function, *args, axis=axis, **kwargs)
+            )
+            warnings.warn(meta_warning(meta))
+        return new_collection(
+            self.expr.apply(function, *args, meta=meta, axis=axis, **kwargs)
         )
 
     def dropna(self, how=no_default, subset=None, thresh=no_default):
@@ -2379,6 +2402,11 @@ class Series(FrameBase):
                 o.remove(accessor)
         return list(o)
 
+    def __contains__(self, item):
+        raise NotImplementedError(
+            "Using 'in' to test for membership is not supported. Use the values instead"
+        )
+
     @property
     def name(self):
         return self.expr._meta.name
@@ -2484,11 +2512,11 @@ class Series(FrameBase):
     def mode(self, dropna=True, split_every=False):
         return new_collection(self.expr.mode(dropna, split_every))
 
-    def nlargest(self, n=5):
-        return new_collection(NLargest(self, n=n))
+    def nlargest(self, n=5, split_every=None):
+        return new_collection(NLargest(self, n=n, split_every=split_every))
 
-    def nsmallest(self, n=5):
-        return new_collection(NSmallest(self, n=n))
+    def nsmallest(self, n=5, split_every=None):
+        return new_collection(NSmallest(self, n=n, split_every=split_every))
 
     def memory_usage(self, deep=False, index=True):
         return new_collection(MemoryUsageFrame(self, deep=deep, _index=index))
@@ -2528,6 +2556,10 @@ class Series(FrameBase):
                 keep=keep,
             )
         )
+
+    def apply(self, function, *args, meta=None, axis=0, **kwargs):
+        self._validate_axis(axis)
+        return new_collection(self.expr.apply(function, *args, meta=meta, **kwargs))
 
     @classmethod
     def _validate_axis(cls, axis=0, numeric_axis: bool = True) -> None | Literal[0, 1]:
