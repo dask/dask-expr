@@ -1630,7 +1630,7 @@ class DataFrame(FrameBase):
 
         return result
 
-    def clip(self, lower=None, upper=None, axis=None):
+    def clip(self, lower=None, upper=None, axis=None, **kwargs):
         axis = self._validate_axis(axis)
         if axis == 1:
             return self.map_partitions(M.clip, lower, upper, axis=axis)
@@ -2483,7 +2483,7 @@ class Series(FrameBase):
                     )
         return new_collection(expr.Map(self, arg=arg, na_action=na_action, meta=meta))
 
-    def clip(self, lower=None, upper=None, axis=None):
+    def clip(self, lower=None, upper=None, axis=None, **kwargs):
         axis = self._validate_axis(axis)
         return new_collection(self.expr.clip(lower, upper, axis))
 
