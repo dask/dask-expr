@@ -1949,10 +1949,7 @@ class Head(Expr):
             if npartitions != 1:
                 from dask_expr import Repartition
 
-                safe = (
-                    npartitions != self.frame.npartitions and npartitions != -1
-                )
-
+                safe = npartitions != self.frame.npartitions and npartitions != -1
                 frame = BlockwiseHead(
                     Repartition(frame, new_partitions=1), self.n, 1, safe
                 )
