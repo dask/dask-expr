@@ -1257,6 +1257,12 @@ def test_size_optimized(df):
     assert out._name == expected._name
 
 
+@pytest.mark.parametrize("col_type", [list, np.array, pd.Series, pd.Index])
+def test_getitem_column_types(col_type, df, pdf):
+    cols = col_type(["x", "y"])
+    assert_eq(df[cols], pdf[cols])
+
+
 def test_apply_infer_columns():
     df = pd.DataFrame({"x": [1, 2, 3, 4], "y": [10, 20, 30, 40]})
     ddf = from_pandas(df, npartitions=2)
@@ -1804,6 +1810,11 @@ def test_avoid_alignment():
 
     assert not any(isinstance(ex, AlignPartitions) for ex in (db.y + db.z).walk())
     assert not any(isinstance(ex, AlignPartitions) for ex in (da.x + db.y.sum()).walk())
+
+
+def test_mixed_array_op(df, pdf):
+    assert_eq(df.x + df.y.values, pdf.x + pdf.y.values)
+    assert_eq(df + df.values, pdf + pdf.values)
 
 
 def test_len_shuffle_repartition(df, pdf):
