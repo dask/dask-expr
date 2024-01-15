@@ -1263,6 +1263,21 @@ def test_size_optimized(df):
     assert out._name == expected._name
 
 
+def test_series_iter(df, pdf):
+    for a, b in zip(df["x"], pdf["x"]):
+        assert a == b
+
+
+def test_dataframe_iterrows(df, pdf):
+    for a, b in zip(df.iterrows(), pdf.iterrows()):
+        pd.testing.assert_series_equal(a[1], b[1])
+
+
+def test_dataframe_itertuples(df, pdf):
+    for a, b in zip(df.itertuples(), pdf.itertuples()):
+        assert a == b
+
+
 def test_apply_infer_columns():
     df = pd.DataFrame({"x": [1, 2, 3, 4], "y": [10, 20, 30, 40]})
     ddf = from_pandas(df, npartitions=2)

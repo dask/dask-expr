@@ -1512,9 +1512,6 @@ class DataFrame(FrameBase):
     def keys(self):
         return self.columns
 
-    def __iter__(self):
-        return iter(self.columns)
-
     def items(self):
         for i, name in enumerate(self.columns):
             yield (name, self.iloc[:, i])
@@ -1525,6 +1522,21 @@ class DataFrame(FrameBase):
 
     def __contains__(self, key):
         return key in self._meta
+
+    def __iter__(self):
+        return iter(self._meta)
+
+    def iterrows(self):
+        frame = self.optimize()
+        for i in range(self.npartitions):
+            df = frame.get_partition(i).compute()
+            yield from df.iterrows()
+
+    def itertuples(self, index=True, name="Pandas"):
+        frame = self.optimize()
+        for i in range(self.npartitions):
+            df = frame.get_partition(i).compute()
+            yield from df.itertuples(index=index, name=name)
 
     @property
     def _elemwise(self):
@@ -2406,6 +2418,12 @@ class Series(FrameBase):
         raise NotImplementedError(
             "Using 'in' to test for membership is not supported. Use the values instead"
         )
+
+    def __iter__(self):
+        frame = self.optimize()
+        for i in range(self.npartitions):
+            s = frame.get_partition(i).compute()
+            yield from s
 
     @property
     def name(self):
