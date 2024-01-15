@@ -360,6 +360,8 @@ class Expr(core.Expr):
         dfs = [self] + list(exprs)
         if are_co_aligned(self, *exprs) or axis in (1, "columns"):
             return dfs
+        elif all(x.npartitions == 1 for x in dfs):
+            return dfs
         else:
             divisions = calc_divisions_for_align(*dfs)
             return maybe_align_partitions(*dfs, divisions=divisions)
