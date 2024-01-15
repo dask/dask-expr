@@ -1296,8 +1296,8 @@ class CombineFrame(CombineSeries):
 
 
 class ToNumeric(Elemwise):
-    _parameters = ["frame", "errors", "downcast"]
-    _defaults = {"errors": "raise", "downcast": None}
+    _parameters = ["frame", "errors", "downcast", "meta"]
+    _defaults = {"errors": "raise", "downcast": None, "meta": None}
     operation = staticmethod(pd.to_numeric)
 
 

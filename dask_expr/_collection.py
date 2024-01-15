@@ -22,6 +22,7 @@ from dask.dataframe.core import (
     _sqrt_and_convert_to_timedelta,
     check_divisions,
     has_parallel_type,
+    is_arraylike,
     is_dataframe_like,
     is_index_like,
     is_series_like,
@@ -35,6 +36,7 @@ from dask.dataframe.utils import (
     meta_frame_constructor,
     meta_series_constructor,
 )
+from dask.delayed import delayed
 from dask.utils import (
     IndexCallable,
     M,
@@ -3308,10 +3310,23 @@ def pivot_table(df, index, columns, values, aggfunc="mean"):
     )
 
 
-def to_numeric(arg, errors="raise", downcast=None):
-    if not isinstance(arg, Series):
-        raise TypeError("arg must be a Series")
-    return new_collection(ToNumeric(frame=arg, errors=errors, downcast=downcast))
+def to_numeric(arg, errors="raise", downcast=None, meta=None):
+    if is_scalar(arg):
+        return delayed(pd.to_numeric, pure=True)(arg, errors=errors, downcast=downcast)
+
+    if is_arraylike(arg):
+        return new_collection(
+            ToNumeric(from_array(arg, meta=meta), errors=errors, downcast=downcast)
+        ).to_dask_array()
+
+    if is_series_like(arg):
+        return new_collection(
+            ToNumeric(frame=arg, errors=errors, downcast=downcast, meta=meta)
+        )
+
+    raise TypeError(
+        "arg must be a list, tuple, dask.array.Array, or dask.dataframe.Series"
+    )
 
 
 def to_datetime(arg, **kwargs):
