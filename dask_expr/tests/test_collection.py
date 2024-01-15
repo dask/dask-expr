@@ -1801,7 +1801,7 @@ def test_assign_different_roots():
     df = from_pandas(pdf, npartitions=10, sort=False)
     df2 = from_pandas(pdf2, npartitions=10, sort=False)
 
-    with pytest.raises(NotImplementedError, match="different base"):
+    with pytest.raises(ValueError, match="Not all divisions"):
         df["new"] = df2.x
 
 
