@@ -873,6 +873,7 @@ class MapOverlap(MapPartitions):
             self.transform_divisions,
             self.clear_divisions,
             self.align_dataframes,
+            None,
             self._kwargs,
             *self.args[1:],
         )
