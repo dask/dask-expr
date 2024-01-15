@@ -1194,7 +1194,7 @@ class FrameBase(DaskMethodsMixin):
 
     def _create_alignable_frame(self, other, join="outer"):
         if not is_dask_collection(other) and (
-            is_series_like(other) or is_datetime64_any_dtype(other)
+            is_series_like(other) or is_dataframe_like(other)
         ):
             if join in ("inner", "left"):
                 npartitions = 1

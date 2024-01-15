@@ -499,10 +499,7 @@ class Blockwise(Expr):
         dependencies = self.dependencies()
         for arg in dependencies:
             if not self._broadcast_dep(arg):
-                try:
-                    assert arg.divisions == dependencies[0].divisions
-                except Exception:
-                    raise
+                assert arg.divisions == dependencies[0].divisions
         return dependencies[0].divisions
 
     @functools.cached_property
