@@ -609,6 +609,7 @@ def test_to_timestamp(pdf, how):
         lambda df: df.astype(int),
         lambda df: df.clip(lower=10, upper=50),
         lambda df: df.x.clip(lower=10, upper=50),
+        lambda df: df.clip(lower=3, upper=7, axis=1),
         lambda df: df.x.between(left=10, right=50),
         lambda df: df.x.map(lambda x: x + 1),
         lambda df: df[df.x > 5],
@@ -992,6 +993,13 @@ def test_head(pdf, df):
 
     assert df.head(compute=False).npartitions == 1
     assert_eq(df.index.head(compute=False, n=7), pdf.index[0:7])
+
+    assert_eq(df.head(15, npartitions=2), pdf.head(15))
+    with pytest.warns(UserWarning, match="Insufficient elements"):
+        assert_eq(df.head(22, npartitions=2), pdf.head(20))
+
+    assert_eq(df.head(100, npartitions=-1), pdf.head(100))
+    assert_eq(df.head(5, npartitions=-1), pdf.head(5))
 
 
 def test_head_down(df):
