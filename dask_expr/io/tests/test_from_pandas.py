@@ -18,7 +18,7 @@ def test_from_pandas(pdf, sort):
     df = from_pandas(pdf, npartitions=2, sort=sort)
 
     assert df.npartitions == 2
-    assert df.divisions == ((0, 3, 5) if sort else (None, None, None))
+    assert df.divisions == (0, 3, 5)
     assert_eq(df, pdf, sort_results=sort)
 
 
