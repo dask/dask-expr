@@ -3458,9 +3458,9 @@ def _compute_partition_stats(
         or sorted(non_empty_maxes) != non_empty_maxes
     ):
         raise ValueError(
-            f"Partitions are not sorted ascending by {column.name or 'the index'}",
+            f"Partitions are not sorted ascending by {column.name or 'the index'}. ",
             f"In your dataset the (min, max, len) values of {column.name or 'the index'} "
-            f"for each partition are : {list(zip(mins, maxes, lens))}",
+            f"for each partition are: {list(zip(mins, maxes, lens))}",
         )
     if not allow_overlap and any(
         a <= b for a, b in zip(non_empty_mins[1:], non_empty_maxes[:-1])
