@@ -217,8 +217,6 @@ class ShuffleBackend(Shuffle):
 class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
     """Simple task-based shuffle implementation"""
 
-    lazy_hash_support = True
-
     @classmethod
     def from_abstract_shuffle(cls, expr: Shuffle) -> Expr:
         frame = expr.frame
@@ -358,7 +356,13 @@ class SimpleShuffle(PartitionsFiltered, ShuffleBackend):
         return dsk
 
 
-class TaskShuffle(SimpleShuffle):
+class MaterializedShuffle(SimpleShuffle):
+    @functools.cached_property
+    def _meta(self):
+        return self.frame._meta
+
+
+class TaskShuffle(MaterializedShuffle):
     """Staged task-based shuffle implementation"""
 
     def _layer(self):
@@ -481,10 +485,8 @@ class TaskShuffle(SimpleShuffle):
         return dsk
 
 
-class DiskShuffle(SimpleShuffle):
+class DiskShuffle(MaterializedShuffle):
     """Disk-based shuffle implementation"""
-
-    lazy_hash_support = False
 
     @staticmethod
     def _shuffle_group(df, col, _filter, p):
@@ -525,10 +527,8 @@ class DiskShuffle(SimpleShuffle):
         return toolz.merge(dsk1, dsk2, dsk3, dsk4)
 
 
-class P2PShuffle(SimpleShuffle):
+class P2PShuffle(MaterializedShuffle):
     """P2P worker-based shuffle implementation"""
-
-    lazy_hash_support = False
 
     def _layer(self):
         from distributed.shuffle._shuffle import (

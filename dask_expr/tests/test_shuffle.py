@@ -5,9 +5,9 @@ import numpy as np
 import pytest
 
 from dask_expr import from_pandas
-from dask_expr._expr import Blockwise
+from dask_expr._expr import Blockwise, Projection
 from dask_expr._repartition import RepartitionToFewer
-from dask_expr._shuffle import TaskShuffle, divisions_lru
+from dask_expr._shuffle import DiskShuffle, TaskShuffle, divisions_lru
 from dask_expr.io import FromPandas
 from dask_expr.tests._util import _backend_library, assert_eq, xfail_gpu
 
@@ -584,3 +584,19 @@ def test_empty_partitions():
 
     ddf = ddf.set_index("c")
     assert_eq(ddf, df.set_index("b").set_index("c"))
+
+
+def test_shuffle_drop_index_meta(df, pdf):
+    # When _partitions is the shuffle column, it is treated as the partitioning index
+    df = df.assign(_partitions=(df.x / 2).round(0))
+    result = df.shuffle("_partitions")
+    # Make sure that the result of our Shuffle op does not have it anymore
+    assert "_partitions" not in result.columns
+    q = result.optimize()
+
+    # Ensure that we inject a Projection dropping the column
+    assert "_partitions" not in q.columns and isinstance(q.expr, Projection)
+    # Ensure that the materialized shuffle does not omit the column since it's still there
+    assert "_partitions" in q.expr.frame.columns and isinstance(
+        q.expr.frame, DiskShuffle
+    )
