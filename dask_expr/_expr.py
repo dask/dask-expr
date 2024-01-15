@@ -557,9 +557,10 @@ class MapPartitions(Blockwise):
         "transform_divisions",
         "clear_divisions",
         "align_dataframes",
+        "parent_meta",
         "kwargs",
     ]
-    _defaults = {"kwargs": None, "align_dataframes": True}
+    _defaults = {"kwargs": None, "align_dataframes": True, "parent_meta": None}
 
     def __str__(self):
         return f"MapPartitions({funcname(self.func)})"
@@ -576,7 +577,7 @@ class MapPartitions(Blockwise):
     def _meta(self):
         meta = self.operand("meta")
         return _get_meta_map_partitions(
-            self.args, [], self.func, self.kwargs, meta, None
+            self.args, [self.frame], self.func, self.kwargs, meta, self.parent_meta
         )
 
     def _divisions(self):
