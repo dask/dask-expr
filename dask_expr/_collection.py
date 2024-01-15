@@ -3466,7 +3466,7 @@ def _compute_partition_stats(
         a <= b for a, b in zip(non_empty_mins[1:], non_empty_maxes[:-1])
     ):
         warnings.warn(
-            "Partitions have overlapping values, so divisions are non-unique."
+            "Partitions have overlapping values, so divisions are non-unique. "
             "Use `set_index(sorted=True)` with no `divisions` to allow dask to fix the overlap. "
             f"In your dataset the (min, max, len) values of {column.name or 'the index'} "
             f"for each partition are : {list(zip(mins, maxes, lens))}",
