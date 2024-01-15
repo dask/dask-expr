@@ -46,12 +46,9 @@ from dask.utils import (
     typename,
 )
 from fsspec.utils import stringify_path
-from pandas.api.types import (
-    is_bool_dtype,
-    is_datetime64_any_dtype,
-    is_numeric_dtype,
-    is_timedelta64_dtype,
-)
+from pandas.api.types import is_bool_dtype, is_datetime64_any_dtype, is_numeric_dtype
+from pandas.api.types import is_scalar as pd_is_scalar
+from pandas.api.types import is_timedelta64_dtype
 from tlz import first
 
 from dask_expr import _expr as expr
@@ -3311,7 +3308,7 @@ def pivot_table(df, index, columns, values, aggfunc="mean"):
 
 
 def to_numeric(arg, errors="raise", downcast=None):
-    if is_scalar(arg):
+    if pd_is_scalar(arg):
         return delayed(pd.to_numeric, pure=True)(arg, errors=errors, downcast=downcast)
 
     if is_arraylike(arg):
