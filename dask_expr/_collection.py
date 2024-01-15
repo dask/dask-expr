@@ -3308,6 +3308,13 @@ def pivot_table(df, index, columns, values, aggfunc="mean"):
 
 
 def to_numeric(arg, errors="raise", downcast=None):
+    """
+    Return type depends on input. Delayed if scalar, otherwise same as input.
+    For errors, only "raise" and "coerce" are allowed.
+    """
+    if errors not in ("raise", "coerce"):
+        raise ValueError("invalid error value specified")
+
     if pd_is_scalar(arg):
         return delayed(pd.to_numeric, pure=True)(arg, errors=errors, downcast=downcast)
 
