@@ -2557,8 +2557,11 @@ class Series(FrameBase):
             )
         )
 
-    def apply(self, function, *args, meta=None, axis=0, **kwargs):
+    def apply(self, function, *args, meta=no_default, axis=0, **kwargs):
         self._validate_axis(axis)
+        if meta is no_default:
+            meta = make_meta(meta_nonempty(self._meta).apply(function, *args, **kwargs))
+            warnings.warn(meta_warning(meta))
         return new_collection(self.expr.apply(function, *args, meta=meta, **kwargs))
 
     @classmethod

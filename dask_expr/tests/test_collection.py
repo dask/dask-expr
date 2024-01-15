@@ -774,7 +774,7 @@ def test_drop_not_implemented(pdf, df):
 @pytest.mark.parametrize(
     "func",
     [
-        lambda df: df.apply(lambda row, x, y=10: row * x + y, x=2),
+        lambda df: df.apply(lambda row, x, y=10: row * x + y, x=2, axis=1),
         lambda df: df.index.map(lambda x: x + 1),
         pytest.param(
             lambda df: df.map(lambda x: x + 1),
@@ -1257,7 +1257,7 @@ def test_size_optimized(df):
     expected = optimize(df.x.size)
     assert out._name == expected._name
 
-    expr = (df + 1).apply(lambda x: x).size
+    expr = (df + 1).apply(lambda x: x, axis=1).size
     out = optimize(expr)
     expected = optimize(df.size)
     assert out._name == expected._name
