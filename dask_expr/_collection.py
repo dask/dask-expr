@@ -1599,14 +1599,31 @@ class DataFrame(FrameBase):
 
             if isinstance(v, (Scalar, Series)):
                 if isinstance(v, Series):
-                    if not expr.are_co_aligned(self.expr, v.expr):
-                        raise NotImplementedError(
-                            "Setting a Series with a different base is not supported",
-                        )
+                    if not expr.are_co_aligned(
+                        self.expr, v.expr, allow_broadcast=False
+                    ):
+                        result, v = self.expr._align_divisions(v.expr)
 
                 result = new_collection(expr.Assign(result, k, v))
             elif not isinstance(v, FrameBase) and isinstance(v, Hashable):
                 result = new_collection(expr.Assign(result, k, v))
+            elif isinstance(v, Array):
+                if len(v.shape) > 1:
+                    raise ValueError("Array assignment only supports 1-D arrays")
+                if v.npartitions != result.npartitions:
+                    raise ValueError(
+                        "Number of partitions do not match "
+                        f"({v.npartitions} != {result.npartitions})"
+                    )
+                result = new_collection(
+                    expr.Assign(
+                        result,
+                        k,
+                        from_dask_array(
+                            v, index=result.index.to_dask_dataframe(), meta=result._meta
+                        ),
+                    )
+                )
             else:
                 raise TypeError(f"Column assignment doesn't support type {type(v)}")
 
@@ -1763,7 +1780,21 @@ class DataFrame(FrameBase):
         )
 
     def __setitem__(self, key, value):
-        out = self.assign(**{key: value})
+        if isinstance(key, (tuple, list)) and isinstance(value, DataFrame):
+            out = self.assign(**{k: value[c] for k, c in zip(key, value.columns)})
+
+        elif isinstance(key, pd.Index) and not isinstance(value, DataFrame):
+            out = self.assign(**{k: value for k in list(key)})
+        elif (
+            is_dataframe_like(key)
+            or is_series_like(key)
+            or isinstance(key, (DataFrame, Series))
+        ):
+            out = self.where(~key, value)
+        elif not isinstance(key, str):
+            raise NotImplementedError(f"Item assignment with {type(key)} not supported")
+        else:
+            out = self.assign(**{key: value})
         self._expr = out._expr
 
     def __delitem__(self, key):

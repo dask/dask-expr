@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from operator import add
 
 import dask
+import dask.array as da
 import numpy as np
 import pytest
 from dask.dataframe._compat import PANDAS_GE_210
@@ -1276,6 +1277,38 @@ def test_dataframe_iterrows(df, pdf):
 def test_dataframe_itertuples(df, pdf):
     for a, b in zip(df.itertuples(), pdf.itertuples()):
         assert a == b
+
+
+def test_array_assignment(df, pdf):
+    orig = df.copy()
+
+    arr = np.array(np.random.normal(size=100))
+    darr = da.from_array(arr, chunks=10)
+
+    pdf["z"] = arr
+    df["z"] = darr
+    assert_eq(pdf, df)
+    assert "z" not in orig.columns
+
+
+def test_columns_assignment():
+    df = pd.DataFrame({"x": [1, 2, 3, 4]})
+    ddf = from_pandas(df, npartitions=2)
+
+    df2 = df.assign(y=df.x + 1, z=df.x - 1)
+    df[["a", "b"]] = df2[["y", "z"]]
+
+    ddf2 = ddf.assign(y=ddf.x + 1, z=ddf.x - 1)
+    ddf[["a", "b"]] = ddf2[["y", "z"]]
+
+    assert_eq(df, ddf)
+
+
+def test_setitem_triggering_realign():
+    a = from_pandas(pd.DataFrame({"A": range(12)}), npartitions=3)
+    b = from_pandas(pd.Series(range(12), name="B"), npartitions=4)
+    a["C"] = b
+    assert len(a) == 12
 
 
 def test_apply_infer_columns():
