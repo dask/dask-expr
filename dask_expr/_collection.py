@@ -461,7 +461,7 @@ class FrameBase(DaskMethodsMixin):
             expr.Isin(
                 self,
                 values=_DelayedExpr(
-                    delayed(values, name=_tokenize_deterministic(values))
+                    delayed(values, name="delayed-" + _tokenize_deterministic(values))
                 ),
             )
         )
