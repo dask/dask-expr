@@ -3102,6 +3102,8 @@ class Scalar(FrameBase):
 
 def new_collection(expr):
     """Create new collection from an expr"""
+    # Make sure "pandas" backend is imported
+    import dask_expr._backends  # noqa: F401
     from dask_expr._dispatch import get_collection_type
 
     meta = expr._meta
