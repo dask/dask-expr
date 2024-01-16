@@ -3576,8 +3576,6 @@ def to_datetime(arg, meta=None, **kwargs):
         )
         kwargs.pop("infer_datetime_format")
 
-    # if not isinstance(arg, FrameBase):
-    # raise TypeError("arg must be a Series or a DataFrame")
     return new_collection(ToDatetime(frame=arg, kwargs=kwargs, meta=meta))
 
 
