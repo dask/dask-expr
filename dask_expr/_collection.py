@@ -3316,7 +3316,7 @@ def to_numeric(arg, errors="raise", downcast=None, meta=None):
         raise ValueError("invalid error value specified")
 
     if pd_is_scalar(arg):
-        if meta is not no_default:
+        if meta is not None:
             raise KeyError("``meta`` is not allowed when input is a scalar.")
         return delayed(pd.to_numeric, pure=True)(arg, errors=errors, downcast=downcast)
 
