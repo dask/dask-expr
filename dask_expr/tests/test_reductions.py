@@ -127,7 +127,7 @@ def test_dataframe_split_every(pdf, df, split_every, expect_tasks, reduction):
         getattr(pdf, reduction)(),
     )
     q = getattr(df, reduction)(split_every=split_every).optimize(fuse=False)
-    assert len(q.__dask_graph__()) == expect_tasks
+    assert len(q.materialize()) == expect_tasks
 
 
 @pytest.mark.parametrize(
@@ -136,7 +136,7 @@ def test_dataframe_split_every(pdf, df, split_every, expect_tasks, reduction):
 def test_dataframe_mode_split_every(pdf, df, split_every, expect_tasks):
     assert_eq(df.mode(split_every=split_every), pdf.mode())
     q = df.mode(split_every=split_every).optimize(fuse=False)
-    assert len(q.__dask_graph__()) == expect_tasks
+    assert len(q.materialize()) == expect_tasks
 
 
 @pytest.mark.parametrize(
@@ -151,7 +151,7 @@ def test_series_split_every(pdf, df, split_every, expect_tasks, reduction):
         getattr(pdf.x, reduction)(),
     )
     q = getattr(df.x, reduction)(split_every=split_every).optimize(fuse=False)
-    assert len(q.__dask_graph__()) == expect_tasks
+    assert len(q.materialize()) == expect_tasks
 
 
 @pytest.mark.parametrize("split_every", [-1, 0, 1])
@@ -172,7 +172,9 @@ def test_series_split_every(pdf, df, split_every, expect_tasks, reduction):
 def test_split_every_lt2(df, reduction, split_every):
     with pytest.raises(ValueError, match="split_every must be greater than 1 or False"):
         # TODO validate parameters before graph materialization
-        getattr(df.x, reduction)(split_every=split_every).__dask_graph__()
+        getattr(df.x, reduction)(
+            split_every=split_every
+        ).lower_completely().materialize()
 
 
 @pytest.mark.parametrize("split_every", [-1, 0, 1])
@@ -181,7 +183,9 @@ def test_split_every_lt2_split_out(df, reduction, split_every):
     """split_out=True ignores split_every; force split_out=1"""
     with pytest.raises(ValueError, match="split_every must be greater than 1 or False"):
         # TODO validate parameters before graph materialization
-        getattr(df.x, reduction)(split_out=1, split_every=split_every).__dask_graph__()
+        getattr(df.x, reduction)(
+            split_out=1, split_every=split_every
+        ).lower_completely().materialize()
 
 
 @pytest.mark.parametrize("split_every", [None, False, 2, 10])

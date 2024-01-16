@@ -10,6 +10,7 @@ from collections.abc import Callable, Mapping
 import dask
 import numpy as np
 import pandas as pd
+import toolz
 from dask.array import Array
 from dask.base import normalize_token
 from dask.core import flatten
@@ -28,7 +29,7 @@ from dask.dataframe.core import (
     safe_head,
     total_mem_usage,
 )
-from dask.dataframe.dispatch import meta_nonempty
+from dask.dataframe.dispatch import make_meta_dispatch, meta_nonempty
 from dask.dataframe.rolling import CombinedOutput, _head_timedelta, overlap_chunk
 from dask.dataframe.shuffle import drop_overlap, get_overlap
 from dask.dataframe.utils import (
@@ -77,9 +78,6 @@ class Expr(core.Expr):
         except AttributeError:
             return 0
 
-    def __dask_keys__(self):
-        return [(self._name, i) for i in range(self.npartitions)]
-
     def optimize(self, **kwargs):
         return optimize(self, **kwargs)
 
@@ -114,6 +112,10 @@ class Expr(core.Expr):
                 "This often means that you are attempting to use an unsupported "
                 f"API function. Current API coverage is documented here: {link}."
             )
+
+    @classmethod
+    def combine_factories(cls, *exprs: Expr, **kwargs) -> Expr:
+        return Tuple(*exprs)
 
     @property
     def index(self):
@@ -413,6 +415,7 @@ class Expr(core.Expr):
 
     @functools.cached_property
     def divisions(self):
+        # Note: This is triggering a divisions calculation on an hasattr check!
         return tuple(self._divisions())
 
     def _divisions(self):
@@ -3149,3 +3152,33 @@ from dask_expr._reductions import (
     Var,
 )
 from dask_expr.io import IO, BlockwiseIO
+
+
+class Tuple(Expr):
+    def __getitem__(self, other):
+        return self.operands[other]
+
+    def _layer(self) -> dict:
+        return toolz.merge(op._layer() for op in self.operands)
+
+    def __dask_output_keys__(self) -> list:
+        all_keys = []
+        for op in self.operands:
+            l = op.__dask_output_keys__()
+            if len(l) > 1:
+                raise NotImplementedError()
+            all_keys.append(l[0])
+        return all_keys
+
+    def __len__(self):
+        return len(self.operands)
+
+    def __iter__(self):
+        return iter(self.operands)
+
+
+@make_meta_dispatch.register(Expr)
+def make_meta_expr(expr, index=None):
+    # make_meta only access the _meta attribute for collections but Expr is not
+    # a collection. Still, we're sometimes calling make_meta on Expr instances
+    return expr._meta

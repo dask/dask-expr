@@ -220,15 +220,19 @@ def _wrap_unary_expr_op(self, op=None):
 #
 # Collection classes
 #
+from dask.typing import DaskCollection2
 
 
-class FrameBase(DaskMethodsMixin):
+class FrameBase(DaskMethodsMixin, DaskCollection2):
     """Base class for Expr-backed Collections"""
 
     __dask_scheduler__ = staticmethod(
         named_schedulers.get("threads", named_schedulers["sync"])
     )
     __dask_optimize__ = staticmethod(lambda dsk, keys, **kwargs: dsk)
+
+    def __dask_tokenize__(self):
+        return self.expr._name
 
     def __init__(self, expr):
         self._expr = expr
@@ -316,25 +320,11 @@ class FrameBase(DaskMethodsMixin):
         return DaskMethodsMixin.persist(out, **kwargs)
 
     def compute(self, fuse=True, **kwargs):
-        out = self
-        if not isinstance(out, Scalar):
-            out = out.repartition(npartitions=1)
-        out = out.optimize(fuse=fuse)
+        out = self.finalize_compute()
         return DaskMethodsMixin.compute(out, **kwargs)
 
-    @property
-    def dask(self):
-        return self.__dask_graph__()
-
-    def __dask_graph__(self):
-        out = self.expr
-        out = out.lower_completely()
-        return out.__dask_graph__()
-
-    def __dask_keys__(self):
-        out = self.expr
-        out = out.lower_completely()
-        return out.__dask_keys__()
+    def __dask_graph_factory__(self):
+        return self.expr
 
     def simplify(self):
         return new_collection(self.expr.simplify())
@@ -347,7 +337,20 @@ class FrameBase(DaskMethodsMixin):
 
     @property
     def dask(self):
-        return self.__dask_graph__()
+        # FIXME: This is highly problematic. Defining this as a property can
+        # cause very unfortunate materializations. Even a mere hasattr(obj,
+        # "dask") check already triggers this since it's a property, not even a
+        # method.
+        return self.__dask_graph_factory__().lower_completely().materialize()
+
+    def finalize_compute(self):
+        return new_collection(Repartition(self.expr, 1))
+
+    def postpersist(self, futures):
+        if not isinstance(futures, dict):
+            raise TypeError("Provided `futures` must be a dictionary")
+        func, args = self.__dask_postpersist__()
+        return func(futures, *args)
 
     def __dask_postcompute__(self):
         state = new_collection(self.expr.lower_completely())
@@ -3053,7 +3056,9 @@ class Scalar(FrameBase):
             "a conditional statement."
         )
 
-    def __dask_postcompute__(self):
+    def finalize_compute(self):
+        return self
+
         return first, ()
 
     def to_series(self, index=0) -> Series:

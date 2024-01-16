@@ -114,7 +114,7 @@ def test_fuse_broadcast_deps():
     df3 = from_pandas(pdf3, npartitions=2)
 
     query = df.merge(df2).merge(df3)
-    assert len(query.optimize().__dask_graph__()) == 2
+    assert len(query.optimize().materialize()) == 2
     assert_eq(query, pdf.merge(pdf2).merge(pdf3))
 
 

@@ -485,7 +485,7 @@ class DiskShuffle(SimpleShuffle):
         name = "shuffle-partition-" + always_new_token
         dsk2 = {
             (name, i): (self._shuffle_group, key, column, self._partitions, p)
-            for i, key in enumerate(df.__dask_keys__())
+            for i, key in enumerate(df.__dask_output_keys__())
         }
 
         # Barrier
@@ -1057,7 +1057,9 @@ class SetPartition(SetIndex):
         divisions = self.other._meta._constructor(self._divisions())
         partitions = _SetPartitionsPreSetIndex(self.other, divisions)
         assigned = Assign(self.frame, "_partitions", partitions)
+        columns_to_project = list(self.frame.columns)
         if isinstance(self._other, Expr):
+            columns_to_project.append("_index")
             assigned = Assign(assigned, "_index", self._other)
         shuffled = Shuffle(
             assigned,
@@ -1071,6 +1073,7 @@ class SetPartition(SetIndex):
             shuffled, [c for c in assigned.columns if c != "_partitions"]
         )
 
+        projected = Projection(shuffled, columns_to_project)
         if isinstance(self._other, Expr):
             drop, set_name = True, "_index"
         else:
@@ -1082,7 +1085,7 @@ class SetPartition(SetIndex):
             "upsample": self.upsample,
         }
         index_set = _SetIndexPost(
-            shuffled,
+            projected,
             self.other._meta.name,
             drop,
             set_name,
@@ -1271,6 +1274,7 @@ def _calculate_divisions(
                 f"This is probably due to the presence of nulls, which Dask does not entirely support in the index.\n"
                 f"We suggest you try with {suggested_method}."
             ) from e
+        raise NotImplementedError("Unhandled exception encountered") from e
     sizes = []
 
     empty_dataframe_detected = pd.isna(divisions).all()

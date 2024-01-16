@@ -43,7 +43,7 @@ class RepartitionQuantiles(Expr):
             random_state = self.random_state
         state_data = random_state_data(self.frame.npartitions, random_state)
 
-        keys = self.frame.__dask_keys__()
+        keys = self.frame.__dask_output_keys__()
         dtype_dsk = {(self._name, 0, 0): (dtype_info, keys[0])}
 
         percentiles_dsk = {

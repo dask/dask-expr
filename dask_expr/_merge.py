@@ -74,7 +74,7 @@ class Merge(Expr):
     }
 
     def __str__(self):
-        return f"Merge({self._name[-7:]})"
+        return f"{type(self).__name__}({self._name[-7:]})"
 
     @property
     def kwargs(self):
@@ -118,56 +118,7 @@ class Merge(Expr):
         return self.right
 
     def _divisions(self):
-        if self.merge_indexed_left and self.merge_indexed_right:
-            divisions = list(
-                unique(merge_sorted(self.left.divisions, self.right.divisions))
-            )
-            if len(divisions) == 1:
-                return (divisions[0], divisions[0])
-            if self.left.npartitions == 1 and self.right.npartitions == 1:
-                return (min(divisions), max(divisions))
-            return divisions
-
-        if self._is_single_partition_broadcast:
-            use_left = self.right_index or _contains_index_name(
-                self.right._meta, self.right_on
-            )
-            use_right = self.left_index or _contains_index_name(
-                self.left._meta, self.left_on
-            )
-            if (
-                use_right
-                and self.left.npartitions == 1
-                and self.how in ("right", "inner")
-            ):
-                return self.right.divisions
-            elif (
-                use_left
-                and self.right.npartitions == 1
-                and self.how in ("inner", "left")
-            ):
-                return self.left.divisions
-            else:
-                _npartitions = max(self.left.npartitions, self.right.npartitions)
-
-        elif self.is_broadcast_join:
-            meta_index_names = set(self._meta.index.names)
-            if (
-                self.broadcast_side == "left"
-                and set(self.right._meta.index.names) == meta_index_names
-            ):
-                return self._bcast_right._divisions()
-            elif (
-                self.broadcast_side == "right"
-                and set(self.left._meta.index.names) == meta_index_names
-            ):
-                return self._bcast_left._divisions()
-            _npartitions = max(self.left.npartitions, self.right.npartitions)
-
-        else:
-            _npartitions = self._npartitions
-
-        return (None,) * (_npartitions + 1)
+        return self.lower_completely()._divisions()
 
     @functools.cached_property
     def broadcast_side(self):
@@ -239,7 +190,6 @@ class Merge(Expr):
         left_index = self.left_index
         right_index = self.right_index
         shuffle_method = self.shuffle_method
-
         # TODO:
         #  1. Add/leverage partition statistics
 
@@ -440,6 +390,13 @@ class HashJoinP2P(Merge, PartitionsFiltered):
         "_npartitions": None,
     }
     is_broadcast_join = False
+
+    @property
+    def npartitions(self):
+        return self._npartitions or max(self.left.npartitions, self.right.npartitions)
+
+    def _divisions(self):
+        return (None,) * (self.npartitions + 1)
 
     def _lower(self):
         return None
@@ -683,16 +640,17 @@ class BlockwiseMerge(Merge, Blockwise):
 
     is_broadcast_join = False
 
+    def dependencies(self):
+        # FIXME: The Blockwise._divisions is assuming that the left most is not
+        # a broadcast dep
+        return sorted(super().dependencies(), key=self._broadcast_dep)
+
     def _divisions(self):
-        if self.left.npartitions == self.right.npartitions:
-            return super()._divisions()
-        is_unknown = any(d is None for d in super()._divisions())
-        frame = (
-            self.left if self.left.npartitions > self.right.npartitions else self.right
-        )
-        if is_unknown:
-            return (None,) * (frame.npartitions + 1)
-        return frame.divisions
+        # Note: If reversed MRO for Blockwise to take precedence we wouldn't
+        # need this but we'd also get the _meta implementation of Blockwise even
+        # though we would want Merge to take precedence. This is probably the
+        # lesser evil
+        return Blockwise._divisions(self)
 
     def _lower(self):
         return None

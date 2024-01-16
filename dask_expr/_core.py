@@ -10,6 +10,7 @@ import dask
 import pandas as pd
 import toolz
 from dask.dataframe.core import is_dataframe_like, is_index_like, is_series_like
+from dask.typing import TaskGraphFactory
 from dask.utils import funcname, import_required, is_arraylike
 
 from dask_expr._util import _BackendData, _tokenize_deterministic
@@ -426,7 +427,10 @@ class Expr:
                 f"API function. Current API coverage is documented here: {link}."
             )
 
-    def __dask_graph__(self):
+    def get_annotations(self):
+        return {}
+
+    def materialize(self):
         """Traverse expression tree, collect layers"""
         stack = [self]
         seen = set()
@@ -444,9 +448,12 @@ class Expr:
 
         return toolz.merge(layers)
 
+    def __dask_output_keys__(self) -> list:
+        return [(self._name, i) for i in range(self.npartitions)]
+
     @property
-    def dask(self):
-        return self.__dask_graph__()
+    def dask(self) -> dict:
+        return self.materialize()
 
     def substitute(self, old, new) -> Expr:
         """Substitute a specific term within the expression
@@ -618,6 +625,22 @@ class Expr:
                 g.edge(dep_name, expr_name)
 
         return g
+
+    @classmethod
+    def combine_factories(cls, *exprs: Expr) -> Expr:
+        """Combine multiple expressions into a single expression
+
+        Parameters
+        ----------
+        exprs:
+            Expressions to combine
+
+        Returns
+        -------
+        expr:
+            Combined expression
+        """
+        raise NotImplementedError()
 
     def visualize(self, filename="dask-expr.svg", format=None, **kwargs):
         """

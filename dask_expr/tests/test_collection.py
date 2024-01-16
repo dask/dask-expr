@@ -11,6 +11,7 @@ import dask
 import dask.array as da
 import numpy as np
 import pytest
+from dask import is_dask_collection
 from dask.dataframe._compat import PANDAS_GE_210
 from dask.dataframe.utils import UNKNOWN_CATEGORIES
 from dask.utils import M
@@ -27,7 +28,8 @@ from dask_expr import (
     to_numeric,
     to_timedelta,
 )
-from dask_expr._expr import are_co_aligned
+from dask_expr._collection import new_collection
+from dask_expr._expr import Expr, Tuple, are_co_aligned
 from dask_expr._reductions import Len
 from dask_expr._shuffle import Shuffle
 from dask_expr.datasets import timeseries
@@ -979,9 +981,9 @@ def test_persist(pdf, df):
     b = a.persist()
 
     assert_eq(a, b)
-    assert len(a.__dask_graph__()) > len(b.__dask_graph__())
+    assert len(a.dask) > len(b.dask)
 
-    assert len(b.__dask_graph__()) == b.npartitions
+    assert len(b.dask) == b.npartitions
 
     assert_eq(b.y.sum(), (pdf + 2).y.sum())
 
@@ -1248,7 +1250,7 @@ def test_serialization(pdf, df):
 
     part = df.partitions[0].compute()
     assert (
-        len(pickle.dumps(df.__dask_graph__()))
+        len(pickle.dumps(df.__dask_graph_factory__()))
         < 1000 + len(pickle.dumps(part)) * df.npartitions
     )
 
@@ -1415,7 +1417,7 @@ def test_random_partitions(df, pdf):
 
 def test_simple_graphs(df):
     expr = (df + 1).expr
-    graph = expr.__dask_graph__()
+    graph = expr.materialize()
 
     assert graph[(expr._name, 0)] == (operator.add, (df.expr._name, 0), 1)
 
@@ -1469,7 +1471,7 @@ def test_repartition_divisions(df, opt):
     assert_eq((df + 1)["x"], df2)
 
     # Check partitions
-    for p, part in enumerate(dask.compute(list(df2.index.partitions))[0]):
+    for p, part in enumerate(dask.compute(list(df2.index.partitions))):
         if len(part):
             assert part.min() >= df2.divisions[p]
             assert part.max() < df2.divisions[p + 1]
@@ -2269,8 +2271,42 @@ def test_items(df, pdf):
         assert_eq(expect_col, actual_col)
 
 
+def test_combine_expr_with_tuple(pdf):
+    ddf1 = from_pandas(pdf, npartitions=2) + 1
+    ddf2 = from_pandas(pdf, npartitions=3) + 2
+
+    t = Tuple(ddf1.expr, ddf2.expr)
+    assert t[0]._name == ddf1._name
+    assert t[0].optimize()._name == t.optimize()[0]._name
+
+    assert t[1]._name == ddf2._name
+    assert t[1].optimize()._name == t.optimize()[1]._name
+
+
+def test_index_index(df):
+    with pytest.raises((AttributeError, NotImplementedError), match="has no"):
+        df.index.index
+
+
 def test_axes(df, pdf):
     assert len(df.axes) == len(pdf.axes)
     [assert_eq(d, p) for d, p in zip(df.axes, pdf.axes)]
     assert len(df.x.axes) == len(pdf.x.axes)
     assert_eq(df.x.axes[0], pdf.x.axes[0])
+
+
+def test_dask_collection_controlled_materialization():
+    class NoMaterializationAllowed(Expr):
+        _meta = int
+
+        def _layer(self):
+            raise RuntimeError("Materialization not allowed")
+
+    collection = new_collection(NoMaterializationAllowed())
+    assert is_dask_collection(collection)
+
+    with pytest.raises(RuntimeError, match="Materialization not allowed"):
+        collection.dask
+
+    with pytest.raises(RuntimeError, match="Materialization not allowed"):
+        collection.__dask_graph_factory__().materialize()
