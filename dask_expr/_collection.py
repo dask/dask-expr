@@ -436,9 +436,6 @@ class FrameBase(DaskMethodsMixin):
     def ge(self, other):
         return self.__ge__(other)
 
-    def lt(self, other):
-        return self.__lt__(other)
-
     def le(self, other):
         return self.__le__(other)
 
@@ -2259,6 +2256,30 @@ class DataFrame(FrameBase):
 
         return ILocIndexer(self)
 
+    def _comparison_op(self, expr_cls, other, level, axis):
+        if level is not None:
+            raise NotImplementedError("level must be None")
+        axis = self._validate_axis(axis)
+        return new_collection(expr_cls(self, other, axis))
+
+    def lt(self, other, level=None, axis=0):
+        return self._comparison_op(expr.LTFrame, other, level, axis)
+
+    def le(self, other, level=None, axis=0):
+        return self._comparison_op(expr.LEFrame, other, level, axis)
+
+    def gt(self, other, level=None, axis=0):
+        return self._comparison_op(expr.GTFrame, other, level, axis)
+
+    def ge(self, other, level=None, axis=0):
+        return self._comparison_op(expr.GEFrame, other, level, axis)
+
+    def ne(self, other, level=None, axis=0):
+        return self._comparison_op(expr.NEFrame, other, level, axis)
+
+    def eq(self, other, level=None, axis=0):
+        return self._comparison_op(expr.EQFrame, other, level, axis)
+
     def categorize(self, columns=None, index=None, split_every=None, **kwargs):
         """Convert columns of the DataFrame to category dtype.
 
@@ -2649,6 +2670,30 @@ class Series(FrameBase):
 
     def to_frame(self, name=no_default):
         return new_collection(expr.ToFrame(self, name=name))
+
+    def _comparison_op(self, expr_cls, other, level, fill_value, axis):
+        if level is not None:
+            raise NotImplementedError("level must be None")
+        self._validate_axis(axis)
+        return new_collection(expr_cls(self, other, fill_value=fill_value))
+
+    def lt(self, other, level=None, fill_value=None, axis=0):
+        return self._comparison_op(expr.LTSeries, other, level, fill_value, axis)
+
+    def le(self, other, level=None, fill_value=None, axis=0):
+        return self._comparison_op(expr.LESeries, other, level, fill_value, axis)
+
+    def gt(self, other, level=None, fill_value=None, axis=0):
+        return self._comparison_op(expr.GTSeries, other, level, fill_value, axis)
+
+    def ge(self, other, level=None, fill_value=None, axis=0):
+        return self._comparison_op(expr.GESeries, other, level, fill_value, axis)
+
+    def ne(self, other, level=None, fill_value=None, axis=0):
+        return self._comparison_op(expr.NESeries, other, level, fill_value, axis)
+
+    def eq(self, other, level=None, fill_value=None, axis=0):
+        return self._comparison_op(expr.EQSeries, other, level, fill_value, axis)
 
     def value_counts(
         self,
