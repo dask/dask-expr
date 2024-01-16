@@ -224,11 +224,11 @@ class Expr(core.Expr):
     def __rmod__(self, other):
         return Mod(other, self)
 
-    def sum(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
-        return Sum(self, skipna, numeric_only, min_count, split_every)
+    def sum(self, skipna=True, numeric_only=False, split_every=False):
+        return Sum(self, skipna, numeric_only, split_every)
 
-    def prod(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
-        return Prod(self, skipna, numeric_only, min_count, split_every)
+    def prod(self, skipna=True, numeric_only=False, split_every=False):
+        return Prod(self, skipna, numeric_only, split_every)
 
     def var(self, axis=0, skipna=True, ddof=1, numeric_only=False, split_every=False):
         if axis == 0:
@@ -329,14 +329,17 @@ class Expr(core.Expr):
     def where(self, cond, other=np.nan):
         return Where(self, cond=cond, other=other)
 
-    def apply(self, function, *args, **kwargs):
-        return Apply(self, function, args, kwargs)
+    def apply(self, function, *args, meta=None, **kwargs):
+        return Apply(self, function, args, meta, kwargs)
 
     def replace(self, to_replace=None, value=no_default, regex=False):
         return Replace(self, to_replace=to_replace, value=value, regex=regex)
 
     def fillna(self, value=None):
-        return Fillna(self, value=value)
+        frame = self
+        if isinstance(value, Expr):
+            frame, value = self._align_divisions(value, axis=None)
+        return Fillna(frame, value=value)
 
     def rename_axis(
         self, mapper=no_default, index=no_default, columns=no_default, axis=0
@@ -557,9 +560,10 @@ class MapPartitions(Blockwise):
         "transform_divisions",
         "clear_divisions",
         "align_dataframes",
+        "parent_meta",
         "kwargs",
     ]
-    _defaults = {"kwargs": None, "align_dataframes": True}
+    _defaults = {"kwargs": None, "align_dataframes": True, "parent_meta": None}
 
     def __str__(self):
         return f"MapPartitions({funcname(self.func)})"
@@ -576,7 +580,7 @@ class MapPartitions(Blockwise):
     def _meta(self):
         meta = self.operand("meta")
         return _get_meta_map_partitions(
-            self.args, [], self.func, self.kwargs, meta, None
+            self.args, [self.frame], self.func, self.kwargs, meta, self.parent_meta
         )
 
     def _divisions(self):
@@ -705,8 +709,10 @@ class UFuncElemwise(MapPartitions):
     @functools.cached_property
     def _meta(self):
         if self.operand("meta") is not no_default:
-            return self.operand("meta")
-        return _get_meta_ufunc(self._dfs, self.args, self.func)
+            meta = self.operand("meta")
+        else:
+            meta = _get_meta_ufunc(self._dfs, self.args, self.func)
+        return make_meta(meta)
 
     def _divisions(self):
         if (
@@ -872,6 +878,7 @@ class MapOverlap(MapPartitions):
             self.transform_divisions,
             self.clear_divisions,
             self.align_dataframes,
+            None,
             self._kwargs,
             *self.args[1:],
         )
@@ -1246,6 +1253,10 @@ class Isin(Elemwise):
     _parameters = ["frame", "values"]
     operation = M.isin
 
+    @functools.cached_property
+    def _meta(self):
+        return make_meta(meta_nonempty(self.frame._meta).isin([1]))
+
 
 class Clip(Elemwise):
     _projection_passthrough = True
@@ -1440,17 +1451,13 @@ class ToSeriesIndex(Elemwise):
 class Apply(Elemwise):
     """A good example of writing a less-trivial blockwise operation"""
 
-    _parameters = ["frame", "function", "args", "kwargs"]
+    _parameters = ["frame", "function", "args", "meta", "kwargs"]
     _defaults = {"args": (), "kwargs": {}}
     operation = M.apply
 
     @functools.cached_property
     def _meta(self):
-        return make_meta(
-            meta_nonempty(self.frame._meta).apply(
-                self.function, *self.args, **self.kwargs
-            )
-        )
+        return make_meta(self.operand("meta"), parent_meta=self.frame._meta)
 
     def _task(self, index: int):
         return (

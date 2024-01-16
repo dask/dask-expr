@@ -361,6 +361,10 @@ def test_std_kwargs(axis, skipna, ddof):
     )
 
 
+def test_mean_series_axis_none(df, pdf):
+    assert_eq(df.x.mean(axis=None), pdf.x.mean(axis=None))
+
+
 def test_mode_numeric_only():
     df = pd.DataFrame(
         {

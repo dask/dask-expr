@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from operator import add
 
 import dask
+import dask.array as da
 import numpy as np
 import pytest
 from dask.dataframe._compat import PANDAS_GE_210
@@ -774,7 +775,7 @@ def test_drop_not_implemented(pdf, df):
 @pytest.mark.parametrize(
     "func",
     [
-        lambda df: df.apply(lambda row, x, y=10: row * x + y, x=2),
+        lambda df: df.apply(lambda row, x, y=10: row * x + y, x=2, axis=1),
         lambda df: df.index.map(lambda x: x + 1),
         pytest.param(
             lambda df: df.map(lambda x: x + 1),
@@ -1213,7 +1214,6 @@ def test_partitions(pdf, df):
 def test_get_partition(pdf, df):
     assert_eq(df.get_partition(0), pdf.iloc[:10])
     assert_eq(df.get_partition(1), pdf.iloc[10:20])
-    assert_eq(df.get_partition(-1), pdf.iloc[90:])
     assert_eq(df.x.get_partition(0), pdf.x.iloc[:10])
 
 
@@ -1251,10 +1251,57 @@ def test_size_optimized(df):
     expected = optimize(df.x.size)
     assert out._name == expected._name
 
-    expr = (df + 1).apply(lambda x: x).size
+    expr = (df + 1).apply(lambda x: x, axis=1).size
     out = optimize(expr)
     expected = optimize(df.size)
     assert out._name == expected._name
+
+
+def test_series_iter(df, pdf):
+    for a, b in zip(df["x"], pdf["x"]):
+        assert a == b
+
+
+def test_dataframe_iterrows(df, pdf):
+    for a, b in zip(df.iterrows(), pdf.iterrows()):
+        pd.testing.assert_series_equal(a[1], b[1])
+
+
+def test_dataframe_itertuples(df, pdf):
+    for a, b in zip(df.itertuples(), pdf.itertuples()):
+        assert a == b
+
+
+def test_array_assignment(df, pdf):
+    orig = df.copy()
+
+    arr = np.array(np.random.normal(size=100))
+    darr = da.from_array(arr, chunks=10)
+
+    pdf["z"] = arr
+    df["z"] = darr
+    assert_eq(pdf, df)
+    assert "z" not in orig.columns
+
+
+def test_columns_assignment():
+    df = pd.DataFrame({"x": [1, 2, 3, 4]})
+    ddf = from_pandas(df, npartitions=2)
+
+    df2 = df.assign(y=df.x + 1, z=df.x - 1)
+    df[["a", "b"]] = df2[["y", "z"]]
+
+    ddf2 = ddf.assign(y=ddf.x + 1, z=ddf.x - 1)
+    ddf[["a", "b"]] = ddf2[["y", "z"]]
+
+    assert_eq(df, ddf)
+
+
+def test_setitem_triggering_realign():
+    a = from_pandas(pd.DataFrame({"A": range(12)}), npartitions=3)
+    b = from_pandas(pd.Series(range(12), name="B"), npartitions=4)
+    a["C"] = b
+    assert len(a) == 12
 
 
 @pytest.mark.parametrize("col_type", [list, np.array, pd.Series, pd.Index])
@@ -1424,7 +1471,6 @@ def test_drop_duplicates(df, pdf, split_out):
         assert_eq(
             df.drop_duplicates(split_out=split_out),
             pdf.drop_duplicates(),
-            check_index=split_out is not True,
         )
         assert_eq(
             df.drop_duplicates(ignore_index=True, split_out=split_out),
@@ -1434,22 +1480,18 @@ def test_drop_duplicates(df, pdf, split_out):
         assert_eq(
             df.drop_duplicates(subset=["y"], split_out=split_out),
             pdf.drop_duplicates(subset=["y"]),
-            check_index=split_out is not True,
         )
         assert_eq(
             df.drop_duplicates(subset=["y"], split_out=split_out, keep="last"),
             pdf.drop_duplicates(subset=["y"], keep="last"),
-            check_index=split_out is not True,
         )
         assert_eq(
             df.y.drop_duplicates(split_out=split_out),
             pdf.y.drop_duplicates(),
-            check_index=split_out is not True,
         )
         assert_eq(
             df.y.drop_duplicates(split_out=split_out, keep="last"),
             pdf.y.drop_duplicates(keep="last"),
-            check_index=split_out is not True,
         )
         actual = df.set_index("y").index.drop_duplicates(split_out=split_out)
         if split_out is True:
@@ -1472,11 +1514,11 @@ def test_drop_duplicates(df, pdf, split_out):
 def test_drop_duplicates_split_out(df, pdf):
     q = df.drop_duplicates(subset=["x"])
     assert len(list(q.optimize().find_operations(Shuffle))) > 0
-    assert_eq(q, pdf.drop_duplicates(subset=["x"]), check_index=False)
+    assert_eq(q, pdf.drop_duplicates(subset=["x"]))
 
     q = df.x.drop_duplicates()
     assert len(list(q.optimize().find_operations(Shuffle))) > 0
-    assert_eq(q, pdf.x.drop_duplicates(), check_index=False)
+    assert_eq(q, pdf.x.drop_duplicates())
 
 
 def test_walk(df):
@@ -1753,7 +1795,7 @@ def test_assign_different_roots():
     df = from_pandas(pdf, npartitions=10, sort=False)
     df2 = from_pandas(pdf2, npartitions=10, sort=False)
 
-    with pytest.raises(NotImplementedError, match="different base"):
+    with pytest.raises(ValueError, match="Not all divisions"):
         df["new"] = df2.x
 
 
@@ -1843,6 +1885,12 @@ def test_columns_setter(df, pdf):
 
     with pytest.raises(ValueError, match="Length mismatch"):
         df.columns = [1, 2, 3]
+
+
+def test_contains(df):
+    assert "x" in df
+    with pytest.raises(NotImplementedError, match="Using 'in' to test for membership"):
+        1 in df.x  # noqa: B015
 
 
 def test_filter_pushdown(df, pdf):
