@@ -462,8 +462,6 @@ class TaskShuffle(SimpleShuffle):
 class DiskShuffle(SimpleShuffle):
     """Disk-based shuffle implementation"""
 
-    lazy_hash_support = False
-
     @staticmethod
     def _shuffle_group(df, col, _filter, p):
         with ensure_cleanup_on_exception(p):
@@ -505,8 +503,6 @@ class DiskShuffle(SimpleShuffle):
 
 class P2PShuffle(SimpleShuffle):
     """P2P worker-based shuffle implementation"""
-
-    lazy_hash_support = False
 
     def _layer(self):
         from distributed.shuffle._shuffle import (
