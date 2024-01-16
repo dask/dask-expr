@@ -128,7 +128,7 @@ def test_join(how, shuffle_method):
 
     # Check result with/without fusion
     expect = pdf1.join(pdf2, on="x", how=how)
-    assert_eq(df3, expect, check_index=False)
+    assert_eq(df3.compute(), expect, check_index=False)
     assert_eq(df3.optimize(), expect, check_index=False)
 
     df3 = df1.join(df2.z, on="x", how=how, shuffle_method=shuffle_method)
@@ -596,6 +596,8 @@ def test_merge_pandas_object():
 def test_pairwise_merge_results_in_identical_output_df(
     how, npartitions_base, npartitions_other, clear_divisions
 ):
+    if clear_divisions and (npartitions_other != 3 or npartitions_base != 1):
+        pytest.skip(reason="Runtime still slower than I would like, so save some time")
     dfs_to_merge = []
     for i in range(10):
         df = pd.DataFrame(

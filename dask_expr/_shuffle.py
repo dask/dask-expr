@@ -661,7 +661,7 @@ class AssignPartitioningIndex(Blockwise):
     def operation(df, index, name: str, npartitions: int, cast_dtype, index_shuffle):
         """Construct a hash-based partitioning index"""
         if index_shuffle:
-            index = df.index.to_series()
+            index = df.index.to_frame()
         else:
             index = _select_columns_or_index(df, index)
 
