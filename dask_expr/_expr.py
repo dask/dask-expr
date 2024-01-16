@@ -1302,13 +1302,13 @@ class CombineFrame(CombineSeries):
 
 class ToNumeric(Elemwise):
     _parameters = ["frame", "errors", "downcast", "meta"]
-    _defaults = {"errors": "raise", "downcast": None, "meta": no_default}
+    _defaults = {"errors": "raise", "downcast": None, "meta": None}
     _exclude = ["meta"]
     operation = staticmethod(pd.to_numeric)
 
     @functools.cached_property
     def _meta(self):
-        if self.operand("meta") is not no_default:
+        if self.operand("meta") is not None:
             return self.operand("meta")
         return super()._meta
 

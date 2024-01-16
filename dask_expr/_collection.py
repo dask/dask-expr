@@ -3307,7 +3307,7 @@ def pivot_table(df, index, columns, values, aggfunc="mean"):
     )
 
 
-def to_numeric(arg, errors="raise", downcast=None, meta=no_default):
+def to_numeric(arg, errors="raise", downcast=None, meta=None):
     """
     Return type depends on input. Delayed if scalar, otherwise same as input.
     For errors, only "raise" and "coerce" are allowed.
