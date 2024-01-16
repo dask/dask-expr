@@ -3322,7 +3322,9 @@ def to_numeric(arg, errors="raise", downcast=None, meta=None):
 
     if is_arraylike(arg):
         return new_collection(
-            ToNumeric(from_array(arg), errors=errors, downcast=downcast)
+            ToNumeric(
+                from_array(arg).astype(arg.dtype), errors=errors, downcast=downcast
+            )
         ).to_dask_array(meta=meta)
 
     if is_series_like(arg):
