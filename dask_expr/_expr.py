@@ -1302,7 +1302,7 @@ class CombineFrame(CombineSeries):
 
 class ToNumeric(Elemwise):
     _parameters = ["frame", "errors", "downcast", "meta"]
-    _defaults = {"errors": "raise", "downcast": None, "meta": None}
+    _defaults = {"errors": "raise", "downcast": None, "meta": no_default}
     _exclude = ["meta"]
     operation = staticmethod(pd.to_numeric)
 
