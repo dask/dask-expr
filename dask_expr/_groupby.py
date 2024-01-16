@@ -55,12 +55,13 @@ from dask_expr._expr import (
     RenameFrame,
     RenameSeries,
     ToFrame,
+    _extract_meta,
     are_co_aligned,
     determine_column_projection,
     no_default,
 )
 from dask_expr._reductions import ApplyConcatApply, Chunk, Reduction
-from dask_expr._shuffle import Shuffle
+from dask_expr._shuffle import RearrangeByColumn
 from dask_expr._util import is_scalar
 
 
@@ -288,7 +289,7 @@ class GroupbyAggregation(GroupByApplyConcatApply, GroupByBase):
         "observed": None,
         "dropna": None,
         "split_every": 8,
-        "split_out": 1,
+        "split_out": None,
         "sort": None,
         "shuffle_method": None,
         "_slice": None,
@@ -724,11 +725,11 @@ class GroupByApply(Expr, GroupByBase):
                 if map_columns:
                     df = RenameFrame(df, map_columns)
 
-                df = Shuffle(
+                df = RearrangeByColumn(
                     df,
                     [map_columns.get(c, c) for c in cols],
                     df.npartitions,
-                    backend=self.shuffle_method,
+                    method=self.shuffle_method,
                 )
 
                 if unmap_columns:
@@ -750,11 +751,11 @@ class GroupByApply(Expr, GroupByBase):
                 map_columns, unmap_columns = get_map_columns(df)
                 if map_columns:
                     df = RenameFrame(df, map_columns)
-                df = Shuffle(
+                df = RearrangeByColumn(
                     df,
                     map_columns.get(self.by[0], self.by[0]),
                     df.npartitions,
-                    backend=self.shuffle_method,
+                    method=self.shuffle_method,
                 )
 
                 if unmap_columns:
@@ -972,25 +973,6 @@ def _meta_apply_transform(obj, grp_func):
     )
 
 
-def _extract_meta(x, nonempty=False):
-    """
-    Extract internal cache data (``_meta``) from dd.DataFrame / dd.Series
-    """
-    if isinstance(x, Expr):
-        return meta_nonempty(x._meta) if nonempty else x._meta
-    elif isinstance(x, list):
-        return [_extract_meta(_x, nonempty) for _x in x]
-    elif isinstance(x, tuple):
-        return tuple(_extract_meta(_x, nonempty) for _x in x)
-    elif isinstance(x, dict):
-        res = {}
-        for k in x:
-            res[k] = _extract_meta(x[k], nonempty)
-        return res
-    else:
-        return x
-
-
 def groupby_projection(expr, parent, dependents):
     if isinstance(parent, Projection):
         columns = determine_column_projection(
@@ -1068,6 +1050,7 @@ class GroupByCumulative(Expr, GroupByBase):
             True,
             False,
             True,
+            None,
             {"chunk": self.chunk, "columns": columns, **dropna, **self.numeric_only},
             *self.by,
         )
@@ -1095,6 +1078,7 @@ class GroupByCumulative(Expr, GroupByBase):
             True,
             False,
             True,
+            None,
             {"chunk": M.last, "columns": columns, **dropna},
             *by,
         )

@@ -145,6 +145,7 @@ class ShuffleReduce(Expr):
         "sort",
         "shuffle_by_index",
         "shuffle_method",
+        "ignore_index",
     ]
     _defaults = {
         "split_every": 8,
@@ -152,6 +153,7 @@ class ShuffleReduce(Expr):
         "sort": None,
         "shuffle_by_index": None,
         "shuffle_method": None,
+        "ignore_index": True,
     }
 
     @property
@@ -166,7 +168,7 @@ class ShuffleReduce(Expr):
 
     def _lower(self):
         from dask_expr._repartition import Repartition
-        from dask_expr._shuffle import SetIndexBlockwise, Shuffle, SortValues
+        from dask_expr._shuffle import RearrangeByColumn, SetIndexBlockwise, SortValues
 
         if is_index_like(self.frame._meta):
             columns = [self.frame._meta.name or "__index__"]
@@ -215,13 +217,13 @@ class ShuffleReduce(Expr):
                 ignore_index=ignore_index,
             )
         else:
-            shuffled = Shuffle(
+            shuffled = RearrangeByColumn(
                 chunked,
                 split_by,
                 shuffle_npartitions,
                 ignore_index=ignore_index,
                 index_shuffle=not split_by_index and self.shuffle_by_index,
-                backend=self.shuffle_method,
+                method=self.shuffle_method,
             )
 
         # Unmap column names if necessary
@@ -497,6 +499,7 @@ class ApplyConcatApply(Expr):
             sort=sort,
             shuffle_by_index=getattr(self, "shuffle_by_index", None),
             shuffle_method=getattr(self, "shuffle_method", None),
+            ignore_index=getattr(self, "ignore_index", True),
         )
 
 
@@ -767,22 +770,17 @@ class Reduction(ApplyConcatApply):
 
 
 class Sum(Reduction):
-    _parameters = ["frame", "skipna", "numeric_only", "min_count", "split_every"]
+    _parameters = ["frame", "skipna", "numeric_only", "split_every"]
     _defaults = {
         "split_every": False,
         "numeric_only": False,
-        "min_count": 0,
         "skipna": True,
     }
     reduction_chunk = M.sum
 
     @property
     def chunk_kwargs(self):
-        return dict(
-            skipna=self.skipna,
-            numeric_only=self.numeric_only,
-            min_count=self.min_count,
-        )
+        return dict(skipna=self.skipna, numeric_only=self.numeric_only)
 
     @property
     def combine_kwargs(self):
@@ -798,12 +796,12 @@ class Prod(Sum):
 
 
 class Max(Reduction):
-    _parameters = ["frame", "skipna", "numeric_only", "split_every"]
+    _parameters = ["frame", "skipna", "numeric_only", "split_every", "axis"]
     _defaults = {
         "split_every": False,
         "numeric_only": False,
-        "min_count": 0,
         "skipna": True,
+        "axis": 0,
     }
     reduction_chunk = M.max
 
@@ -812,15 +810,17 @@ class Max(Reduction):
         if self.frame._meta.ndim < 2:
             return dict(skipna=self.skipna)
         else:
-            return dict(skipna=self.skipna, numeric_only=self.numeric_only)
+            return dict(
+                skipna=self.skipna, numeric_only=self.numeric_only, axis=self.axis
+            )
 
     @property
     def combine_kwargs(self):
-        return dict(skipna=self.skipna)
+        return dict(skipna=self.skipna, axis=self.axis)
 
     @property
     def aggregate_kwargs(self):
-        return dict(skipna=self.skipna)
+        return dict(skipna=self.skipna, axis=self.axis)
 
 
 class Min(Max):
@@ -852,7 +852,8 @@ class All(Reduction):
 
 
 class IdxMin(Reduction):
-    _parameters = ["frame", "skipna", "numeric_only"]
+    _parameters = ["frame", "skipna", "numeric_only", "split_every"]
+    _defaults = {"skipna": True, "numeric_only": False, "split_every": False}
     reduction_chunk = idxmaxmin_chunk
     reduction_combine = idxmaxmin_combine
     reduction_aggregate = idxmaxmin_agg
@@ -860,8 +861,11 @@ class IdxMin(Reduction):
 
     @property
     def chunk_kwargs(self):
-        # TODO: Add numeric_only after Dask release on May 26th
-        return dict(skipna=self.skipna, fn=self._required_attribute)
+        return dict(
+            skipna=self.skipna,
+            fn=self._required_attribute,
+            numeric_only=self.numeric_only,
+        )
 
     @property
     def combine_kwargs(self):
@@ -1008,11 +1012,12 @@ class Var(ArrayReduction):
 
     @property
     def aggregate_kwargs(self):
+        cols = self.frame.columns if self.frame.ndim == 1 else self.frame._meta.columns
         return dict(
             ddof=self.ddof,
             skipna=self.skipna,
             meta=self._meta,
-            index=self.frame.columns,
+            index=cols,
         )
 
     @classmethod
@@ -1081,23 +1086,35 @@ class Moment(ArrayReduction):
 
 
 class Mean(Reduction):
-    _parameters = ["frame", "skipna", "numeric_only", "split_every"]
-    _defaults = {"skipna": True, "numeric_only": False, "split_every": False}
+    _parameters = ["frame", "skipna", "numeric_only", "split_every", "axis"]
+    _defaults = {"skipna": True, "numeric_only": False, "split_every": False, "axis": 0}
 
     @functools.cached_property
     def _meta(self):
-        return (
-            self.frame._meta.sum(skipna=self.skipna, numeric_only=self.numeric_only) / 2
+        return make_meta(
+            meta_nonempty(self.frame._meta).mean(
+                skipna=self.skipna, numeric_only=self.numeric_only, axis=self.axis
+            )
         )
 
     def _lower(self):
-        return self.frame.sum(
+        s = self.frame.sum(
             skipna=self.skipna,
             numeric_only=self.numeric_only,
             split_every=self.split_every,
-        ) / self.frame.count(
+        )
+        c = self.frame.count(
             split_every=self.split_every, numeric_only=self.numeric_only
         )
+        if self.axis is None and s.ndim == 1:
+            return s.sum() / c.sum()
+        else:
+            return MeanAggregate(s, c)
+
+
+class MeanAggregate(Blockwise):
+    _parameters = ["frame", "counter"]
+    operation = staticmethod(methods.mean_aggregate)
 
 
 class Count(Reduction):
@@ -1115,6 +1132,14 @@ class Count(Reduction):
             return dict()
         else:
             return dict(numeric_only=self.numeric_only)
+
+
+class IndexCount(Reduction):
+    _parameters = ["frame", "split_every"]
+    _defaults = {"split_every": False}
+    reduction_chunk = staticmethod(methods.index_count)
+    reduction_aggregate = staticmethod(np.sum)
+    # aggregate_chunk = staticmethod(np.sum)
 
 
 class Mode(ApplyConcatApply):
@@ -1198,8 +1223,8 @@ class ReductionConstantDim(Reduction):
 
 
 class NLargest(ReductionConstantDim):
-    _defaults = {"n": 5, "_columns": None}
-    _parameters = ["frame", "n", "_columns"]
+    _parameters = ["frame", "n", "_columns", "split_every"]
+    _defaults = {"n": 5, "_columns": None, "split_every": None}
     reduction_chunk = M.nlargest
     reduction_aggregate = M.nlargest
 
@@ -1235,7 +1260,6 @@ class NLargestSlow(NLargest):
 
 
 class NSmallest(NLargest):
-    _parameters = ["frame", "n", "_columns"]
     reduction_chunk = M.nsmallest
     reduction_aggregate = M.nsmallest
 
@@ -1367,12 +1391,16 @@ class TotalMemoryUsageFrame(MemoryUsageFrame):
 
 
 class IsMonotonicIncreasing(Reduction):
+    @functools.cached_property
+    def _meta(self):
+        return make_meta(bool)
+
     reduction_chunk = methods.monotonic_increasing_chunk
     reduction_combine = methods.monotonic_increasing_combine
     reduction_aggregate = methods.monotonic_increasing_aggregate
 
 
-class IsMonotonicDecreasing(Reduction):
+class IsMonotonicDecreasing(IsMonotonicIncreasing):
     reduction_chunk = methods.monotonic_decreasing_chunk
     reduction_combine = methods.monotonic_decreasing_combine
     reduction_aggregate = methods.monotonic_decreasing_aggregate

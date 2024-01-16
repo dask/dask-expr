@@ -4,7 +4,7 @@ import dask
 import numpy as np
 import pytest
 
-from dask_expr import SetIndexBlockwise, from_pandas
+from dask_expr import from_pandas
 from dask_expr._expr import Blockwise
 from dask_expr._repartition import RepartitionToFewer
 from dask_expr._shuffle import TaskShuffle, divisions_lru
@@ -30,7 +30,7 @@ def df(pdf):
 def test_disk_shuffle(ignore_index, npartitions, df):
     df2 = df.shuffle(
         "x",
-        backend="disk",
+        shuffle_method="disk",
         npartitions=npartitions,
         ignore_index=ignore_index,
     )
@@ -51,7 +51,7 @@ def test_disk_shuffle(ignore_index, npartitions, df):
     a = df2.partitions[1]
     b = df.shuffle(
         "y",
-        backend="disk",
+        shuffle_method="disk",
         npartitions=npartitions,
         ignore_index=ignore_index,
     ).partitions[1]
@@ -69,7 +69,7 @@ def test_disk_shuffle(ignore_index, npartitions, df):
 def test_task_shuffle(ignore_index, npartitions, max_branch, df):
     df2 = df.shuffle(
         "x",
-        backend="tasks",
+        shuffle_method="tasks",
         npartitions=npartitions,
         ignore_index=ignore_index,
         max_branch=max_branch,
@@ -91,7 +91,7 @@ def test_task_shuffle(ignore_index, npartitions, max_branch, df):
     a = df2.partitions[1]
     b = df.shuffle(
         "y",
-        backend="tasks",
+        shuffle_method="tasks",
         npartitions=npartitions,
         ignore_index=ignore_index,
     ).partitions[1]
@@ -111,7 +111,7 @@ def test_task_shuffle_index(npartitions, max_branch, pdf):
 
     df2 = df.shuffle(
         "x",
-        backend="tasks",
+        shuffle_method="tasks",
         npartitions=npartitions,
         max_branch=max_branch,
     )
@@ -200,22 +200,12 @@ def test_set_index_sorted(pdf):
     df = from_pandas(pdf, npartitions=10)
     q = df.set_index("y", sorted=True)
     assert_eq(q, pdf.set_index("y"))
-    result = q.simplify().expr
-    assert all(
-        isinstance(expr, (SetIndexBlockwise, FromPandas)) for expr in result.walk()
-    )
 
     q = df.set_index("y", sorted=True)["x"]
     assert_eq(q, pdf.set_index("y")["x"])
-    result = q.optimize(fuse=False)
-    expected = df[["x", "y"]].set_index("y", sorted=True)["x"].simplify()
-    assert result._name == expected._name
 
-    q = df.set_index(["y", "z"], sorted=True)[[]]
-    assert_eq(q, pdf.set_index(["y", "z"])[[]])
-    result = q.optimize(fuse=False)
-    expected = df[["y", "z"]].set_index(["y", "z"], sorted=True)[[]].simplify()
-    assert result._name == expected._name
+    with pytest.raises(NotImplementedError, match="not yet support multi-indexes"):
+        df.set_index(["y", "z"], sorted=True)
 
     with pytest.raises(TypeError, match="not supported by set_index"):
         df.set_index([df["y"], df["x"]], sorted=True)

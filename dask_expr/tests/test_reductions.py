@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 import numpy as np
 import pytest
 from dask.utils import M
@@ -267,6 +269,10 @@ def test_reductions(func, pdf, df):
     # is not reflected in the meta calculation
     assert_eq(func(df)["x"], func(pdf)["x"], check_dtype=False)
 
+    result = func(df, axis=1)
+    assert result.known_divisions
+    assert_eq(result, func(pdf, axis=1))
+
 
 def test_skew_kurt():
     pdf = pd.DataFrame(
@@ -303,7 +309,6 @@ def test_index_reductions(func, pdf, df):
         lambda idx: idx.index,
         M.sum,
         M.prod,
-        M.count,
         M.mean,
         M.std,
         M.var,
@@ -354,3 +359,41 @@ def test_std_kwargs(axis, skipna, ddof):
         pdf.std(axis=axis, skipna=skipna, ddof=ddof, numeric_only=True),
         df.std(axis=axis, skipna=skipna, ddof=ddof, numeric_only=True),
     )
+
+
+def test_mean_series_axis_none(df, pdf):
+    assert_eq(df.x.mean(axis=None), pdf.x.mean(axis=None))
+
+
+def test_mode_numeric_only():
+    df = pd.DataFrame(
+        {
+            "int": [1, 2, 3, 4, 5, 6, 7, 8],
+            "float": [1.0, 2.0, 3.0, 4.0, np.nan, 6.0, 7.0, 8.0],
+            "dt": [pd.NaT] + [datetime(2010, i, 1) for i in range(1, 8)],
+            "timedelta": pd.to_timedelta([1, 2, 3, 4, 5, 6, 7, np.nan]),
+        }
+    )
+    ddf = from_pandas(df, npartitions=2)
+
+    assert_eq(ddf.mode(numeric_only=False), df.mode(numeric_only=False))
+    assert_eq(ddf.mode(), df.mode())
+    assert_eq(ddf.mode(numeric_only=True), df.mode(numeric_only=True))
+
+
+def test_divmod():
+    df1 = pd.Series(np.random.rand(10))
+    df2 = pd.Series(np.random.rand(10))
+
+    ddf1 = from_pandas(df1, npartitions=3)
+    ddf2 = from_pandas(df2, npartitions=3)
+
+    result = divmod(ddf1, 2.0)
+    expected = divmod(df1, 2.0)
+    assert_eq(result[0], expected[0])
+    assert_eq(result[1], expected[1])
+
+    result = divmod(ddf1, ddf2)
+    expected = divmod(df1, df2)
+    assert_eq(result[0], expected[0])
+    assert_eq(result[1], expected[1])

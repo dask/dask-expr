@@ -16,7 +16,6 @@ from dask.core import flatten
 from dask.dataframe import methods
 from dask.dataframe.core import (
     _concat,
-    _emulate,
     _get_divisions_map_partitions,
     _rename,
     apply_and_enforce,
@@ -25,17 +24,30 @@ from dask.dataframe.core import (
     is_index_like,
     is_series_like,
     make_meta,
+    pd_split,
+    safe_head,
     total_mem_usage,
 )
 from dask.dataframe.dispatch import meta_nonempty
 from dask.dataframe.rolling import CombinedOutput, _head_timedelta, overlap_chunk
+from dask.dataframe.shuffle import drop_overlap, get_overlap
 from dask.dataframe.utils import (
     clear_known_categories,
     drop_by_shallow_copy,
+    raise_on_meta_error,
     valid_divisions,
 )
 from dask.typing import no_default
-from dask.utils import M, apply, funcname, has_keyword, is_arraylike, partial_by_order
+from dask.utils import (
+    M,
+    apply,
+    funcname,
+    has_keyword,
+    is_arraylike,
+    partial_by_order,
+    pseudorandom,
+    random_state_data,
+)
 from tlz import merge_sorted, unique
 
 from dask_expr import _core as core
@@ -222,11 +234,27 @@ class Expr(core.Expr):
     def __rmod__(self, other):
         return Mod(other, self)
 
-    def sum(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
-        return Sum(self, skipna, numeric_only, min_count, split_every)
+    def __floordiv__(self, other):
+        return FloorDiv(self, other)
 
-    def prod(self, skipna=True, numeric_only=False, min_count=0, split_every=False):
-        return Prod(self, skipna, numeric_only, min_count, split_every)
+    def __rfloordiv__(self, other):
+        return FloorDiv(other, self)
+
+    def __divmod__(self, other):
+        res1 = self // other
+        res2 = self % other
+        return res1, res2
+
+    def __rdivmod__(self, other):
+        res1 = other // self
+        res2 = other % self
+        return res1, res2
+
+    def sum(self, skipna=True, numeric_only=False, split_every=False):
+        return Sum(self, skipna, numeric_only, split_every)
+
+    def prod(self, skipna=True, numeric_only=False, split_every=False):
+        return Prod(self, skipna, numeric_only, split_every)
 
     def var(self, axis=0, skipna=True, ddof=1, numeric_only=False, split_every=False):
         if axis == 0:
@@ -239,13 +267,17 @@ class Expr(core.Expr):
     def std(self, axis=0, skipna=True, ddof=1, numeric_only=False, split_every=False):
         return Sqrt(self.var(axis, skipna, ddof, numeric_only, split_every=split_every))
 
-    def mean(self, skipna=True, numeric_only=False, split_every=False):
+    def mean(self, skipna=True, numeric_only=False, split_every=False, axis=0):
         return Mean(
-            self, skipna=skipna, numeric_only=numeric_only, split_every=split_every
+            self,
+            skipna=skipna,
+            numeric_only=numeric_only,
+            split_every=split_every,
+            axis=axis,
         )
 
-    def max(self, skipna=True, numeric_only=False, split_every=False):
-        return Max(self, skipna, numeric_only, split_every)
+    def max(self, skipna=True, numeric_only=False, split_every=False, axis=0):
+        return Max(self, skipna, numeric_only, split_every, axis)
 
     def any(self, skipna=True, split_every=False):
         return Any(self, skipna=skipna, split_every=split_every)
@@ -253,17 +285,21 @@ class Expr(core.Expr):
     def all(self, skipna=True, split_every=False):
         return All(self, skipna=skipna, split_every=split_every)
 
-    def idxmin(self, skipna=True, numeric_only=False):
-        return IdxMin(self, skipna=skipna, numeric_only=numeric_only)
+    def idxmin(self, skipna=True, numeric_only=False, split_every=False):
+        return IdxMin(
+            self, skipna=skipna, numeric_only=numeric_only, split_every=split_every
+        )
 
-    def idxmax(self, skipna=True, numeric_only=False):
-        return IdxMax(self, skipna=skipna, numeric_only=numeric_only)
+    def idxmax(self, skipna=True, numeric_only=False, split_every=False):
+        return IdxMax(
+            self, skipna=skipna, numeric_only=numeric_only, split_every=split_every
+        )
 
     def mode(self, dropna=True, split_every=False):
         return Mode(self, dropna=dropna, split_every=split_every)
 
-    def min(self, skipna=True, numeric_only=False, split_every=False):
-        return Min(self, skipna, numeric_only, split_every=split_every)
+    def min(self, skipna=True, numeric_only=False, split_every=False, axis=0):
+        return Min(self, skipna, numeric_only, split_every=split_every, axis=axis)
 
     def count(self, numeric_only=False, split_every=False):
         return Count(self, numeric_only, split_every)
@@ -294,11 +330,12 @@ class Expr(core.Expr):
     def astype(self, dtypes):
         return AsType(self, dtypes)
 
-    def clip(self, lower=None, upper=None):
-        return Clip(self, lower=lower, upper=upper)
+    def clip(self, lower=None, upper=None, axis=None):
+        return Clip(self, lower=lower, upper=upper, axis=axis)
 
     def combine_first(self, other):
-        return CombineFirst(self, other=other)
+        frame, other = self._align_divisions(other, axis=0)
+        return CombineFirst(frame, other=other)
 
     def to_timestamp(self, freq=None, how="start"):
         return ToTimestamp(self, freq=freq, how=how)
@@ -310,56 +347,58 @@ class Expr(core.Expr):
         # These are the same anyway
         return IsNa(self)
 
-    def mask(self, cond, other=np.nan):
-        return Mask(self, cond=cond, other=other)
-
     def round(self, decimals=0):
         return Round(self, decimals=decimals)
 
-    def where(self, cond, other=np.nan):
-        return Where(self, cond=cond, other=other)
+    def _mask_where_alignment(self, cond, other):
+        frame = self
+        if isinstance(cond, Expr) and isinstance(other, Expr):
+            frame, cond, other = frame._align_divisions(cond, other, axis=0)
+        elif isinstance(cond, Expr):
+            frame, cond = frame._align_divisions(cond, axis=0)
+        elif isinstance(other, Expr):
+            frame, other = frame._align_divisions(other, axis=0)
+        return frame, cond, other
 
-    def apply(self, function, *args, **kwargs):
-        return Apply(self, function, args, kwargs)
+    def where(self, cond, other=np.nan):
+        frame, cond, other = self._mask_where_alignment(cond, other)
+        return Where(frame, cond=cond, other=other)
+
+    def mask(self, cond, other=np.nan):
+        frame, cond, other = self._mask_where_alignment(cond, other)
+        return Mask(frame, cond=cond, other=other)
+
+    def apply(self, function, *args, meta=None, **kwargs):
+        return Apply(self, function, args, meta, kwargs)
 
     def replace(self, to_replace=None, value=no_default, regex=False):
         return Replace(self, to_replace=to_replace, value=value, regex=regex)
 
     def fillna(self, value=None):
-        return Fillna(self, value=value)
+        frame = self
+        if isinstance(value, Expr):
+            frame, value = self._align_divisions(value, axis=None)
+        return Fillna(frame, value=value)
 
     def rename_axis(
         self, mapper=no_default, index=no_default, columns=no_default, axis=0
     ):
         return RenameAxis(self, mapper=mapper, index=index, columns=columns, axis=axis)
 
-    def _align_divisions(self, other, axis=None):
-        from dask_expr._repartition import Repartition
-
-        if are_co_aligned(self, other) or axis in (1, "columns"):
-            left = self
-
+    def _align_divisions(self, *exprs, axis=None):
+        dfs = [self] + list(exprs)
+        if are_co_aligned(self, *exprs) or axis in (1, "columns"):
+            return dfs
+        elif all(x.npartitions == 1 for x in dfs):
+            return dfs
         else:
-            dfs = [self, other]
-            if not all(df.known_divisions for df in dfs):
-                raise ValueError(
-                    "Not all divisions are known, can't align "
-                    "partitions. Please use `set_index` "
-                    "to set the index."
-                )
-
-            divisions = list(unique(merge_sorted(*[df.divisions for df in dfs])))
-            if len(divisions) == 1:  # single value for index
-                divisions = (divisions[0], divisions[0])
-
-            left = Repartition(self, new_divisions=divisions, force=True)
-            other = Repartition(other, new_divisions=divisions, force=True)
-        return left, other
+            divisions = calc_divisions_for_align(*dfs)
+            return maybe_align_partitions(*dfs, divisions=divisions)
 
     def align(self, other, join="outer", axis=None, fill_value=None):
         from dask_expr._collection import new_collection
 
-        left, other = self._align_divisions(other, axis)
+        left, other = self._align_divisions(other, axis=axis)
         aligned = _Align(left, other, join=join, axis=axis, fill_value=fill_value)
 
         return new_collection(AlignGetitem(aligned, position=0)), new_collection(
@@ -547,9 +586,10 @@ class MapPartitions(Blockwise):
         "transform_divisions",
         "clear_divisions",
         "align_dataframes",
+        "parent_meta",
         "kwargs",
     ]
-    _defaults = {"kwargs": None, "align_dataframes": True}
+    _defaults = {"kwargs": None, "align_dataframes": True, "parent_meta": None}
 
     def __str__(self):
         return f"MapPartitions({funcname(self.func)})"
@@ -566,7 +606,7 @@ class MapPartitions(Blockwise):
     def _meta(self):
         meta = self.operand("meta")
         return _get_meta_map_partitions(
-            self.args, [], self.func, self.kwargs, meta, None
+            self.args, [self.frame], self.func, self.kwargs, meta, self.parent_meta
         )
 
     def _divisions(self):
@@ -695,8 +735,10 @@ class UFuncElemwise(MapPartitions):
     @functools.cached_property
     def _meta(self):
         if self.operand("meta") is not no_default:
-            return self.operand("meta")
-        return _get_meta_ufunc(self._dfs, self.args, self.func)
+            meta = self.operand("meta")
+        else:
+            meta = _get_meta_ufunc(self._dfs, self.args, self.func)
+        return make_meta(meta)
 
     def _divisions(self):
         if (
@@ -862,6 +904,7 @@ class MapOverlap(MapPartitions):
             self.transform_divisions,
             self.clear_divisions,
             self.align_dataframes,
+            None,
             self._kwargs,
             *self.args[1:],
         )
@@ -1236,11 +1279,16 @@ class Isin(Elemwise):
     _parameters = ["frame", "values"]
     operation = M.isin
 
+    @functools.cached_property
+    def _meta(self):
+        return make_meta(meta_nonempty(self.frame._meta).isin([1]))
+
 
 class Clip(Elemwise):
     _projection_passthrough = True
-    _parameters = ["frame", "lower", "upper"]
-    _defaults = {"lower": None, "upper": None}
+    _parameters = ["frame", "lower", "upper", "axis"]
+    _defaults = {"lower": None, "upper": None, "axis": None}
+    _keyword_only = ["axis"]
     operation = M.clip
 
     def _simplify_up(self, parent, dependents):
@@ -1286,9 +1334,22 @@ class CombineFrame(CombineSeries):
 
 
 class ToNumeric(Elemwise):
-    _parameters = ["frame", "errors", "downcast"]
-    _defaults = {"errors": "raise", "downcast": None}
+    _parameters = ["frame", "errors", "downcast", "meta"]
+    _defaults = {"errors": "raise", "downcast": None, "meta": None}
+    _keyword_only = ["meta"]
     operation = staticmethod(pd.to_numeric)
+
+    @functools.cached_property
+    def _kwargs(self):
+        kwargs = super()._kwargs
+        kwargs.pop("meta", None)
+        return kwargs
+
+    @functools.cached_property
+    def _meta(self):
+        if self.operand("meta") is not None:
+            return self.operand("meta")
+        return super()._meta
 
 
 class ToDatetime(Elemwise):
@@ -1380,6 +1441,43 @@ class Where(Elemwise):
     operation = M.where
 
 
+def _check_divisions(df, i, division_min, division_max, last):
+    # Check divisions
+    real_min = df.index.min()
+    real_max = df.index.max()
+    # Upper division of the last partition is often set to
+    # the max value. For all other partitions, the upper
+    # division should be greater than the maximum value.
+    valid_min = real_min >= division_min
+    valid_max = (real_max <= division_max) if last else (real_max < division_max)
+    if not (valid_min and valid_max):
+        raise RuntimeError(
+            f"`enforce_runtime_divisions` failed for partition {i}."
+            f" Expected a range of [{division_min}, {division_max}), "
+            f" but the real range was [{real_min}, {real_max}]."
+        )
+    return df
+
+
+class EnforceRuntimeDivisions(Blockwise):
+    _parameters = ["frame"]
+    operation = staticmethod(_check_divisions)
+
+    @functools.cached_property
+    def _meta(self):
+        return self.frame._meta
+
+    def _task(self, index: int):
+        args = [self._blockwise_arg(op, index) for op in self._args]
+        args = args + [
+            index,
+            self.divisions[index],
+            self.divisions[index + 1],
+            index == (self.npartitions - 1),
+        ]
+        return (self.operation,) + tuple(args)
+
+
 class Abs(Elemwise):
     _projection_passthrough = True
     _parameters = ["frame"]
@@ -1426,20 +1524,74 @@ class ToSeriesIndex(Elemwise):
     operation = M.to_series
 
 
+def pd_split(df, p, random_state=None, shuffle=False):
+    """Split DataFrame into multiple pieces pseudorandomly
+
+    >>> df = pd.DataFrame({'a': [1, 2, 3, 4, 5, 6],
+    ...                    'b': [2, 3, 4, 5, 6, 7]})
+
+    >>> a, b = pd_split(
+    ...     df, [0.5, 0.5], random_state=123, shuffle=True
+    ... )  # roughly 50/50 split
+    >>> a
+       a  b
+    3  4  5
+    0  1  2
+    5  6  7
+    >>> b
+       a  b
+    1  2  3
+    4  5  6
+    2  3  4
+    """
+    p = list(p)
+    if shuffle:
+        if not isinstance(random_state, np.random.RandomState):
+            random_state = np.random.RandomState(random_state)
+        df = df.sample(frac=1.0, random_state=random_state)
+    index = pseudorandom(len(df), p, random_state)
+    return df.assign(_split=index)
+
+
+class Split(Elemwise):
+    _parameters = ["frame", "frac", "random_state", "shuffle"]
+    _keyword_only = ["random_state", "shuffle"]
+    operation = staticmethod(pd_split)
+
+    @functools.cached_property
+    def _kwargs(self) -> dict:
+        return {"shuffle": self.shuffle}
+
+    @functools.cached_property
+    def random_state_data(self):
+        return random_state_data(self.frame.npartitions, self.random_state)
+
+    def _task(self, index: int):
+        args = [self._blockwise_arg(op, index) for op in self._args]
+        kwargs = self._kwargs.copy()
+        kwargs["random_state"] = self.random_state_data[index]
+        return apply, self.operation, args, kwargs
+
+
+def _random_split_take(df, i):
+    return df[df["_split"] == i].drop(columns="_split")
+
+
+class SplitTake(Blockwise):
+    _parameters = ["frame", "i"]
+    operation = staticmethod(_random_split_take)
+
+
 class Apply(Elemwise):
     """A good example of writing a less-trivial blockwise operation"""
 
-    _parameters = ["frame", "function", "args", "kwargs"]
+    _parameters = ["frame", "function", "args", "meta", "kwargs"]
     _defaults = {"args": (), "kwargs": {}}
     operation = M.apply
 
     @functools.cached_property
     def _meta(self):
-        return make_meta(
-            meta_nonempty(self.frame._meta).apply(
-                self.function, *self.args, **self.kwargs
-            )
-        )
+        return make_meta(self.operand("meta"), parent_meta=self.frame._meta)
 
     def _task(self, index: int):
         return (
@@ -1472,7 +1624,7 @@ class Map(Elemwise):
         return make_meta(
             self.operand("meta"),
             parent_meta=self.frame._meta,
-            index=self.frame._meta.index,
+            index=getattr(self.frame._meta, "index", None),  # could be an index
         )
 
     @functools.cached_property
@@ -1695,7 +1847,7 @@ class Index(Elemwise):
         )
 
 
-def _return_input(df):
+def _return_input(df, divisions=None):
     return df
 
 
@@ -1705,6 +1857,75 @@ class ClearDivisions(Elemwise):
 
     def _divisions(self):
         return (None,) * (self.frame.npartitions + 1)
+
+
+class SetDivisions(Elemwise):
+    _parameters = ["frame", "divisions"]
+    operation = staticmethod(_return_input)
+
+    def _divisions(self):
+        return self.operand("divisions")
+
+
+class ResolveOverlappingDivisions(Expr):
+    _parameters = ["frame", "mins", "maxes", "lens"]
+
+    @functools.cached_property
+    def _meta(self):
+        return self.frame._meta
+
+    def _divisions(self):
+        non_empties = [i for i, length in enumerate(self.lens) if length != 0]
+        if len(non_empties) == 0:
+            return (None, None)
+
+        return tuple(self.mins) + (self.maxes[-1],)
+
+    def _layer(self):
+        non_empties = [i for i, length in enumerate(self.lens) if length != 0]
+        # If all empty, collapse into one partition
+        if len(non_empties) == 0:
+            return {(self._name, 0): (self.frame._name, 0)}
+
+        # drop empty partitions by mapping each partition in a new graph to a particular
+        # partition on the old graph.
+        dsk = {
+            (self._name, i): (self.frame._name, div)
+            for i, div in enumerate(non_empties)
+        }
+        ddf_keys = list(dsk.values())
+
+        overlap = [
+            i for i in range(1, len(self.mins)) if self.mins[i] >= self.maxes[i - 1]
+        ]
+        divisions = self.divisions
+
+        frames = []
+        for i in overlap:
+            # `frames` is a list of data from previous partitions that we may want to
+            # move to partition i.  Here, we add "overlap" from the previous partition
+            # (i-1) to this list.
+            frames.append((get_overlap, ddf_keys[i - 1], divisions[i]))
+
+            # Make sure that any data added from partition i-1 to `frames` is removed
+            # from partition i-1.
+            dsk[(self._name, i - 1)] = (
+                drop_overlap,
+                dsk[(self._name, i - 1)],
+                divisions[i],
+            )
+
+            # We do not want to move "overlap" from the previous partition (i-1) into
+            # this partition (i) if the data from this partition will need to be moved
+            # to the next partition (i+1) anyway.  If we concatenate data too early,
+            # we may lose rows (https://github.com/dask/dask/issues/6972).
+            if divisions[i] == divisions[i + 1] and i + 1 in overlap:
+                continue
+
+            frames.append(ddf_keys[i])
+            dsk[(self._name, i)] = (methods.concat, frames)
+            frames = []
+        return dsk
 
 
 class Lengths(Expr):
@@ -1818,8 +2039,17 @@ class Head(Expr):
     def _meta(self):
         return self.frame._meta
 
+    @functools.cached_property
+    def npartitions(self):
+        return 1
+
     def _divisions(self):
-        return self.frame.divisions[:2]
+        if self.operand("npartitions") <= -1:
+            return self.frame.divisions[0], self.frame.divisions[-1]
+        return (
+            self.frame.divisions[0],
+            self.frame.divisions[self.operand("npartitions") + 1],
+        )
 
     def _task(self, index: int):
         raise NotImplementedError()
@@ -1843,21 +2073,39 @@ class Head(Expr):
     def _lower(self):
         if not isinstance(self, BlockwiseHead):
             # Lower to Blockwise
+            npartitions = self.operand("npartitions")
             if self.operand("npartitions") > self.frame.npartitions:
                 raise ValueError(
-                    f"only {self.frame.npartitions} partitions, head received {self.npartitions}"
+                    f"only {self.frame.npartitions} partitions, head received {npartitions}"
                 )
-
-            if isinstance(self, PartitionsFiltered):
-                partitions = self.frame._partitions[: self.operand("npartitions")]
-            else:
-                partitions = list(
-                    range(self.frame.npartitions)[: self.operand("npartitions")]
-                )
-
+            partitions = self._partitions
             if is_index_like(self._meta):
-                return BlockwiseHeadIndex(Partitions(self.frame, partitions), self.n)
-            return BlockwiseHead(Partitions(self.frame, partitions), self.n)
+                return BlockwiseHeadIndex(
+                    Partitions(self.frame, partitions), self.n, safe=False
+                )
+
+            safe = True if npartitions == 1 and self.frame.npartitions != 1 else False
+            frame = BlockwiseHead(
+                Partitions(self.frame, partitions), self.n, npartitions, safe
+            )
+            if npartitions != 1:
+                from dask_expr import Repartition
+
+                safe = npartitions != self.frame.npartitions and npartitions != -1
+                frame = BlockwiseHead(
+                    Repartition(frame, new_partitions=1), self.n, 1, safe
+                )
+            return frame
+
+    @property
+    def _partitions(self):
+        if isinstance(self, PartitionsFiltered):
+            partitions = self.frame._partitions
+        else:
+            partitions = list(range(self.frame.npartitions))
+        if self.operand("npartitions") > -1:
+            partitions = partitions[: self.operand("npartitions")]
+        return partitions
 
 
 class BlockwiseHead(Head, Blockwise):
@@ -1867,11 +2115,21 @@ class BlockwiseHead(Head, Blockwise):
     the first `n` rows of an entire collection.
     """
 
+    _parameters = ["frame", "n", "npartitions", "safe"]
+
+    @functools.cached_property
+    def npartitions(self):
+        return len(self._divisions()) - 1
+
     def _divisions(self):
-        return self.frame.divisions
+        return self.frame.divisions[: len(self._partitions) + 1]
 
     def _task(self, index: int):
-        return (M.head, (self.frame._name, index), self.n)
+        if self.safe:
+            op = safe_head
+        else:
+            op = M.head
+        return (op, (self.frame._name, index), self.n)
 
 
 class BlockwiseHeadIndex(BlockwiseHead):
@@ -2003,14 +2261,6 @@ class Add(Binop):
     operation = operator.add
     _operator_repr = "+"
 
-    def _simplify_down(self):
-        if (
-            isinstance(self.left, Expr)
-            and isinstance(self.right, Expr)
-            and self.left._name == self.right._name
-        ):
-            return 2 * self.left
-
 
 class MethodOperator(Binop):
     _parameters = ["name", "left", "right", "axis", "level", "fill_value"]
@@ -2104,6 +2354,11 @@ class Mod(Binop):
     _operator_repr = "%"
 
 
+class FloorDiv(Binop):
+    operation = operator.floordiv
+    _operator_repr = "//"
+
+
 class Unaryop(Elemwise):
     _parameters = ["frame"]
 
@@ -2192,21 +2447,20 @@ class Partitions(Expr):
 class PartitionsFiltered(Expr):
     """Mixin class for partition filtering
 
-    A `PartitionsFiltered` subclass must define a
-    `_partitions` parameter. When `_partitions` is
-    defined, the following expresssions must produce
-    the same output for `cls: PartitionsFiltered`:
-      - `cls(expr: Expr, ..., _partitions)`
-      - `Partitions(cls(expr: Expr, ...), _partitions)`
+    A ``PartitionsFiltered`` subclass must define a ``_partitions`` parameter. When
+    ``_partitions`` is defined, the following expressions must produce the same output
+    for :cls:`PartitionsFiltered`:
 
-    In order to leverage the default `Expr._layer`
-    method, subclasses should define `_filtered_task`
-    instead of `_task`.
+    - ``cls(expr: Expr, ..., _partitions)``
+    - ``Partitions(cls(expr: Expr, ...), _partitions)``
+
+    In order to leverage the default ``Expr._layer`` method, subclasses should define
+    ``_filtered_task`` instead of ``_task``.
     """
 
     @property
     def _filtered(self) -> bool:
-        """Whether or not output partitions have been filtered"""
+        """Whether output partitions have been filtered"""
         return self.operand("_partitions") is not None
 
     @property
@@ -2472,6 +2726,21 @@ class Diff(MapOverlap):
     @property
     def after(self):
         return 0 if self.periods > 0 else -self.periods
+
+
+class FillnaCheck(Blockwise):
+    _parameters = ["frame", "method", "skip_check"]
+    operation = staticmethod(methods.fillna_check)
+    _projection_passthrough = True
+
+    @functools.cached_property
+    def _meta(self):
+        return self.frame._meta
+
+    def _task(self, index: int):
+        args = [self._blockwise_arg(op, index) for op in self._args]
+        args[-1] = index != self.skip_check(self.frame)
+        return (self.operation,) + tuple(args)
 
 
 class FFill(MapOverlap):
@@ -2793,6 +3062,36 @@ def maybe_align_partitions(*exprs, divisions):
         else df
         for df in exprs
     ]
+
+
+def _extract_meta(x, nonempty=False):
+    """
+    Extract internal cache data (``_meta``) from dd.DataFrame / dd.Series
+    """
+    if isinstance(x, Expr):
+        return meta_nonempty(x._meta) if nonempty else x._meta
+    elif isinstance(x, list):
+        return [_extract_meta(_x, nonempty) for _x in x]
+    elif isinstance(x, tuple):
+        return tuple(_extract_meta(_x, nonempty) for _x in x)
+    elif isinstance(x, dict):
+        res = {}
+        for k in x:
+            res[k] = _extract_meta(x[k], nonempty)
+        return res
+    elif hasattr(x, "expr"):
+        return _extract_meta(x.expr, nonempty)
+    else:
+        return x
+
+
+def _emulate(func, *args, udf=False, **kwargs):
+    """
+    Apply a function using args / kwargs. If arguments contain dd.DataFrame /
+    dd.Series, using internal cache (``_meta``) for calculation
+    """
+    with raise_on_meta_error(funcname(func), udf=udf):
+        return func(*_extract_meta(args, True), **_extract_meta(kwargs, True))
 
 
 def _get_meta_map_partitions(args, dfs, func, kwargs, meta, parent_meta):
