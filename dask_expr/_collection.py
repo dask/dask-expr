@@ -1178,7 +1178,7 @@ class FrameBase(DaskMethodsMixin):
         frac : list
             List of floats that should sum to one.
         random_state : int or np.random.RandomState
-            If int create a new RandomState with this as the seed.
+            If int or None create a new RandomState with this as the seed.
             Otherwise draw from the passed RandomState.
         shuffle : bool, default False
             If set to True, the dataframe is shuffled (within partition)
