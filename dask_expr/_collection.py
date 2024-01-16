@@ -15,7 +15,6 @@ import pandas as pd
 from dask import compute, delayed
 from dask.array import Array
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
-from dask.dataframe._compat import PANDAS_GE_200
 from dask.dataframe.accessor import CachedAccessor
 from dask.dataframe.core import (
     _concat,
@@ -3566,15 +3565,6 @@ def to_datetime(arg, meta=None, **kwargs):
             meta = meta_series_constructor(arg)([pd.Timestamp("2000", **tz_kwarg)])
             meta.index = meta.index.astype(arg.index.dtype)
             meta.index.name = arg.index.name
-    if PANDAS_GE_200 and "infer_datetime_format" in kwargs:
-        warnings.warn(
-            "The argument 'infer_datetime_format' is deprecated and will be removed in a future version. "
-            "A strict version of it is now the default, see "
-            "https://pandas.pydata.org/pdeps/0004-consistent-to-datetime-parsing.html. "
-            "You can safely remove this argument.",
-            UserWarning,
-        )
-        kwargs.pop("infer_datetime_format")
 
     return new_collection(ToDatetime(frame=arg, kwargs=kwargs, meta=meta))
 
