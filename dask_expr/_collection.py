@@ -42,6 +42,7 @@ from dask.delayed import delayed
 from dask.utils import (
     IndexCallable,
     M,
+    get_meta_library,
     memory_repr,
     put_lines,
     random_state_data,
@@ -422,24 +423,6 @@ class FrameBase(DaskMethodsMixin):
                 "of the underlying computational graph."
             )
         return new_collection(self.expr)
-
-    def eq(self, other):
-        return self.__eq__(other)
-
-    def ne(self, other):
-        return self.__ne__(other)
-
-    def gt(self, other):
-        return self.__gt__(other)
-
-    def ge(self, other):
-        return self.__ge__(other)
-
-    def lt(self, other):
-        return self.__lt__(other)
-
-    def le(self, other):
-        return self.__le__(other)
 
     def isin(self, values):
         if isinstance(self, DataFrame):
@@ -2301,6 +2284,30 @@ class DataFrame(FrameBase):
 
         return ILocIndexer(self)
 
+    def _comparison_op(self, expr_cls, other, level, axis):
+        if level is not None:
+            raise NotImplementedError("level must be None")
+        axis = self._validate_axis(axis)
+        return new_collection(expr_cls(self, other, axis))
+
+    def lt(self, other, level=None, axis=0):
+        return self._comparison_op(expr.LTFrame, other, level, axis)
+
+    def le(self, other, level=None, axis=0):
+        return self._comparison_op(expr.LEFrame, other, level, axis)
+
+    def gt(self, other, level=None, axis=0):
+        return self._comparison_op(expr.GTFrame, other, level, axis)
+
+    def ge(self, other, level=None, axis=0):
+        return self._comparison_op(expr.GEFrame, other, level, axis)
+
+    def ne(self, other, level=None, axis=0):
+        return self._comparison_op(expr.NEFrame, other, level, axis)
+
+    def eq(self, other, level=None, axis=0):
+        return self._comparison_op(expr.EQFrame, other, level, axis)
+
     def categorize(self, columns=None, index=None, split_every=None, **kwargs):
         """Convert columns of the DataFrame to category dtype.
 
@@ -2691,6 +2698,30 @@ class Series(FrameBase):
 
     def to_frame(self, name=no_default):
         return new_collection(expr.ToFrame(self, name=name))
+
+    def _comparison_op(self, expr_cls, other, level, fill_value, axis):
+        if level is not None:
+            raise NotImplementedError("level must be None")
+        self._validate_axis(axis)
+        return new_collection(expr_cls(self, other, fill_value=fill_value))
+
+    def lt(self, other, level=None, fill_value=None, axis=0):
+        return self._comparison_op(expr.LTSeries, other, level, fill_value, axis)
+
+    def le(self, other, level=None, fill_value=None, axis=0):
+        return self._comparison_op(expr.LESeries, other, level, fill_value, axis)
+
+    def gt(self, other, level=None, fill_value=None, axis=0):
+        return self._comparison_op(expr.GTSeries, other, level, fill_value, axis)
+
+    def ge(self, other, level=None, fill_value=None, axis=0):
+        return self._comparison_op(expr.GESeries, other, level, fill_value, axis)
+
+    def ne(self, other, level=None, fill_value=None, axis=0):
+        return self._comparison_op(expr.NESeries, other, level, fill_value, axis)
+
+    def eq(self, other, level=None, fill_value=None, axis=0):
+        return self._comparison_op(expr.EQSeries, other, level, fill_value, axis)
 
     def value_counts(
         self,
@@ -3470,7 +3501,7 @@ def from_map(
         raise ValueError("All `iterables` must have a non-zero length")
 
     # Check if `func` supports column projection
-    allow_projection = True
+    allow_projection = False
     if "columns" in inspect.signature(func).parameters:
         allow_projection = True
     elif isinstance(func, DataFrameIOFunction):
@@ -3586,10 +3617,26 @@ def to_numeric(arg, errors="raise", downcast=None, meta=None):
     )
 
 
-def to_datetime(arg, **kwargs):
-    if not isinstance(arg, FrameBase):
-        raise TypeError("arg must be a Series or a DataFrame")
-    return new_collection(ToDatetime(frame=arg, kwargs=kwargs))
+def to_datetime(arg, meta=None, **kwargs):
+    tz_kwarg = {"tz": "utc"} if kwargs.get("utc") else {}
+
+    (arg,) = _maybe_from_pandas([arg])
+
+    if meta is None:
+        if isinstance(arg, Index):
+            meta = get_meta_library(arg).DatetimeIndex([], **tz_kwarg)
+            meta.name = arg.name
+        elif not (is_dataframe_like(arg) or is_series_like(arg)):
+            raise NotImplementedError(
+                "dask.dataframe.to_datetime does not support "
+                "non-index-able arguments (like scalars)"
+            )
+        else:
+            meta = meta_series_constructor(arg)([pd.Timestamp("2000", **tz_kwarg)])
+            meta.index = meta.index.astype(arg.index.dtype)
+            meta.index.name = arg.index.name
+
+    return new_collection(ToDatetime(frame=arg, kwargs=kwargs, meta=meta))
 
 
 def to_timedelta(arg, unit=None, errors="raise"):
