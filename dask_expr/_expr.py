@@ -28,7 +28,7 @@ from dask.dataframe.core import (
     safe_head,
     total_mem_usage,
 )
-from dask.dataframe.dispatch import meta_nonempty
+from dask.dataframe.dispatch import make_meta_dispatch, meta_nonempty
 from dask.dataframe.rolling import CombinedOutput, _head_timedelta, overlap_chunk
 from dask.dataframe.shuffle import drop_overlap, get_overlap
 from dask.dataframe.utils import (
@@ -3086,3 +3086,10 @@ class Tuple(Expr):
 
     def __iter__(self):
         return iter(self.operands)
+
+
+@make_meta_dispatch.register(Expr)
+def make_meta_expr(expr, index=None):
+    # make_meta only access the _meta attribute for collections but Expr is not
+    # a collection. Still, we're sometimes calling make_meta on Expr instances
+    return expr._meta
