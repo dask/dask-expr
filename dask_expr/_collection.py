@@ -897,6 +897,12 @@ class FrameBase(DaskMethodsMixin):
         )
         return result
 
+    def enforce_runtime_divisions(self):
+        """Enforce the current divisions at runtime"""
+        if not self.known_divisions:
+            raise ValueError("No known divisions to enforce!")
+        return new_collection(expr.EnforceRuntimeDivisions(self))
+
     def skew(
         self,
         axis=0,

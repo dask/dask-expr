@@ -1402,6 +1402,43 @@ class Where(Elemwise):
     operation = M.where
 
 
+def _check_divisions(df, i, division_min, division_max, last):
+    # Check divisions
+    real_min = df.index.min()
+    real_max = df.index.max()
+    # Upper division of the last partition is often set to
+    # the max value. For all other partitions, the upper
+    # division should be greater than the maximum value.
+    valid_min = real_min >= division_min
+    valid_max = (real_max <= division_max) if last else (real_max < division_max)
+    if not (valid_min and valid_max):
+        raise RuntimeError(
+            f"`enforce_runtime_divisions` failed for partition {i}."
+            f" Expected a range of [{division_min}, {division_max}), "
+            f" but the real range was [{real_min}, {real_max}]."
+        )
+    return df
+
+
+class EnforceRuntimeDivisions(Blockwise):
+    _parameters = ["frame"]
+    operation = staticmethod(_check_divisions)
+
+    @functools.cached_property
+    def _meta(self):
+        return self.frame._meta
+
+    def _task(self, index: int):
+        args = [self._blockwise_arg(op, index) for op in self._args]
+        args = args + [
+            index,
+            self.divisions[index],
+            self.divisions[index + 1],
+            index == (self.npartitions - 1),
+        ]
+        return (self.operation,) + tuple(args)
+
+
 class Abs(Elemwise):
     _projection_passthrough = True
     _parameters = ["frame"]
@@ -1490,7 +1527,7 @@ class Map(Elemwise):
         return make_meta(
             self.operand("meta"),
             parent_meta=self.frame._meta,
-            index=self.frame._meta.index,
+            index=getattr(self.frame._meta, "index", None),  # could be an index
         )
 
     @functools.cached_property
