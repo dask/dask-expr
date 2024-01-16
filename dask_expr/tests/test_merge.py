@@ -589,11 +589,12 @@ def test_merge_pandas_object():
     )
 
 
+@pytest.mark.parametrize("clear_divisions", [True, False])
 @pytest.mark.parametrize("how", ["left", "outer"])
 @pytest.mark.parametrize("npartitions_base", [1, 2, 3])
 @pytest.mark.parametrize("npartitions_other", [1, 2, 3])
 def test_pairwise_merge_results_in_identical_output_df(
-    how, npartitions_base, npartitions_other
+    how, npartitions_base, npartitions_other, clear_divisions
 ):
     dfs_to_merge = []
     for i in range(10):
@@ -605,13 +606,19 @@ def test_pairwise_merge_results_in_identical_output_df(
             index=[0, 1, 2, 3],
         )
         ddf = from_pandas(df, npartitions_other)
+        if clear_divisions:
+            ddf = ddf.clear_divisions()
         dfs_to_merge.append(ddf)
 
     ddf_loop = from_pandas(pd.DataFrame(index=[0, 1, 3]), npartitions_base)
+    if clear_divisions:
+        ddf_loop = ddf_loop.clear_divisions()
     for ddf in dfs_to_merge:
         ddf_loop = ddf_loop.join(ddf, how=how)
 
     ddf_pairwise = from_pandas(pd.DataFrame(index=[0, 1, 3]), npartitions_base)
+    if clear_divisions:
+        ddf_pairwise = ddf_pairwise.clear_divisions()
 
     ddf_pairwise = ddf_pairwise.join(dfs_to_merge, how=how)
 
