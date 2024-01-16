@@ -54,12 +54,15 @@ from pandas.api.types import is_scalar as pd_is_scalar
 from pandas.api.types import is_timedelta64_dtype
 from tlz import first
 
+import dask_expr._backends  # noqa: F401
 from dask_expr import _expr as expr
 from dask_expr._align import AlignPartitions
+from dask_expr._backends import dataframe_creation_dispatch
 from dask_expr._categorical import CategoricalAccessor, Categorize, GetCategories
 from dask_expr._concat import Concat
 from dask_expr._datetime import DatetimeAccessor
 from dask_expr._describe import DescribeNonNumeric, DescribeNumeric
+from dask_expr._dispatch import get_collection_type
 from dask_expr._expr import (
     BFill,
     Diff,
@@ -3102,10 +3105,6 @@ class Scalar(FrameBase):
 
 def new_collection(expr):
     """Create new collection from an expr"""
-    # Make sure "pandas" backend is imported
-    import dask_expr._backends  # noqa: F401
-    from dask_expr._dispatch import get_collection_type
-
     meta = expr._meta
     expr._name  # Ensure backend is imported
     return get_collection_type(meta)(expr)
@@ -3175,6 +3174,7 @@ def from_graph(*args, **kwargs):
     return new_collection(FromGraph(*args, **kwargs))
 
 
+@dataframe_creation_dispatch.register_inplace("pandas")
 def from_dict(
     data,
     npartitions,

@@ -17,7 +17,7 @@ class DXCreationDispatch(CreationDispatch):
         try:
             impl = self._lookup[backend]
         except KeyError:
-            entrypoints = detect_entrypoints(f"dask-expr.{self._module_name}.backends")
+            entrypoints = detect_entrypoints(f"dask_expr.{self._module_name}.backends")
             if backend in entrypoints:
                 return self.register_backend(backend, entrypoints[backend].load()())
         else:
