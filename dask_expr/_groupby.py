@@ -288,7 +288,7 @@ class GroupbyAggregation(GroupByApplyConcatApply, GroupByBase):
         "observed": None,
         "dropna": None,
         "split_every": 8,
-        "split_out": 1,
+        "split_out": None,
         "sort": None,
         "shuffle_method": None,
         "_slice": None,
@@ -1068,6 +1068,7 @@ class GroupByCumulative(Expr, GroupByBase):
             True,
             False,
             True,
+            None,
             {"chunk": self.chunk, "columns": columns, **dropna, **self.numeric_only},
             *self.by,
         )
@@ -1095,6 +1096,7 @@ class GroupByCumulative(Expr, GroupByBase):
             True,
             False,
             True,
+            None,
             {"chunk": M.last, "columns": columns, **dropna},
             *by,
         )

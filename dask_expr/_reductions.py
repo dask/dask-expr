@@ -145,6 +145,7 @@ class ShuffleReduce(Expr):
         "sort",
         "shuffle_by_index",
         "shuffle_method",
+        "ignore_index",
     ]
     _defaults = {
         "split_every": 8,
@@ -152,6 +153,7 @@ class ShuffleReduce(Expr):
         "sort": None,
         "shuffle_by_index": None,
         "shuffle_method": None,
+        "ignore_index": True,
     }
 
     @property
@@ -497,6 +499,7 @@ class ApplyConcatApply(Expr):
             sort=sort,
             shuffle_by_index=getattr(self, "shuffle_by_index", None),
             shuffle_method=getattr(self, "shuffle_method", None),
+            ignore_index=getattr(self, "ignore_index", True),
         )
 
 
@@ -767,22 +770,17 @@ class Reduction(ApplyConcatApply):
 
 
 class Sum(Reduction):
-    _parameters = ["frame", "skipna", "numeric_only", "min_count", "split_every"]
+    _parameters = ["frame", "skipna", "numeric_only", "split_every"]
     _defaults = {
         "split_every": False,
         "numeric_only": False,
-        "min_count": 0,
         "skipna": True,
     }
     reduction_chunk = M.sum
 
     @property
     def chunk_kwargs(self):
-        return dict(
-            skipna=self.skipna,
-            numeric_only=self.numeric_only,
-            min_count=self.min_count,
-        )
+        return dict(skipna=self.skipna, numeric_only=self.numeric_only)
 
     @property
     def combine_kwargs(self):
@@ -802,7 +800,6 @@ class Max(Reduction):
     _defaults = {
         "split_every": False,
         "numeric_only": False,
-        "min_count": 0,
         "skipna": True,
         "axis": 0,
     }
@@ -1106,7 +1103,7 @@ class Mean(Reduction):
         c = self.frame.count(
             split_every=self.split_every, numeric_only=self.numeric_only
         )
-        if self.axis is None:
+        if self.axis is None and s.ndim == 1:
             return s.sum() / c.sum()
         else:
             return MeanAggregate(s, c)
@@ -1223,8 +1220,8 @@ class ReductionConstantDim(Reduction):
 
 
 class NLargest(ReductionConstantDim):
-    _defaults = {"n": 5, "_columns": None}
-    _parameters = ["frame", "n", "_columns"]
+    _parameters = ["frame", "n", "_columns", "split_every"]
+    _defaults = {"n": 5, "_columns": None, "split_every": None}
     reduction_chunk = M.nlargest
     reduction_aggregate = M.nlargest
 
@@ -1260,7 +1257,6 @@ class NLargestSlow(NLargest):
 
 
 class NSmallest(NLargest):
-    _parameters = ["frame", "n", "_columns"]
     reduction_chunk = M.nsmallest
     reduction_aggregate = M.nsmallest
 
