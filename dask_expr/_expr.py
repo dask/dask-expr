@@ -456,6 +456,7 @@ class Blockwise(Expr):
 
     operation = None
     _keyword_only = []
+    _exclude = []
     _projection_passthrough = False
     _filter_passthrough = False
 
@@ -476,15 +477,19 @@ class Blockwise(Expr):
             return {
                 p: self.operand(p)
                 for p in self._parameters
-                if p in self._keyword_only and self.operand(p) is not no_default
+                if p in self._keyword_only
+                and p not in self._exclude
+                and self.operand(p) is not no_default
             }
         return {}
 
     @functools.cached_property
     def _args(self) -> list:
-        if self._keyword_only:
+        if self._keyword_only or self._exclude:
             args = [
-                self.operand(p) for p in self._parameters if p not in self._keyword_only
+                self.operand(p)
+                for p in self._parameters
+                if p not in self._keyword_only and p not in self._exclude
             ] + self.operands[len(self._parameters) :]
             return args
         return self.operands
@@ -1296,9 +1301,16 @@ class CombineFrame(CombineSeries):
 
 
 class ToNumeric(Elemwise):
-    _parameters = ["frame", "errors", "downcast"]
-    _defaults = {"errors": "raise", "downcast": None}
+    _parameters = ["frame", "errors", "downcast", "meta"]
+    _defaults = {"errors": "raise", "downcast": None, "meta": None}
+    _exclude = ["meta"]
     operation = staticmethod(pd.to_numeric)
+
+    @functools.cached_property
+    def _meta(self):
+        if self.operand("meta") is not no_default:
+            return self.operand("meta")
+        return super()._meta
 
 
 class ToDatetime(Elemwise):

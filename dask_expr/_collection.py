@@ -3307,7 +3307,7 @@ def pivot_table(df, index, columns, values, aggfunc="mean"):
     )
 
 
-def to_numeric(arg, errors="raise", downcast=None):
+def to_numeric(arg, errors="raise", downcast=None, meta=None):
     """
     Return type depends on input. Delayed if scalar, otherwise same as input.
     For errors, only "raise" and "coerce" are allowed.
@@ -3319,12 +3319,16 @@ def to_numeric(arg, errors="raise", downcast=None):
         return delayed(pd.to_numeric, pure=True)(arg, errors=errors, downcast=downcast)
 
     if is_arraylike(arg):
+        if meta is not None:
+            meta = pd.to_numeric(meta)
         return new_collection(
             ToNumeric(from_array(arg), errors=errors, downcast=downcast)
-        ).to_dask_array()
+        ).to_dask_array(meta=meta)
 
     if is_series_like(arg):
-        return new_collection(ToNumeric(frame=arg, errors=errors, downcast=downcast))
+        return new_collection(
+            ToNumeric(frame=arg, errors=errors, downcast=downcast, meta=meta)
+        )
 
     raise TypeError(
         "arg must be a list, tuple, dask.array.Array, or dask.dataframe.Series"
