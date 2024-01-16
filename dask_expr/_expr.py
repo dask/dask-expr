@@ -16,7 +16,6 @@ from dask.core import flatten
 from dask.dataframe import methods
 from dask.dataframe.core import (
     _concat,
-    _emulate,
     _get_divisions_map_partitions,
     _rename,
     apply_and_enforce,
@@ -34,6 +33,7 @@ from dask.dataframe.shuffle import drop_overlap, get_overlap
 from dask.dataframe.utils import (
     clear_known_categories,
     drop_by_shallow_copy,
+    raise_on_meta_error,
     valid_divisions,
 )
 from dask.typing import no_default
@@ -2923,6 +2923,36 @@ def maybe_align_partitions(*exprs, divisions):
         else df
         for df in exprs
     ]
+
+
+def _extract_meta(x, nonempty=False):
+    """
+    Extract internal cache data (``_meta``) from dd.DataFrame / dd.Series
+    """
+    if isinstance(x, Expr):
+        return meta_nonempty(x._meta) if nonempty else x._meta
+    elif isinstance(x, list):
+        return [_extract_meta(_x, nonempty) for _x in x]
+    elif isinstance(x, tuple):
+        return tuple(_extract_meta(_x, nonempty) for _x in x)
+    elif isinstance(x, dict):
+        res = {}
+        for k in x:
+            res[k] = _extract_meta(x[k], nonempty)
+        return res
+    elif hasattr(x, "expr"):
+        return _extract_meta(x.expr, nonempty)
+    else:
+        return x
+
+
+def _emulate(func, *args, udf=False, **kwargs):
+    """
+    Apply a function using args / kwargs. If arguments contain dd.DataFrame /
+    dd.Series, using internal cache (``_meta``) for calculation
+    """
+    with raise_on_meta_error(funcname(func), udf=udf):
+        return func(*_extract_meta(args, True), **_extract_meta(kwargs, True))
 
 
 def _get_meta_map_partitions(args, dfs, func, kwargs, meta, parent_meta):
