@@ -3319,8 +3319,6 @@ def to_numeric(arg, errors="raise", downcast=None, meta=no_default):
         return delayed(pd.to_numeric, pure=True)(arg, errors=errors, downcast=downcast)
 
     if is_arraylike(arg):
-        if meta is not None:
-            meta = pd.to_numeric(meta)
         return new_collection(
             ToNumeric(from_array(arg), errors=errors, downcast=downcast)
         ).to_dask_array(meta=meta)
