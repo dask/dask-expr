@@ -25,7 +25,6 @@ from dask.dataframe.core import (
     has_parallel_type,
     is_arraylike,
     is_dataframe_like,
-    is_index_like,
     is_series_like,
     meta_warning,
     new_dd_object,
@@ -56,7 +55,6 @@ from tlz import first
 
 from dask_expr import _expr as expr
 from dask_expr._align import AlignPartitions
-from dask_expr._backends import dataframe_creation_dispatch
 from dask_expr._categorical import CategoricalAccessor, Categorize, GetCategories
 from dask_expr._concat import Concat
 from dask_expr._datetime import DatetimeAccessor
@@ -1954,7 +1952,7 @@ class DataFrame(FrameBase):
                 # Check if key is in columns if key
                 # is not a normal attribute
                 if key in self.expr._meta.columns:
-                    return Series(self.expr[key])
+                    return new_collection(self.expr[key])
                 raise err
             except AttributeError:
                 # Fall back to `BaseFrame.__getattr__`
@@ -3073,17 +3071,11 @@ class Scalar(FrameBase):
 
 def new_collection(expr):
     """Create new collection from an expr"""
+    from dask_expr._dispatch import get_collection_type
 
     meta = expr._meta
     expr._name  # Ensure backend is imported
-    if is_dataframe_like(meta):
-        return DataFrame(expr)
-    elif is_series_like(meta):
-        return Series(expr)
-    elif is_index_like(meta):
-        return Index(expr)
-    else:
-        return Scalar(expr)
+    return get_collection_type(meta)(expr)
 
 
 def optimize(collection, fuse=True):
@@ -3150,7 +3142,6 @@ def from_graph(*args, **kwargs):
     return new_collection(FromGraph(*args, **kwargs))
 
 
-@dataframe_creation_dispatch.register_inplace("pandas")
 def from_dict(
     data,
     npartitions,
@@ -3227,7 +3218,6 @@ def from_dask_array(x, columns=None, index=None, meta=None):
     return from_dask_dataframe(df, optimize=True)
 
 
-@dataframe_creation_dispatch.register_inplace("pandas")
 def read_csv(
     path,
     *args,
@@ -3278,7 +3268,6 @@ def read_table(
     )
 
 
-@dataframe_creation_dispatch.register_inplace("pandas")
 def read_parquet(
     path=None,
     columns=None,
