@@ -108,6 +108,13 @@ def _normalize_lambda(func):
     # ref: https://github.com/cloudpipe/cloudpickle/issues/385
     func_str = str(func)
     if func.__name__ == "<lambda>" or "<locals>" in func_str:
+        # This strips the memory address since this will not survive a pickle
+        # roundtrip
+        func_str = func_str.split(" at ")[0]
+        # Reliably (cloud-)pickling may not be possible but we are merely
+        # intrested in having a reliable identifier. The bytecode should be
+        # sufficient for this
+        func_str += func.__code__.co_code.hex()
         return func_str
     return normalize_object(func)
 

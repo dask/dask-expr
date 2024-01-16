@@ -179,8 +179,7 @@ class Shuffle(Expr):
 
     @functools.cached_property
     def _meta(self):
-        # We will drop _partitions later on, so reflect this here
-        return self.frame._meta.drop(columns=["_partitions"], errors="ignore")
+        return self.frame._meta
 
     def _divisions(self):
         return (None,) * (self.npartitions_out + 1)
@@ -1082,7 +1081,9 @@ class SetPartition(SetIndex):
         divisions = self.other._meta._constructor(self._divisions())
         partitions = _SetPartitionsPreSetIndex(self.other, divisions)
         assigned = Assign(self.frame, "_partitions", partitions)
+        columns_to_project = list(self.frame.columns)
         if isinstance(self._other, Expr):
+            columns_to_project.append("_index")
             assigned = Assign(assigned, "_index", self._other)
         shuffled = Shuffle(
             assigned,
@@ -1093,6 +1094,7 @@ class SetPartition(SetIndex):
             options=self.options,
         )
 
+        projected = Projection(shuffled, columns_to_project)
         if isinstance(self._other, Expr):
             drop, set_name = True, "_index"
         else:
@@ -1104,7 +1106,7 @@ class SetPartition(SetIndex):
             "upsample": self.upsample,
         }
         index_set = _SetIndexPost(
-            shuffled,
+            projected,
             self.other._meta.name,
             drop,
             set_name,

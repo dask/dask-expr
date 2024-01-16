@@ -2255,7 +2255,7 @@ def test_combine_expr_with_tuple(pdf):
 
 
 def test_index_index(df):
-    with pytest.raises(NotImplementedError, match="has no"):
+    with pytest.raises((AttributeError, NotImplementedError), match="has no"):
         df.index.index
 
 

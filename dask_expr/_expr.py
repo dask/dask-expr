@@ -3073,7 +3073,13 @@ class Tuple(Expr):
         return toolz.merge(op._layer() for op in self.operands)
 
     def __dask_output_keys__(self) -> list:
-        return list(flatten(op.__dask_output_keys__() for op in self.operands))
+        all_keys = []
+        for op in self.operands:
+            l = op.__dask_output_keys__()
+            if len(l) > 1:
+                raise NotImplementedError()
+            all_keys.append(l[0])
+        return all_keys
 
     def __len__(self):
         return len(self.operands)

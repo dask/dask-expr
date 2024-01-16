@@ -315,10 +315,7 @@ class FrameBase(DaskMethodsMixin, DaskCollection2):
         return DaskMethodsMixin.persist(out, **kwargs)
 
     def compute(self, fuse=True, **kwargs):
-        out = self
-        if not isinstance(out, Scalar):
-            out = out.repartition(npartitions=1)
-        out = out.optimize(fuse=fuse)
+        out = self.finalize_compute()
         return DaskMethodsMixin.compute(out, **kwargs)
 
     def __dask_graph_factory__(self):
@@ -345,6 +342,8 @@ class FrameBase(DaskMethodsMixin, DaskCollection2):
         return new_collection(Repartition(self.expr, 1))
 
     def postpersist(self, futures):
+        if not isinstance(futures, dict):
+            raise TypeError("Provided `futures` must be a dictionary")
         func, args = self.__dask_postpersist__()
         return func(futures, *args)
 

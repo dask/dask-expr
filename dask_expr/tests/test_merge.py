@@ -478,7 +478,9 @@ def test_merge_known_to_single(how, shuffle_method):
     expected = pdf1.merge(pdf2, on="k", how=how)
     result = df1.merge(df2, on="k", how=how, shuffle_method=shuffle_method)
     assert_eq(result, expected, check_index=False)
-    assert all(d is None for d in result.divisions)
+    # Since right is just a single partitioned DF we're performing a broadcast
+    # join such that the divisions should be unchanged
+    assert result.divisions == df1.divisions
 
 
 @pytest.mark.parametrize("how", ["right", "outer"])
