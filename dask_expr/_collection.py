@@ -15,6 +15,7 @@ import pandas as pd
 from dask import compute, delayed
 from dask.array import Array
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
+from dask.core import flatten
 from dask.dataframe.accessor import CachedAccessor
 from dask.dataframe.core import (
     _concat,
@@ -43,12 +44,14 @@ from dask.delayed import delayed
 from dask.utils import (
     IndexCallable,
     M,
+    get_meta_library,
     memory_repr,
     put_lines,
     random_state_data,
     typename,
 )
 from fsspec.utils import stringify_path
+from pandas import CategoricalDtype
 from pandas.api.types import is_bool_dtype, is_datetime64_any_dtype, is_numeric_dtype
 from pandas.api.types import is_scalar as pd_is_scalar
 from pandas.api.types import is_timedelta64_dtype
@@ -147,7 +150,10 @@ def _wrap_expr_op(self, other, op=None):
 
     if not isinstance(other, expr.Expr):
         return new_collection(getattr(self.expr, op)(other))
-    elif expr.are_co_aligned(self.expr, other):
+    elif (
+        expr.are_co_aligned(self.expr, other)
+        or other.npartitions == self.npartitions == 1
+    ):
         return new_collection(getattr(self.expr, op)(other))
     else:
         return new_collection(
@@ -170,14 +176,31 @@ def _wrap_expr_method_operator(name, class_):
 
             axis = _validate_axis(axis)
 
+            if (
+                is_dataframe_like(other)
+                or is_series_like(other)
+                and axis in (0, "index")
+            ) and not is_dask_collection(other):
+                other = self._create_alignable_frame(other)
+
             if axis in (1, "columns"):
                 if isinstance(other, Series):
                     msg = f"Unable to {name} dd.Series with axis=1"
                     raise ValueError(msg)
+
+            frame = self
+            if isinstance(other, FrameBase) and not expr.are_co_aligned(
+                self.expr, other.expr, allow_broadcast=False
+            ):
+                divs = expr.calc_divisions_for_align(self.expr, other.expr)
+                frame, other = expr.maybe_align_partitions(
+                    self.expr, other.expr, divisions=divs
+                )
+
             return new_collection(
                 expr.MethodOperator(
                     name=name,
-                    left=self,
+                    left=frame,
                     right=other,
                     axis=axis,
                     level=level,
@@ -193,10 +216,22 @@ def _wrap_expr_method_operator(name, class_):
 
             axis = _validate_axis(axis)
 
+            if is_series_like(other) and not is_dask_collection(other):
+                other = self._create_alignable_frame(other)
+
+            frame = self
+            if isinstance(other, FrameBase) and not expr.are_co_aligned(
+                self.expr, other.expr, allow_broadcast=False
+            ):
+                divs = expr.calc_divisions_for_align(self.expr, other.expr)
+                frame, other = expr.maybe_align_partitions(
+                    self.expr, other.expr, divisions=divs
+                )
+
             return new_collection(
                 expr.MethodOperator(
                     name=name,
-                    left=self,
+                    left=frame,
                     right=other,
                     axis=axis,
                     fill_value=fill_value,
@@ -424,24 +459,6 @@ class FrameBase(DaskMethodsMixin):
             )
         return new_collection(self.expr)
 
-    def eq(self, other):
-        return self.__eq__(other)
-
-    def ne(self, other):
-        return self.__ne__(other)
-
-    def gt(self, other):
-        return self.__gt__(other)
-
-    def ge(self, other):
-        return self.__ge__(other)
-
-    def lt(self, other):
-        return self.__lt__(other)
-
-    def le(self, other):
-        return self.__le__(other)
-
     def isin(self, values):
         if isinstance(self, DataFrame):
             # DataFrame.isin does weird alignment stuff
@@ -546,6 +563,8 @@ class FrameBase(DaskMethodsMixin):
                 raise TypeError(
                     "index must be aligned with the DataFrame to use as shuffle index."
                 )
+        elif pd.api.types.is_list_like(index) and not is_dask_collection(index):
+            index = list(index)
 
         # Returned shuffled result
         return new_collection(
@@ -559,10 +578,10 @@ class FrameBase(DaskMethodsMixin):
             )
         )
 
-    def resample(self, rule, **kwargs):
+    def resample(self, rule, closed=None, label=None):
         from dask_expr._resample import Resampler
 
-        return Resampler(self, rule, **kwargs)
+        return Resampler(self, rule, **{"closed": closed, "label": label})
 
     def rolling(self, window, **kwargs):
         from dask_expr._rolling import Rolling
@@ -2297,6 +2316,30 @@ class DataFrame(FrameBase):
 
         return ILocIndexer(self)
 
+    def _comparison_op(self, expr_cls, other, level, axis):
+        if level is not None:
+            raise NotImplementedError("level must be None")
+        axis = self._validate_axis(axis)
+        return new_collection(expr_cls(self, other, axis))
+
+    def lt(self, other, level=None, axis=0):
+        return self._comparison_op(expr.LTFrame, other, level, axis)
+
+    def le(self, other, level=None, axis=0):
+        return self._comparison_op(expr.LEFrame, other, level, axis)
+
+    def gt(self, other, level=None, axis=0):
+        return self._comparison_op(expr.GTFrame, other, level, axis)
+
+    def ge(self, other, level=None, axis=0):
+        return self._comparison_op(expr.GEFrame, other, level, axis)
+
+    def ne(self, other, level=None, axis=0):
+        return self._comparison_op(expr.NEFrame, other, level, axis)
+
+    def eq(self, other, level=None, axis=0):
+        return self._comparison_op(expr.EQFrame, other, level, axis)
+
     def categorize(self, columns=None, index=None, split_every=None, **kwargs):
         """Convert columns of the DataFrame to category dtype.
 
@@ -2404,7 +2447,9 @@ class DataFrame(FrameBase):
             )
 
         if numeric_only:
-            frame = self.select_dtypes("number")
+            frame = self.select_dtypes(
+                "number", exclude=[np.timedelta64, np.datetime64]
+            )
         else:
             frame = self
 
@@ -2688,6 +2733,30 @@ class Series(FrameBase):
     def to_frame(self, name=no_default):
         return new_collection(expr.ToFrame(self, name=name))
 
+    def _comparison_op(self, expr_cls, other, level, fill_value, axis):
+        if level is not None:
+            raise NotImplementedError("level must be None")
+        self._validate_axis(axis)
+        return new_collection(expr_cls(self, other, fill_value=fill_value))
+
+    def lt(self, other, level=None, fill_value=None, axis=0):
+        return self._comparison_op(expr.LTSeries, other, level, fill_value, axis)
+
+    def le(self, other, level=None, fill_value=None, axis=0):
+        return self._comparison_op(expr.LESeries, other, level, fill_value, axis)
+
+    def gt(self, other, level=None, fill_value=None, axis=0):
+        return self._comparison_op(expr.GTSeries, other, level, fill_value, axis)
+
+    def ge(self, other, level=None, fill_value=None, axis=0):
+        return self._comparison_op(expr.GESeries, other, level, fill_value, axis)
+
+    def ne(self, other, level=None, fill_value=None, axis=0):
+        return self._comparison_op(expr.NESeries, other, level, fill_value, axis)
+
+    def eq(self, other, level=None, fill_value=None, axis=0):
+        return self._comparison_op(expr.EQSeries, other, level, fill_value, axis)
+
     def value_counts(
         self,
         sort=None,
@@ -2695,8 +2764,14 @@ class Series(FrameBase):
         dropna=True,
         normalize=False,
         split_every=None,
-        split_out=1,
+        split_out=no_default,
     ):
+        if split_out is no_default:
+            if isinstance(self.dtype, CategoricalDtype):
+                # unobserved categories are a pain
+                split_out = 1
+            else:
+                split_out = True
         length = None
         if (split_out > 1 or split_out is True) and normalize:
             frame = self if not dropna else self.dropna()
@@ -2724,8 +2799,8 @@ class Series(FrameBase):
         shuffle_method = _get_shuffle_preferring_order(shuffle_method)
         return new_collection(Unique(self, split_every, split_out, shuffle_method))
 
-    def nunique(self, dropna=True, split_every=False):
-        uniqs = self.drop_duplicates(split_every=split_every)
+    def nunique(self, dropna=True, split_every=False, split_out=True):
+        uniqs = self.drop_duplicates(split_every=split_every, split_out=split_out)
         if dropna:
             # count mimics pandas behavior and excludes NA values
             if isinstance(uniqs, Index):
@@ -3296,6 +3371,12 @@ def read_parquet(
 
     kwargs["dtype_backend"] = dtype_backend
 
+    if filters is not None:
+        for filter in flatten(filters, container=list):
+            col, op, val = filter
+            if op == "in" and not isinstance(val, (set, list, tuple)):
+                raise TypeError("Value of 'in' filter must be a list, set or tuple.")
+
     return new_collection(
         ReadParquet(
             path,
@@ -3428,6 +3509,91 @@ def merge(
     )
 
 
+def merge_asof(
+    left,
+    right,
+    on=None,
+    left_on=None,
+    right_on=None,
+    left_index=False,
+    right_index=False,
+    by=None,
+    left_by=None,
+    right_by=None,
+    suffixes=("_x", "_y"),
+    tolerance=None,
+    allow_exact_matches=True,
+    direction="backward",
+):
+    if direction not in ["backward", "forward", "nearest"]:
+        raise ValueError(
+            "Invalid merge_asof direction. Choose from 'backward'"
+            " 'forward', or 'nearest'"
+        )
+
+    kwargs = {
+        "on": on,
+        "left_on": left_on,
+        "right_on": right_on,
+        "left_index": left_index,
+        "right_index": right_index,
+        "by": by,
+        "left_by": left_by,
+        "right_by": right_by,
+        "suffixes": suffixes,
+        "tolerance": tolerance,
+        "allow_exact_matches": allow_exact_matches,
+        "direction": direction,
+    }
+
+    if left is None or right is None:
+        raise ValueError("Cannot merge_asof on None")
+
+    # if is_dataframe_like(left) and is_dataframe_like(right):
+    if isinstance(left, pd.DataFrame) and isinstance(right, pd.DataFrame):
+        return pd.merge_asof(left, right, **kwargs)
+
+    if on is not None:
+        if left_on is not None or right_on is not None:
+            raise ValueError(
+                "Can only pass argument 'on' OR 'left_on' and 'right_on', not a "
+                "combination of both."
+            )
+        left_on = right_on = on
+        kwargs["left_on"] = left_on
+        kwargs["right_on"] = right_on
+    del kwargs["on"]
+
+    for o in [left_on, right_on]:
+        if isinstance(o, _Frame):
+            raise NotImplementedError(
+                "Dask collections not currently allowed in merge columns"
+            )
+
+    if not is_dask_collection(left):
+        left = from_pandas(left, npartitions=1)
+
+    if not is_dask_collection(right):
+        right = from_pandas(right, npartitions=1)
+
+    if by is not None:
+        if left_by is not None or right_by is not None:
+            raise ValueError(
+                "Can only pass argument 'by' OR 'left_by' and 'right_by', not a combination of both."
+            )
+        kwargs["left_by"] = kwargs["right_by"] = by
+    del kwargs["by"]
+
+    if left_by is None and right_by is not None:
+        raise ValueError("Must specify both left_on and right_on if one is specified.")
+    if left_by is not None and right_by is None:
+        raise ValueError("Must specify both left_on and right_on if one is specified.")
+
+    from dask_expr._merge_asof import MergeAsof
+
+    return new_collection(MergeAsof(left, right, **kwargs))
+
+
 def from_map(
     func,
     *iterables,
@@ -3472,7 +3638,7 @@ def from_map(
         raise ValueError("All `iterables` must have a non-zero length")
 
     # Check if `func` supports column projection
-    allow_projection = True
+    allow_projection = False
     if "columns" in inspect.signature(func).parameters:
         allow_projection = True
     elif isinstance(func, DataFrameIOFunction):
@@ -3588,10 +3754,28 @@ def to_numeric(arg, errors="raise", downcast=None, meta=None):
     )
 
 
-def to_datetime(arg, **kwargs):
-    if not isinstance(arg, FrameBase):
-        raise TypeError("arg must be a Series or a DataFrame")
-    return new_collection(ToDatetime(frame=arg, kwargs=kwargs))
+def to_datetime(arg, meta=None, **kwargs):
+    tz_kwarg = {"tz": "utc"} if kwargs.get("utc") else {}
+
+    (arg,) = _maybe_from_pandas([arg])
+
+    if meta is None:
+        if isinstance(arg, Index):
+            meta = get_meta_library(arg).DatetimeIndex([], **tz_kwarg)
+            meta.name = arg.name
+        elif not (is_dataframe_like(arg) or is_series_like(arg)):
+            raise NotImplementedError(
+                "dask.dataframe.to_datetime does not support "
+                "non-index-able arguments (like scalars)"
+            )
+        else:
+            meta = meta_series_constructor(arg)([pd.Timestamp("2000", **tz_kwarg)])
+            meta.index = meta.index.astype(arg.index.dtype)
+            meta.index.name = arg.index.name
+
+    kwargs.pop("infer_datetime_format", None)
+
+    return new_collection(ToDatetime(frame=arg, kwargs=kwargs, meta=meta))
 
 
 def to_timedelta(arg, unit=None, errors="raise"):

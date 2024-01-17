@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import functools
 import numbers
 import operator
@@ -932,19 +933,46 @@ class CreateOverlappingPartitions(Expr):
                 for i in range(self.frame.npartitions - 1):
                     dsk[(name_prepend, i)] = (M.tail, (self.frame._name, i), before)
                     prevs.append((name_prepend, i))
-            else:
-                # We don't want to look at the divisions, so take twice the step and
-                # validate later.
-                before = 2 * self.before
+            elif isinstance(self.before, datetime.timedelta):
+                # Assumes monotonic (increasing?) index
+                divs = pd.Series(self.frame.divisions)
+                deltas = divs.diff().iloc[1:-1]
 
-                for i in range(self.frame.npartitions - 1):
-                    dsk[(name_prepend, i)] = (
-                        _tail_timedelta,
-                        (self.frame._name, i + 1),
-                        (self.frame._name, i),
-                        before,
-                    )
-                    prevs.append((name_prepend, i))
+                # In the first case window-size is larger than at least one partition, thus it is
+                # necessary to calculate how many partitions must be used for each rolling task.
+                # Otherwise, these calculations can be skipped (faster)
+
+                if (self.before > deltas).any():
+                    pt_z = divs[0]
+                    for i in range(self.frame.npartitions - 1):
+                        # Select all indexes of relevant partitions between the current partition and
+                        # the partition with the highest division outside the rolling window (before)
+                        pt_i = divs[i + 1]
+
+                        # lower-bound the search to the first division
+                        lb = max(pt_i - self.before, pt_z)
+
+                        first, j = divs[i], i
+                        while first > lb and j > 0:
+                            first = first - deltas[j]
+                            j = j - 1
+
+                        dsk[(name_prepend, i)] = (
+                            _tail_timedelta,
+                            (self.frame._name, i + 1),
+                            [(self.frame._name, k) for k in range(j, i + 1)],
+                            self.before,
+                        )
+                        prevs.append((name_prepend, i))
+                else:
+                    for i in range(self.frame.npartitions - 1):
+                        dsk[(name_prepend, i)] = (
+                            _tail_timedelta,
+                            (self.frame._name, i + 1),
+                            [(self.frame._name, i)],
+                            self.before,
+                        )
+                        prevs.append((name_prepend, i))
         else:
             prevs.extend([None] * self.frame.npartitions)
 
@@ -986,7 +1014,10 @@ class CreateOverlappingPartitions(Expr):
 
 
 def _tail_timedelta(current, prev_, before):
-    return prev_[prev_.index > (current.index.min() - before)]
+    selected = methods.concat(
+        [prev[prev.index > (current.index.min() - before)] for prev in prev_]
+    )
+    return selected
 
 
 def _overlap_chunk(df, func, before, after, *args, **kwargs):
@@ -1006,8 +1037,12 @@ def _combined_parts(prev_part, current_part, next_part, before, after):
                 raise NotImplementedError(msg)
         else:
             prev_part_input = prev_part
-            prev_part = _tail_timedelta(current_part, prev_part, before)
-            if len(prev_part_input) == len(prev_part) and len(prev_part_input) > 0:
+            prev_part = _tail_timedelta(current_part, [prev_part], before)
+            if (
+                len(prev_part_input) == len(prev_part)
+                and len(prev_part_input) > 0
+                and not isinstance(before, datetime.timedelta)
+            ):
                 raise NotImplementedError(msg)
 
     if next_part is not None:
@@ -1353,9 +1388,9 @@ class ToNumeric(Elemwise):
 
 
 class ToDatetime(Elemwise):
-    _parameters = ["frame", "kwargs"]
+    _parameters = ["frame", "kwargs", "meta"]
     _defaults = {"kwargs": None}
-    _keyword_only = ["kwargs"]
+    _keyword_only = ["kwargs", "meta"]
     operation = staticmethod(pd.to_datetime)
 
     @functools.cached_property
@@ -2307,6 +2342,76 @@ class Div(Binop):
 class LT(Binop):
     operation = operator.lt
     _operator_repr = "<"
+
+
+class BinOpSeries(Binop):
+    _parameters = ["left", "right", "level", "fill_value"]
+    _defaults = {"fill_value": None, "level": None}
+
+
+class BinOpFrame(Binop):
+    _parameters = ["left", "right", "axis"]
+    _defaults = {"axis": 1}
+
+
+class LTSeries(BinOpSeries):
+    operation = M.lt
+    _operator_repr = "<"
+
+
+class LTFrame(BinOpFrame):
+    operation = M.lt
+    _operator_repr = "<"
+
+
+class LESeries(BinOpSeries):
+    operation = M.le
+    _operator_repr = "<="
+
+
+class LEFrame(BinOpFrame):
+    operation = M.le
+    _operator_repr = "<="
+
+
+class GTSeries(BinOpSeries):
+    operation = M.gt
+    _operator_repr = ">"
+
+
+class GTFrame(BinOpFrame):
+    operation = M.gt
+    _operator_repr = ">"
+
+
+class GESeries(BinOpSeries):
+    operation = M.ge
+    _operator_repr = ">="
+
+
+class GEFrame(BinOpFrame):
+    operation = M.ge
+    _operator_repr = ">="
+
+
+class NESeries(BinOpSeries):
+    operation = M.ne
+    _operator_repr = "!="
+
+
+class NEFrame(BinOpFrame):
+    operation = M.ne
+    _operator_repr = "!="
+
+
+class EQSeries(BinOpSeries):
+    operation = M.eq
+    _operator_repr = "=="
+
+
+class EQFrame(BinOpFrame):
+    operation = M.eq
+    _operator_repr = "=="
 
 
 class LE(Binop):

@@ -27,6 +27,7 @@ from dask.utils import (
     is_index_like,
     is_series_like,
 )
+from pandas import CategoricalDtype
 
 from dask_expr._expr import (
     Assign,
@@ -141,7 +142,10 @@ class ShuffleBase(Expr):
 
     @functools.cached_property
     def _meta(self):
-        return self.frame._meta
+        meta = self.frame._meta
+        if self.ignore_index and self.method == "tasks":
+            meta = meta.reset_index(drop=True)
+        return meta
 
     def _divisions(self):
         return (None,) * (self.npartitions_out + 1)
@@ -198,6 +202,14 @@ class Shuffle(ShuffleBase):
             raise ValueError(f"{method} not supported")
 
 
+def _is_numeric_cast_type(dtype):
+    return (
+        pd.api.types.is_numeric_dtype(dtype)
+        or isinstance(dtype, CategoricalDtype)
+        and pd.api.types.is_numeric_dtype(dtype.categories)
+    )
+
+
 class RearrangeByColumn(ShuffleBase):
     def _lower(self):
         frame = self.frame
@@ -229,11 +241,7 @@ class RearrangeByColumn(ShuffleBase):
                 ]
             drop_columns = partitioning_index.copy()
         elif index_shuffle:
-            dtypes = (
-                np.float64
-                if pd.api.types.is_numeric_dtype(frame.index._meta.dtype)
-                else None
-            )
+            dtypes = np.float64 if _is_numeric_cast_type(dtype) else None
         else:
             cs = [col for col in partitioning_index if col not in frame.columns]
             if len(cs) == 1:
@@ -249,7 +257,7 @@ class RearrangeByColumn(ShuffleBase):
                 c for c in frame.columns if c in _convert_to_list(partitioning_index)
             ]
             for col, dtype in frame[cols].dtypes.items():
-                if pd.api.types.is_numeric_dtype(dtype):
+                if _is_numeric_cast_type(dtype):
                     dtypes[col] = np.float64
             if not dtypes:
                 dtypes = None
@@ -291,6 +299,10 @@ class SimpleShuffle(PartitionsFiltered, Shuffle):
     ]
 
     _defaults = {"_partitions": None}
+
+    @functools.cached_property
+    def _meta(self):
+        return self.frame._meta
 
     @staticmethod
     def _shuffle_group(df, _filter, *args):
@@ -345,8 +357,15 @@ class SimpleShuffle(PartitionsFiltered, Shuffle):
 class TaskShuffle(SimpleShuffle):
     """Staged task-based shuffle implementation"""
 
+    @functools.cached_property
+    def _meta(self):
+        meta = self.frame._meta
+        if self.ignore_index:
+            meta = meta.reset_index(drop=True)
+        return meta
+
     def _layer(self):
-        max_branch = (self.options or {}).get("max_branch", 32)
+        max_branch = (self.options or {}).get("max_branch", None) or 32
         npartitions_input = self.frame.npartitions
         if len(self._partitions) <= max_branch or npartitions_input <= max_branch:
             # We are creating a small number of output partitions,
@@ -1196,7 +1215,7 @@ class SortValuesBlockwise(Blockwise):
 
 class SetIndexBlockwise(Blockwise):
     _parameters = ["frame", "other", "drop", "new_divisions", "append"]
-    _defaults = {"append": False}
+    _defaults = {"append": False, "new_divisions": None, "drop": True}
     _keyword_only = ["drop", "new_divisions", "append"]
     _is_length_preserving = True
 
