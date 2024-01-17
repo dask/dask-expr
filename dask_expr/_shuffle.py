@@ -241,7 +241,7 @@ class RearrangeByColumn(ShuffleBase):
                 ]
             drop_columns = partitioning_index.copy()
         elif index_shuffle:
-            dtypes = np.float64 if _is_numeric_cast_type(dtype) else None
+            dtypes = np.float64 if _is_numeric_cast_type(frame.index._meta.dtype) else None
         else:
             cs = [col for col in partitioning_index if col not in frame.columns]
             if len(cs) == 1:
