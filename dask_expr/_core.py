@@ -94,10 +94,11 @@ class Expr:
                     op = "<array>"
 
                 if repr(op) != repr(default):
-                    if param:
-                        header += f" {param}={repr(op)}"
-                    else:
-                        header += repr(op)
+                    if "object at 0x" not in repr(op):
+                        if param:
+                            header += f" {param}={repr(op)}"
+                        else:
+                            header += repr(op)
         lines = [header] + lines
         lines = [" " * indent + line for line in lines]
 
