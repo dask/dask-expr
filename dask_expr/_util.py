@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import inspect
 from collections import OrderedDict, UserDict
 from collections.abc import Hashable, Sequence
 from types import LambdaType
@@ -108,7 +109,17 @@ def _normalize_lambda(func):
     # ref: https://github.com/cloudpipe/cloudpickle/issues/385
     func_str = str(func)
     if func.__name__ == "<lambda>" or "<locals>" in func_str:
-        return func_str
+        try:
+            # If the function is defined in a file, we can
+            # use the literal source-code string
+            return inspect.getsource(func)
+        except OSError as err:
+            # Function was defined in the python shell
+            raise ValueError(
+                "Dask-expr requires that all lambda and local "
+                "functions be defined within a source file. "
+                f"Original error message: {err}"
+            )
     return normalize_object(func)
 
 
