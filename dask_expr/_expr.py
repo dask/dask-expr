@@ -1738,6 +1738,7 @@ class Drop(Elemwise):
 
 def assign(df, *pairs):
     pairs = dict(partition(2, pairs))
+    df = df.copy(deep=False)
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore",
@@ -1787,6 +1788,9 @@ class Assign(Elemwise):
 
     def _simplify_down(self):
         if isinstance(self.frame, Assign):
+            # if len(self.vals) == 1 and isinstance(self.vals[0], Callable):
+            #     # UDFs can't move around
+            #     return
             if self._check_for_previously_created_column(self.frame):
                 # don't squash if we are using a column that was previously created
                 return

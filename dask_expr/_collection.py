@@ -1765,15 +1765,20 @@ class DataFrame(FrameBase):
             if not isinstance(k, str):
                 raise TypeError(f"Column name cannot be type {type(k)}")
 
-            # if callable(v):
-            #     v = v(result)
+            if callable(v):
+                result = new_collection(expr.Assign(result, *args))
+                args = []
+                result = new_collection(expr.Assign(result, k, v(result)))
+                continue
 
-            if isinstance(v, (Scalar, Series)):
+            elif isinstance(v, (Scalar, Series)):
                 if isinstance(v, Series):
                     if not expr.are_co_aligned(
-                        self.expr, v.expr, allow_broadcast=False
+                        result.expr, v.expr, allow_broadcast=False
                     ):
-                        result, v = self.expr._align_divisions(v.expr)
+                        result = new_collection(expr.Assign(result, *args))
+                        args = []
+                        result, v = result.expr._align_divisions(v.expr)
 
             elif not isinstance(v, FrameBase) and isinstance(v, Hashable):
                 pass
