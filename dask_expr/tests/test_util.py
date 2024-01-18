@@ -71,14 +71,18 @@ from dask_expr import from_pandas
 def test_tokenize_deterministic():
     ddf = from_pandas(pd.DataFrame({"a": [1, 2, 3]}))
     assert ddf._name == ddf._name
-    # This fails without https://github.com/dask/dask/pull/10808 already
+    tokenize(ddf._expr)
+    # This fails because there is no tokenization registered for our collection
+    # Works with https://github.com/dask/dask/pull/10808
     # tokenize(ddf)
 
     def identity(x):
         return x
 
     ddf2 = ddf.map_partitions(identity)
-    # This fails without https://github.com/dask/dask/pull/10808 already
+    # Fails because of local functions
+
+    tokenize(ddf2._expr)
     # tokenize(ddf2)
 
     def identity(x):
@@ -94,4 +98,4 @@ def test_tokenize_deterministic():
 
     # This fails since the lambda is not deterministic
     assert loads(dumps(ddf2))._name == ddf2._name
-    assert tokenize(ddf2) != tokenize(ddf3)
+    assert tokenize(ddf2._expr) != tokenize(ddf3._expr)
