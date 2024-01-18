@@ -369,7 +369,9 @@ class GroupbyAggregation(GroupByApplyConcatApply, GroupByBase):
             return {
                 "has_median": self.has_median,
                 "by": self._by_columns,
-                "key": list(set(self.frame.columns) - set(self._by_columns)),
+                "key": [
+                    col for col in self.frame.columns if col not in self._by_columns
+                ],
                 **_as_dict("observed", self.observed),
                 **_as_dict("dropna", self.dropna),
             }
