@@ -28,7 +28,6 @@ class DXCreationDispatch(CreationDispatch):
 dataframe_creation_dispatch = DXCreationDispatch(
     module_name="dataframe",
     default="pandas",
-    entrypoint_root="dask_expr",
     entrypoint_class=DataFrameBackendEntrypoint,
     name="dataframe_creation_dispatch",
 )
