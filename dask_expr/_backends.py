@@ -6,28 +6,10 @@ from dask.dataframe.backends import DataFrameBackendEntrypoint
 
 from dask_expr._dispatch import get_collection_type
 
-
-class DXCreationDispatch(CreationDispatch):
-    """Dask-expressions version of CreationDispatch"""
-
-    # TODO Remove after https://github.com/dask/dask/pull/10794
-    def dispatch(self, backend: str):
-        from dask.backends import detect_entrypoints
-
-        try:
-            impl = self._lookup[backend]
-        except KeyError:
-            entrypoints = detect_entrypoints(f"dask_expr.{self._module_name}.backends")
-            if backend in entrypoints:
-                return self.register_backend(backend, entrypoints[backend].load()())
-        else:
-            return impl
-        raise ValueError(f"No backend dispatch registered for {backend}")
-
-
-dataframe_creation_dispatch = DXCreationDispatch(
+dataframe_creation_dispatch = CreationDispatch(
     module_name="dataframe",
     default="pandas",
+    entrypoint_root="dask_expr",
     entrypoint_class=DataFrameBackendEntrypoint,
     name="dataframe_creation_dispatch",
 )
