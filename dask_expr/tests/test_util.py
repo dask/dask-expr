@@ -70,13 +70,16 @@ from dask_expr import from_pandas
 
 def test_tokenize_deterministic():
     ddf = from_pandas(pd.DataFrame({"a": [1, 2, 3]}))
-    tokenize(ddf)
+    assert ddf._name == ddf._name
+    # This fails without https://github.com/dask/dask/pull/10808 already
+    # tokenize(ddf)
 
     def identity(x):
         return x
 
     ddf2 = ddf.map_partitions(identity)
-    tokenize(ddf2)
+    # This fails without https://github.com/dask/dask/pull/10808 already
+    # tokenize(ddf2)
 
     def identity(x):
         return x + 1
@@ -85,7 +88,10 @@ def test_tokenize_deterministic():
 
     from distributed.protocol.pickle import dumps, loads
 
+    # This works since ddf is rather trivial and tokenization for from_pandas is
+    # actually properly implemented
     assert loads(dumps(ddf))._name == ddf._name
 
+    # This fails since the lambda is not deterministic
     assert loads(dumps(ddf2))._name == ddf2._name
     assert tokenize(ddf2) != tokenize(ddf3)
