@@ -128,7 +128,7 @@ def test_join(how, shuffle_method):
 
     # Check result with/without fusion
     expect = pdf1.join(pdf2, on="x", how=how)
-    assert_eq(df3, expect, check_index=False)
+    assert_eq(df3.compute(), expect, check_index=False)
     assert_eq(df3.optimize(), expect, check_index=False)
 
     df3 = df1.join(df2.z, on="x", how=how, shuffle_method=shuffle_method)
@@ -269,6 +269,23 @@ def test_merge_combine_similar_intermediate_projections():
 
     assert sorted(result.expr.frame.frame.left.operand("columns")) == ["b", "x"]
     assert_eq(result, pd_result, check_index=False)
+
+
+def test_categorical_merge_with_merge_column_cat_in_one_and_not_other_upcasts():
+    df1 = pd.DataFrame({"A": pd.Categorical([0, 1]), "B": pd.Categorical(["a", "b"])})
+    df2 = pd.DataFrame({"C": pd.Categorical(["a", "b"])})
+
+    expected = pd.merge(df2, df1, left_index=True, right_on="A")
+
+    ddf1 = from_pandas(df1, npartitions=2)
+    ddf2 = from_pandas(df2, npartitions=2)
+
+    actual = merge(ddf2, ddf1, left_index=True, right_on="A").compute()
+    assert actual.C.dtype == "category"
+    assert actual.B.dtype == "category"
+    assert actual.A.dtype == "int64"
+    assert actual.index.dtype == "int64"
+    assert assert_eq(expected, actual)
 
 
 def test_merge_combine_similar_hangs():
@@ -589,12 +606,15 @@ def test_merge_pandas_object():
     )
 
 
+@pytest.mark.parametrize("clear_divisions", [True, False])
 @pytest.mark.parametrize("how", ["left", "outer"])
 @pytest.mark.parametrize("npartitions_base", [1, 2, 3])
 @pytest.mark.parametrize("npartitions_other", [1, 2, 3])
 def test_pairwise_merge_results_in_identical_output_df(
-    how, npartitions_base, npartitions_other
+    how, npartitions_base, npartitions_other, clear_divisions
 ):
+    if clear_divisions and (npartitions_other != 3 or npartitions_base != 1):
+        pytest.skip(reason="Runtime still slower than I would like, so save some time")
     dfs_to_merge = []
     for i in range(10):
         df = pd.DataFrame(
@@ -605,13 +625,19 @@ def test_pairwise_merge_results_in_identical_output_df(
             index=[0, 1, 2, 3],
         )
         ddf = from_pandas(df, npartitions_other)
+        if clear_divisions:
+            ddf = ddf.clear_divisions()
         dfs_to_merge.append(ddf)
 
     ddf_loop = from_pandas(pd.DataFrame(index=[0, 1, 3]), npartitions_base)
+    if clear_divisions:
+        ddf_loop = ddf_loop.clear_divisions()
     for ddf in dfs_to_merge:
         ddf_loop = ddf_loop.join(ddf, how=how)
 
     ddf_pairwise = from_pandas(pd.DataFrame(index=[0, 1, 3]), npartitions_base)
+    if clear_divisions:
+        ddf_pairwise = ddf_pairwise.clear_divisions()
 
     ddf_pairwise = ddf_pairwise.join(dfs_to_merge, how=how)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import functools
 import numbers
 import operator
@@ -164,6 +165,9 @@ class Expr(core.Expr):
 
     def __pow__(self, power):
         return Pow(self, power)
+
+    def __rpow__(self, power):
+        return Pow(power, self)
 
     def __truediv__(self, other):
         return Div(self, other)
@@ -932,19 +936,46 @@ class CreateOverlappingPartitions(Expr):
                 for i in range(self.frame.npartitions - 1):
                     dsk[(name_prepend, i)] = (M.tail, (self.frame._name, i), before)
                     prevs.append((name_prepend, i))
-            else:
-                # We don't want to look at the divisions, so take twice the step and
-                # validate later.
-                before = 2 * self.before
+            elif isinstance(self.before, datetime.timedelta):
+                # Assumes monotonic (increasing?) index
+                divs = pd.Series(self.frame.divisions)
+                deltas = divs.diff().iloc[1:-1]
 
-                for i in range(self.frame.npartitions - 1):
-                    dsk[(name_prepend, i)] = (
-                        _tail_timedelta,
-                        (self.frame._name, i + 1),
-                        (self.frame._name, i),
-                        before,
-                    )
-                    prevs.append((name_prepend, i))
+                # In the first case window-size is larger than at least one partition, thus it is
+                # necessary to calculate how many partitions must be used for each rolling task.
+                # Otherwise, these calculations can be skipped (faster)
+
+                if (self.before > deltas).any():
+                    pt_z = divs[0]
+                    for i in range(self.frame.npartitions - 1):
+                        # Select all indexes of relevant partitions between the current partition and
+                        # the partition with the highest division outside the rolling window (before)
+                        pt_i = divs[i + 1]
+
+                        # lower-bound the search to the first division
+                        lb = max(pt_i - self.before, pt_z)
+
+                        first, j = divs[i], i
+                        while first > lb and j > 0:
+                            first = first - deltas[j]
+                            j = j - 1
+
+                        dsk[(name_prepend, i)] = (
+                            _tail_timedelta,
+                            (self.frame._name, i + 1),
+                            [(self.frame._name, k) for k in range(j, i + 1)],
+                            self.before,
+                        )
+                        prevs.append((name_prepend, i))
+                else:
+                    for i in range(self.frame.npartitions - 1):
+                        dsk[(name_prepend, i)] = (
+                            _tail_timedelta,
+                            (self.frame._name, i + 1),
+                            [(self.frame._name, i)],
+                            self.before,
+                        )
+                        prevs.append((name_prepend, i))
         else:
             prevs.extend([None] * self.frame.npartitions)
 
@@ -986,7 +1017,10 @@ class CreateOverlappingPartitions(Expr):
 
 
 def _tail_timedelta(current, prev_, before):
-    return prev_[prev_.index > (current.index.min() - before)]
+    selected = methods.concat(
+        [prev[prev.index > (current.index.min() - before)] for prev in prev_]
+    )
+    return selected
 
 
 def _overlap_chunk(df, func, before, after, *args, **kwargs):
@@ -1006,8 +1040,12 @@ def _combined_parts(prev_part, current_part, next_part, before, after):
                 raise NotImplementedError(msg)
         else:
             prev_part_input = prev_part
-            prev_part = _tail_timedelta(current_part, prev_part, before)
-            if len(prev_part_input) == len(prev_part) and len(prev_part_input) > 0:
+            prev_part = _tail_timedelta(current_part, [prev_part], before)
+            if (
+                len(prev_part_input) == len(prev_part)
+                and len(prev_part_input) > 0
+                and not isinstance(before, datetime.timedelta)
+            ):
                 raise NotImplementedError(msg)
 
     if next_part is not None:
@@ -2613,7 +2651,27 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     return result
 
 
-def is_broadcastable(s):
+def is_broadcastable(dfs, s):
+    """
+    This Series is broadcastable against another dataframe in the sequence
+    """
+
+    def compare(s, df):
+        try:
+            return s.divisions == (min(df.columns), max(df.columns))
+        except TypeError:
+            return False
+
+    return (
+        s.ndim == 1
+        and s.npartitions == 1
+        and s.known_divisions
+        and any(compare(s, df) for df in dfs if df.ndim == 2)
+        or s.ndim == 0
+    )
+
+
+def _is_broadcastable(s):
     """
     This Series is broadcastable against another dataframe in the sequence
     """
@@ -2624,16 +2682,17 @@ def is_broadcastable(s):
 def non_blockwise_ancestors(expr):
     """Traverse through tree to find ancestors that are not blockwise or are IO"""
     from dask_expr._cumulative import CumulativeAggregations
+    from dask_expr._reductions import Reduction
 
     stack = [expr]
     while stack:
         e = stack.pop()
         if isinstance(e, IO):
             yield e
-        elif isinstance(e, (Blockwise, CumulativeAggregations)):
+        elif isinstance(e, (Blockwise, CumulativeAggregations, Reduction)):
             # TODO: Capture this in inheritance logic
             dependencies = e.dependencies()
-            stack.extend([expr for expr in dependencies if not is_broadcastable(expr)])
+            stack.extend([expr for expr in dependencies if not _is_broadcastable(expr)])
         else:
             yield e
 
@@ -2652,7 +2711,9 @@ def are_co_aligned(*exprs, allow_broadcast=True):
         return False
     # We tried avoiding an `npartitions` check above, but
     # now we need to consider "broadcastable" expressions.
-    exprs_except_broadcast = [expr for expr in exprs if not is_broadcastable(expr)]
+    exprs_except_broadcast = [
+        expr for expr in exprs if not is_broadcastable(exprs, expr)
+    ]
     if len(exprs_except_broadcast) < len(exprs):
         return are_co_aligned(*exprs_except_broadcast)
     return False

@@ -27,6 +27,7 @@ from dask.utils import (
     is_index_like,
     is_series_like,
 )
+from pandas import CategoricalDtype
 
 from dask_expr._expr import (
     Assign,
@@ -141,7 +142,10 @@ class ShuffleBase(Expr):
 
     @functools.cached_property
     def _meta(self):
-        return self.frame._meta
+        meta = self.frame._meta
+        if self.ignore_index and self.method == "tasks":
+            meta = meta.reset_index(drop=True)
+        return meta
 
     def _divisions(self):
         return (None,) * (self.npartitions_out + 1)
@@ -198,6 +202,14 @@ class Shuffle(ShuffleBase):
             raise ValueError(f"{method} not supported")
 
 
+def _is_numeric_cast_type(dtype):
+    return (
+        pd.api.types.is_numeric_dtype(dtype)
+        or isinstance(dtype, CategoricalDtype)
+        and pd.api.types.is_numeric_dtype(dtype.categories)
+    )
+
+
 class RearrangeByColumn(ShuffleBase):
     def _lower(self):
         frame = self.frame
@@ -229,9 +241,9 @@ class RearrangeByColumn(ShuffleBase):
                 ]
             drop_columns = partitioning_index.copy()
         elif index_shuffle:
-            frame = Assign(frame, "_partitions_0", frame.index)
-            partitioning_index = ["_partitions_0"]
-            drop_columns = partitioning_index.copy()
+            dtypes = (
+                np.float64 if _is_numeric_cast_type(frame.index._meta.dtype) else None
+            )
         else:
             cs = [col for col in partitioning_index if col not in frame.columns]
             if len(cs) == 1:
@@ -241,13 +253,16 @@ class RearrangeByColumn(ShuffleBase):
                 partitioning_index[idx] = "_partitions_0"
                 drop_columns = ["_partitions_0"]
 
-        dtypes = {}
-        cols = [c for c in frame.columns if c in _convert_to_list(partitioning_index)]
-        for col, dtype in frame[cols].dtypes.items():
-            if pd.api.types.is_numeric_dtype(dtype):
-                dtypes[col] = np.float64
-        if not dtypes:
-            dtypes = None
+        if not index_shuffle:
+            dtypes = {}
+            cols = [
+                c for c in frame.columns if c in _convert_to_list(partitioning_index)
+            ]
+            for col, dtype in frame[cols].dtypes.items():
+                if _is_numeric_cast_type(dtype):
+                    dtypes[col] = np.float64
+            if not dtypes:
+                dtypes = None
 
         # Assign new "_partitions" column
         index_added = AssignPartitioningIndex(
@@ -256,6 +271,7 @@ class RearrangeByColumn(ShuffleBase):
             "_partitions",
             npartitions_out,
             dtypes,
+            index_shuffle,
         )
 
         # Apply shuffle
@@ -285,6 +301,10 @@ class SimpleShuffle(PartitionsFiltered, Shuffle):
     ]
 
     _defaults = {"_partitions": None}
+
+    @functools.cached_property
+    def _meta(self):
+        return self.frame._meta
 
     @staticmethod
     def _shuffle_group(df, _filter, *args):
@@ -339,8 +359,15 @@ class SimpleShuffle(PartitionsFiltered, Shuffle):
 class TaskShuffle(SimpleShuffle):
     """Staged task-based shuffle implementation"""
 
+    @functools.cached_property
+    def _meta(self):
+        meta = self.frame._meta
+        if self.ignore_index:
+            meta = meta.reset_index(drop=True)
+        return meta
+
     def _layer(self):
-        max_branch = (self.options or {}).get("max_branch", 32)
+        max_branch = (self.options or {}).get("max_branch", None) or 32
         npartitions_input = self.frame.npartitions
         if len(self._partitions) <= max_branch or npartitions_input <= max_branch:
             # We are creating a small number of output partitions,
@@ -647,13 +674,18 @@ class AssignPartitioningIndex(Blockwise):
         "index_name",
         "npartitions_out",
         "cast_dtype",
+        "index_shuffle",
     ]
-    _defaults = {"cast_dtype": None}
+    _defaults = {"cast_dtype": None, "index_shuffle": False}
 
     @staticmethod
-    def operation(df, index, name: str, npartitions: int, cast_dtype):
+    def operation(df, index, name: str, npartitions: int, cast_dtype, index_shuffle):
         """Construct a hash-based partitioning index"""
-        index = _select_columns_or_index(df, index)
+        if index_shuffle:
+            index = df.index.to_frame()
+        else:
+            index = _select_columns_or_index(df, index)
+
         if isinstance(index, (str, list, tuple)):
             # Assume column selection from df
             index = [index] if isinstance(index, str) else list(index)
@@ -1185,7 +1217,7 @@ class SortValuesBlockwise(Blockwise):
 
 class SetIndexBlockwise(Blockwise):
     _parameters = ["frame", "other", "drop", "new_divisions", "append"]
-    _defaults = {"append": False}
+    _defaults = {"append": False, "new_divisions": None, "drop": True}
     _keyword_only = ["drop", "new_divisions", "append"]
     _is_length_preserving = True
 
