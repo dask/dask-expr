@@ -27,6 +27,7 @@ from dask.dataframe.groupby import (
     _cumcount_aggregate,
     _determine_levels,
     _groupby_aggregate,
+    _groupby_aggregate_spec,
     _groupby_apply_funcs,
     _groupby_get_group,
     _groupby_slice_apply,
@@ -34,6 +35,7 @@ from dask.dataframe.groupby import (
     _groupby_slice_transform,
     _head_aggregate,
     _head_chunk,
+    _non_agg_chunk,
     _normalize_spec,
     _nunique_df_chunk,
     _nunique_df_combine,
@@ -295,7 +297,6 @@ class GroupbyAggregation(GroupByApplyConcatApply, GroupByBase):
         "shuffle_method": None,
         "_slice": None,
     }
-    chunk = staticmethod(_groupby_apply_funcs)
 
     @functools.cached_property
     def spec(self):
@@ -329,26 +330,52 @@ class GroupbyAggregation(GroupByApplyConcatApply, GroupByBase):
         else:
             raise ValueError(f"aggregate on unknown object {self.frame._meta}")
 
-        # Median not supported yet
-        has_median = any(s[1] in ("median", np.median) for s in spec)
-        if has_median:
-            raise NotImplementedError("median not yet supported")
+        return spec
 
+    @functools.cached_property
+    def agg_args(self):
         keys = ["chunk_funcs", "aggregate_funcs", "finalizers"]
-        return dict(zip(keys, _build_agg_args(spec)))
+        return dict(zip(keys, _build_agg_args(self.spec)))
+
+    @functools.cached_property
+    def has_median(self):
+        return any(s[1] in ("median", np.median) for s in self.spec)
+
+    @property
+    def should_shuffle(self):
+        return self.has_median or super().should_shuffle
+
+    @classmethod
+    def chunk(cls, df, *by, **kwargs):
+        if kwargs.pop("has_median"):
+            return _non_agg_chunk(df, *by, **kwargs)
+        return _groupby_apply_funcs(df, *by, **kwargs)
 
     @classmethod
     def combine(cls, inputs, **kwargs):
+        if kwargs.pop("has_median"):
+            return _groupby_aggregate_spec(_concat(inputs), **kwargs)
         return _groupby_apply_funcs(_concat(inputs), **kwargs)
 
     @classmethod
     def aggregate(cls, inputs, **kwargs):
+        if kwargs.pop("has_median"):
+            return _groupby_aggregate_spec(_concat(inputs), **kwargs)
         return _agg_finalize(_concat(inputs), **kwargs)
 
     @property
     def chunk_kwargs(self) -> dict:
+        if self.has_median:
+            return {
+                "has_median": self.has_median,
+                "by": self._by_columns,
+                "key": list(set(self.frame.columns) - set(self._by_columns)),
+                **_as_dict("observed", self.observed),
+                **_as_dict("dropna", self.dropna),
+            }
         return {
-            "funcs": self.spec["chunk_funcs"],
+            "has_median": self.has_median,
+            "funcs": self.agg_args["chunk_funcs"],
             "sort": self.sort,
             **_as_dict("observed", self.observed),
             **_as_dict("dropna", self.dropna),
@@ -356,8 +383,17 @@ class GroupbyAggregation(GroupByApplyConcatApply, GroupByBase):
 
     @property
     def combine_kwargs(self) -> dict:
+        if self.has_median:
+            return {
+                "has_median": self.has_median,
+                "spec": self.arg,
+                "levels": _determine_levels(self.by),
+                **_as_dict("observed", self.observed),
+                **_as_dict("dropna", self.dropna),
+            }
         return {
-            "funcs": self.spec["aggregate_funcs"],
+            "has_median": self.has_median,
+            "funcs": self.agg_args["aggregate_funcs"],
             "level": self.levels,
             "sort": self.sort,
             **_as_dict("observed", self.observed),
@@ -366,9 +402,19 @@ class GroupbyAggregation(GroupByApplyConcatApply, GroupByBase):
 
     @property
     def aggregate_kwargs(self) -> dict:
+        if self.has_median:
+            return {
+                "has_median": self.has_median,
+                "spec": self.arg,
+                "levels": _determine_levels(self.by),
+                **_as_dict("observed", self.observed),
+                **_as_dict("dropna", self.dropna),
+            }
+
         return {
-            "aggregate_funcs": self.spec["aggregate_funcs"],
-            "finalize_funcs": self.spec["finalizers"],
+            "has_median": self.has_median,
+            "aggregate_funcs": self.agg_args["aggregate_funcs"],
+            "finalize_funcs": self.agg_args["finalizers"],
             "level": self.levels,
             "sort": self.sort,
             **_as_dict("observed", self.observed),

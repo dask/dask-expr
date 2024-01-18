@@ -447,6 +447,14 @@ class ApplyConcatApply(Expr):
     def _chunk_cls_args(self):
         return []
 
+    @property
+    def should_shuffle(self):
+        # TODO: Make this an actual default param?
+        sort = getattr(self, "sort", False)
+        return not (
+            not isinstance(self.split_out, bool) and self.split_out == 1 or sort
+        )
+
     def _lower(self):
         # Normalize functions in case not all are defined
         chunk = self.chunk
@@ -470,7 +478,7 @@ class ApplyConcatApply(Expr):
         chunked = self._chunk_cls(
             self.frame, type(self), chunk, chunk_kwargs, *self._chunk_cls_args
         )
-        if not isinstance(self.split_out, bool) and self.split_out == 1 or sort:
+        if not self.should_shuffle:
             # Lower into TreeReduce(Chunk)
             return TreeReduce(
                 chunked,
