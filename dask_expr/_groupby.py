@@ -301,7 +301,10 @@ class GroupbyAggregationBase(GroupByApplyConcatApply, GroupByBase):
             self._by_meta,
             **_as_dict("observed", self.observed),
             **_as_dict("dropna", self.dropna),
-        ).aggregate(self.arg)
+        )
+        if self._slice is not None:
+            meta = meta[self._slice]
+        meta = meta.aggregate(self.arg)
         return make_meta(meta)
 
     @functools.cached_property
@@ -479,7 +482,10 @@ class DecomposableGroupbyAggregation(GroupbyAggregationBase):
     def aggregate_kwargs(self) -> dict:
         return {
             "aggregate_funcs": self.agg_args["aggregate_funcs"],
+            "arg": self.arg,
+            "columns": self._slice,
             "finalize_funcs": self.agg_args["finalizers"],
+            "is_series": self._meta.ndim == 1,
             "level": self.levels,
             "sort": self.sort,
             **_as_dict("observed", self.observed),
@@ -1879,27 +1885,6 @@ class SeriesGroupBy(GroupBy):
         super().__init__(
             obj, by=by, slice=slice, observed=observed, dropna=dropna, sort=sort
         )
-
-    def aggregate(self, arg=None, split_every=8, split_out=1, **kwargs):
-        result = super().aggregate(
-            arg=arg, split_every=split_every, split_out=split_out
-        )
-        if self._slice:
-            try:
-                result = result[self._slice]
-            except KeyError:
-                pass
-
-        if (
-            arg is not None
-            and not isinstance(arg, (list, dict))
-            and is_dataframe_like(result._meta)
-        ):
-            result = result[result.columns[0]]
-
-        return result
-
-    agg = aggregate
 
     def idxmin(
         self, split_every=None, split_out=1, skipna=True, numeric_only=False, **kwargs
