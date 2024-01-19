@@ -251,7 +251,7 @@ class SingleAggregation(GroupByApplyConcatApply, GroupByBase):
         return groupby_projection(self, parent, dependents)
 
 
-class GroupbyAggregationBase(GroupByBase):
+class GroupbyAggregationBase(GroupByApplyConcatApply, GroupByBase):
     """Base class for groupby aggregation
 
     This class can be subclassed to perform a general
@@ -356,7 +356,7 @@ class GroupbyAggregationBase(GroupByBase):
             return type(self)(self.frame[list(column_projection)], *self.operands[1:])
 
 
-class GroupbyAggregation(Expr, GroupbyAggregationBase):
+class GroupbyAggregation(GroupbyAggregationBase):
     """Logical groupby aggregation class
 
     This class lowers itself to concrete implementations for decomposable
@@ -387,7 +387,7 @@ class GroupbyAggregation(Expr, GroupbyAggregationBase):
         )
 
 
-class HolisticGroupbyAggregation(GroupByApplyConcatApply, GroupbyAggregationBase):
+class HolisticGroupbyAggregation(GroupbyAggregationBase):
     """Groupby aggregation for both decomposable and non-decomposable aggregates
 
     This class always calculates the aggregates by first collecting all the data for
