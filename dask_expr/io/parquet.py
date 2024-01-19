@@ -737,7 +737,7 @@ def _calculate_divisions(statistics, dataset_info, npartitions):
         calculate_divisions = dataset_info.get("calculate_divisions", None)
         index = dataset_info["index"]
         process_columns = index if index and len(index) == 1 else None
-        if (calculate_divisions is not None) and process_columns:
+        if (calculate_divisions is not False) and process_columns:
             for sorted_column_info in sorted_columns(
                 statistics, columns=process_columns
             ):
