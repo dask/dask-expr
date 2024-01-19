@@ -251,10 +251,10 @@ class SingleAggregation(GroupByApplyConcatApply, GroupByBase):
         return groupby_projection(self, parent, dependents)
 
 
-class GroupbyAggregation(GroupByApplyConcatApply, GroupByBase):
-    """General groupby aggregation
+class GroupbyAggregationBase(GroupByBase):
+    """Base class for groupby aggregation
 
-    This class can be used directly to perform a general
+    This class can be subclassed to perform a general
     groupby aggregation by passing in a `str`, `list` or
     `dict`-based specification using the `arg` operand.
 
@@ -271,10 +271,6 @@ class GroupbyAggregation(GroupByApplyConcatApply, GroupByBase):
         Passed through to dataframe backend.
     dropna:
         Whether rows with NA values should be dropped.
-    chunk_kwargs:
-        Key-word arguments to pass to `groupby_chunk`.
-    aggregate_kwargs:
-        Key-word arguments to pass to `aggregate_chunk`.
     """
 
     _parameters = [
@@ -297,6 +293,16 @@ class GroupbyAggregation(GroupByApplyConcatApply, GroupByBase):
         "shuffle_method": None,
         "_slice": None,
     }
+
+    @functools.cached_property
+    def _meta(self):
+        meta = meta_nonempty(self.frame._meta)
+        meta = meta.groupby(
+            self._by_meta,
+            **_as_dict("observed", self.observed),
+            **_as_dict("dropna", self.dropna),
+        ).aggregate(self.arg)
+        return make_meta(meta)
 
     @functools.cached_property
     def spec(self):
@@ -337,92 +343,6 @@ class GroupbyAggregation(GroupByApplyConcatApply, GroupByBase):
         keys = ["chunk_funcs", "aggregate_funcs", "finalizers"]
         return dict(zip(keys, _build_agg_args(self.spec)))
 
-    @functools.cached_property
-    def has_median(self):
-        return any(s[1] in ("median", np.median) for s in self.spec)
-
-    @property
-    def should_shuffle(self):
-        return self.has_median or super().should_shuffle
-
-    @classmethod
-    def chunk(cls, df, *by, **kwargs):
-        if kwargs.pop("has_median"):
-            return _non_agg_chunk(df, *by, **kwargs)
-        return _groupby_apply_funcs(df, *by, **kwargs)
-
-    @classmethod
-    def combine(cls, inputs, **kwargs):
-        if kwargs.pop("has_median"):
-            return _groupby_aggregate_spec(_concat(inputs), **kwargs)
-        return _groupby_apply_funcs(_concat(inputs), **kwargs)
-
-    @classmethod
-    def aggregate(cls, inputs, **kwargs):
-        if kwargs.pop("has_median"):
-            return _groupby_aggregate_spec(_concat(inputs), **kwargs)
-        return _agg_finalize(_concat(inputs), **kwargs)
-
-    @property
-    def chunk_kwargs(self) -> dict:
-        if self.has_median:
-            return {
-                "has_median": self.has_median,
-                "by": self._by_columns,
-                "key": [
-                    col for col in self.frame.columns if col not in self._by_columns
-                ],
-                **_as_dict("observed", self.observed),
-                **_as_dict("dropna", self.dropna),
-            }
-        return {
-            "has_median": self.has_median,
-            "funcs": self.agg_args["chunk_funcs"],
-            "sort": self.sort,
-            **_as_dict("observed", self.observed),
-            **_as_dict("dropna", self.dropna),
-        }
-
-    @property
-    def combine_kwargs(self) -> dict:
-        if self.has_median:
-            return {
-                "has_median": self.has_median,
-                "spec": self.arg,
-                "levels": _determine_levels(self.by),
-                **_as_dict("observed", self.observed),
-                **_as_dict("dropna", self.dropna),
-            }
-        return {
-            "has_median": self.has_median,
-            "funcs": self.agg_args["aggregate_funcs"],
-            "level": self.levels,
-            "sort": self.sort,
-            **_as_dict("observed", self.observed),
-            **_as_dict("dropna", self.dropna),
-        }
-
-    @property
-    def aggregate_kwargs(self) -> dict:
-        if self.has_median:
-            return {
-                "has_median": self.has_median,
-                "spec": self.arg,
-                "levels": _determine_levels(self.by),
-                **_as_dict("observed", self.observed),
-                **_as_dict("dropna", self.dropna),
-            }
-
-        return {
-            "has_median": self.has_median,
-            "aggregate_funcs": self.agg_args["aggregate_funcs"],
-            "finalize_funcs": self.agg_args["finalizers"],
-            "level": self.levels,
-            "sort": self.sort,
-            **_as_dict("observed", self.observed),
-            **_as_dict("dropna", self.dropna),
-        }
-
     def _simplify_down(self):
         # Use agg-spec information to add column projection
         column_projection = None
@@ -434,6 +354,131 @@ class GroupbyAggregation(GroupByApplyConcatApply, GroupByBase):
             )
         if column_projection and column_projection < set(self.frame.columns):
             return type(self)(self.frame[list(column_projection)], *self.operands[1:])
+
+
+class GroupbyAggregation(Expr, GroupbyAggregationBase):
+    @functools.cached_property
+    def _is_decomposable(self):
+        return not any(s[1] in ("median", np.median) for s in self.spec)
+
+    def _lower(self):
+        cls = (
+            DecomposableGroupbyAggregation
+            if self._is_decomposable
+            else HolisticGroupbyAggregation
+        )
+        return cls(
+            self.frame,
+            self.arg,
+            self.observed,
+            self.dropna,
+            self.split_every,
+            self.split_out,
+            self.sort,
+            self.shuffle_method,
+            self._slice,
+            *self.by,
+        )
+
+
+class HolisticGroupbyAggregation(GroupByApplyConcatApply, GroupbyAggregationBase):
+    """Groupby aggregation for both decomposable and non-decomposable aggregates
+
+    This class always calculates the aggregates by first collecting all the data for
+    the groups and then aggregating at once.
+    """
+
+    chunk = staticmethod(_non_agg_chunk)
+
+    @property
+    def should_shuffle(self):
+        return True
+
+    @classmethod
+    def chunk(cls, df, *by, **kwargs):
+        return _non_agg_chunk(df, *by, **kwargs)
+
+    @classmethod
+    def combine(cls, inputs, **kwargs):
+        return _groupby_aggregate_spec(_concat(inputs), **kwargs)
+
+    @classmethod
+    def aggregate(cls, inputs, **kwargs):
+        return _groupby_aggregate_spec(_concat(inputs), **kwargs)
+
+    @property
+    def chunk_kwargs(self) -> dict:
+        return {
+            "by": self._by_columns,
+            "key": [col for col in self.frame.columns if col not in self._by_columns],
+            **_as_dict("observed", self.observed),
+            **_as_dict("dropna", self.dropna),
+        }
+
+    @property
+    def combine_kwargs(self) -> dict:
+        return {
+            "spec": self.arg,
+            "levels": _determine_levels(self.by),
+            **_as_dict("observed", self.observed),
+            **_as_dict("dropna", self.dropna),
+        }
+
+    @property
+    def aggregate_kwargs(self) -> dict:
+        return {
+            "spec": self.arg,
+            "levels": _determine_levels(self.by),
+            **_as_dict("observed", self.observed),
+            **_as_dict("dropna", self.dropna),
+        }
+
+
+class DecomposableGroupbyAggregation(GroupbyAggregationBase):
+    """Groupby aggregation for decomposable aggregates
+
+    The results may be calculated via tree or shuffle reduction.
+    """
+
+    chunk = staticmethod(_groupby_apply_funcs)
+
+    @classmethod
+    def combine(cls, inputs, **kwargs):
+        return _groupby_apply_funcs(_concat(inputs), **kwargs)
+
+    @classmethod
+    def aggregate(cls, inputs, **kwargs):
+        return _agg_finalize(_concat(inputs), **kwargs)
+
+    @property
+    def chunk_kwargs(self) -> dict:
+        return {
+            "funcs": self.agg_args["chunk_funcs"],
+            "sort": self.sort,
+            **_as_dict("observed", self.observed),
+            **_as_dict("dropna", self.dropna),
+        }
+
+    @property
+    def combine_kwargs(self) -> dict:
+        return {
+            "funcs": self.agg_args["aggregate_funcs"],
+            "level": self.levels,
+            "sort": self.sort,
+            **_as_dict("observed", self.observed),
+            **_as_dict("dropna", self.dropna),
+        }
+
+    @property
+    def aggregate_kwargs(self) -> dict:
+        return {
+            "aggregate_funcs": self.agg_args["aggregate_funcs"],
+            "finalize_funcs": self.agg_args["finalizers"],
+            "level": self.levels,
+            "sort": self.sort,
+            **_as_dict("observed", self.observed),
+            **_as_dict("dropna", self.dropna),
+        }
 
 
 class Sum(SingleAggregation):
