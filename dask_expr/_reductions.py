@@ -449,7 +449,6 @@ class ApplyConcatApply(Expr):
 
     @property
     def should_shuffle(self):
-        # TODO: Make this an actual default param?
         sort = getattr(self, "sort", False)
         return not (
             not isinstance(self.split_out, bool) and self.split_out == 1 or sort
