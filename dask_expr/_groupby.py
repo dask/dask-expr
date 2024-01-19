@@ -357,6 +357,12 @@ class GroupbyAggregationBase(GroupByBase):
 
 
 class GroupbyAggregation(Expr, GroupbyAggregationBase):
+    """Logical groupby aggregation class
+
+    This class lowers itself to concrete implementations for decomposable
+    or holistic aggregations.
+    """
+
     @functools.cached_property
     def _is_decomposable(self):
         return not any(s[1] in ("median", np.median) for s in self.spec)
