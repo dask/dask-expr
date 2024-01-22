@@ -280,6 +280,7 @@ class Expr:
         expr:
             output expression
         """
+        # Check if we've already simplified for these dependents
         key = _tokenize_deterministic(sorted(dependents.keys()))
         if key in self._simplified:
             return self._simplified[key]
@@ -324,7 +325,7 @@ class Expr:
 
             break
 
-        self._simplified[key] = expr
+        self._simplified[key] = expr  # Cache the result
         return expr
 
     def simplify(self) -> Expr:
