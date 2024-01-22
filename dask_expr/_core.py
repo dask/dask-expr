@@ -281,48 +281,51 @@ class Expr:
             output expression
         """
         key = _tokenize_deterministic(sorted(dependents.keys()))
-        if key not in self._simplified:
-            expr = self
-            while True:
-                out = expr._simplify_down()
+        if key in self._simplified:
+            return self._simplified[key]
+
+        expr = self
+
+        while True:
+            out = expr._simplify_down()
+            if out is None:
+                out = expr
+            if not isinstance(out, Expr):
+                return out
+            if out._name != expr._name:
+                expr = out
+
+            # Allow children to simplify their parents
+            for child in expr.dependencies():
+                out = child._simplify_up(expr, dependents)
                 if out is None:
                     out = expr
+
                 if not isinstance(out, Expr):
                     return out
-                if out._name != expr._name:
+                if out is not expr and out._name != expr._name:
                     expr = out
+                    break
 
-                # Allow children to simplify their parents
-                for child in expr.dependencies():
-                    out = child._simplify_up(expr, dependents)
-                    if out is None:
-                        out = expr
+            # Rewrite all of the children
+            new_operands = []
+            changed = False
+            for operand in expr.operands:
+                if isinstance(operand, Expr):
+                    new = operand.simplify_once(dependents=dependents)
+                    if new._name != operand._name:
+                        changed = True
+                else:
+                    new = operand
+                new_operands.append(new)
 
-                    if not isinstance(out, Expr):
-                        return out
-                    if out is not expr and out._name != expr._name:
-                        expr = out
-                        break
+            if changed:
+                expr = type(expr)(*new_operands)
 
-                # Rewrite all of the children
-                new_operands = []
-                changed = False
-                for operand in expr.operands:
-                    if isinstance(operand, Expr):
-                        new = operand.simplify_once(dependents=dependents)
-                        if new._name != operand._name:
-                            changed = True
-                    else:
-                        new = operand
-                    new_operands.append(new)
+            break
 
-                if changed:
-                    expr = type(expr)(*new_operands)
-
-                break
-            self._simplified[key] = expr
-
-        return self._simplified[key]
+        self._simplified[key] = expr
+        return expr
 
     def simplify(self) -> Expr:
         expr = self
