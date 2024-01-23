@@ -28,17 +28,24 @@ def _unpack_collections(o):
 class Expr:
     _parameters = []
     _defaults = {}
+    _instances = weakref.WeakValueDictionary()
 
-    def __init__(self, *args, **kwargs):
+    def __new__(cls, *args, **kwargs):
         operands = list(args)
-        for parameter in type(self)._parameters[len(operands) :]:
+        for parameter in cls._parameters[len(operands) :]:
             try:
                 operands.append(kwargs.pop(parameter))
             except KeyError:
-                operands.append(type(self)._defaults[parameter])
+                operands.append(cls._defaults[parameter])
         assert not kwargs, kwargs
-        operands = [_unpack_collections(o) for o in operands]
-        self.operands = operands
+        inst = object.__new__(cls)
+        inst.operands = [_unpack_collections(o) for o in operands]
+        _name = inst._name
+        if _name in Expr._instances:
+            return Expr._instances[_name]
+
+        Expr._instances[_name] = inst
+        return inst
 
     def __str__(self):
         s = ", ".join(
@@ -129,7 +136,7 @@ class Expr:
 
     def dependencies(self):
         # Dependencies are `Expr` operands only
-        return [operand for operand in self.operands if isinstance(operand, Expr)]
+        return [operand for operand in operands if isinstance(operand, Expr)]
 
     def _task(self, index: int):
         """The task for the i'th partition
