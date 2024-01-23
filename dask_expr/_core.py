@@ -47,6 +47,18 @@ class Expr:
         Expr._instances[_name] = inst
         return inst
 
+    def _tune_down(self):
+        return None
+
+    def _tune_up(self, parent):
+        return None
+
+    def _cull_down(self):
+        return None
+
+    def _cull_up(self, parent):
+        return None
+
     def __str__(self):
         s = ", ".join(
             str(param) + "=" + str(operand)
@@ -211,28 +223,26 @@ class Expr:
             _continue = False
 
             # Rewrite this node
-            if down_name in expr.__dir__():
-                out = getattr(expr, down_name)()
+            out = getattr(expr, down_name)()
+            if out is None:
+                out = expr
+            if not isinstance(out, Expr):
+                return out
+            if out._name != expr._name:
+                expr = out
+                continue
+
+            # Allow children to rewrite their parents
+            for child in expr.dependencies():
+                out = getattr(child, up_name)(expr)
                 if out is None:
                     out = expr
                 if not isinstance(out, Expr):
                     return out
-                if out._name != expr._name:
+                if out is not expr and out._name != expr._name:
                     expr = out
-                    continue
-
-            # Allow children to rewrite their parents
-            for child in expr.dependencies():
-                if up_name in child.__dir__():
-                    out = getattr(child, up_name)(expr)
-                    if out is None:
-                        out = expr
-                    if not isinstance(out, Expr):
-                        return out
-                    if out is not expr and out._name != expr._name:
-                        expr = out
-                        _continue = True
-                        break
+                    _continue = True
+                    break
 
             if _continue:
                 continue
