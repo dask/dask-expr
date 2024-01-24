@@ -1,5 +1,3 @@
-from numpy import allclose
-
 from dask_expr import from_pandas
 from dask_expr.tests._util import _backend_library, assert_eq
 
@@ -14,7 +12,7 @@ def test_repartition_quantiles():
     expected = pd.Series(
         [1, 1, 3, 7, 9, 15], index=[0, 0.2, 0.4, 0.6, 0.8, 1], name="a"
     )
-    # Set `check_exact=False` explicitly
+    # Set `check_exact=False`
     # See: https://github.com/dask-contrib/dask-expr/issues/801
     assert_eq(result, expected, check_exact=False)
 
