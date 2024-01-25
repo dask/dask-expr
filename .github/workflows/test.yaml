@@ -32,6 +32,10 @@ jobs:
         with:
           fetch-depth: 0  # Needed by codecov.io
 
+      - name: Get current date
+        id: date
+        run: echo "date=$(date +%Y-%m-%d)" >> "${GITHUB_OUTPUT}"
+
       - name: Install Environment
         uses: mamba-org/setup-micromamba@v1
         with:
