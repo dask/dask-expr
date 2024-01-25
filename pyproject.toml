@@ -40,6 +40,16 @@ dynamic = ["version"]
 exclude = ["*tests*"]
 namespaces = false
 
+[tool.pytest.ini_options]
+# Markers must be a superset of those used in dask/dask due to imported tests
+markers = [
+    "network: Test requires an internet connection",
+    "slow: Skipped unless --runslow passed",
+    "gpu: marks tests we want to run on GPUs",
+    "skip_with_pyarrow_strings: Tests that should be skipped when pyarrow string conversion is turned on",
+    "xfail_with_pyarrow_strings: Tests that should be xfailed when pyarrow string conversion is turned on",
+]
+
 [tool.coverage.run]
 omit = [
     "*/test_*.py",
