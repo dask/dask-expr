@@ -1,4 +1,4 @@
-name: dask/dask tests
+name: Tests / dask/dask
 
 on:
   push:
