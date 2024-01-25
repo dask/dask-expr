@@ -49,7 +49,8 @@ from dask.utils import (
     pseudorandom,
     random_state_data,
 )
-from tlz import merge_sorted, unique
+from pandas.errors import PerformanceWarning
+from tlz import merge_sorted, partition, unique
 
 from dask_expr import _core as core
 from dask_expr._util import (
@@ -165,6 +166,9 @@ class Expr(core.Expr):
 
     def __pow__(self, power):
         return Pow(self, power)
+
+    def __rpow__(self, power):
+        return Pow(power, self)
 
     def __truediv__(self, other):
         return Div(self, other)
@@ -1732,11 +1736,35 @@ class Drop(Elemwise):
         return Projection(self.frame, columns)
 
 
+def assign(df, *pairs):
+    pairs = dict(partition(2, pairs))
+    df = df.copy(deep=False)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="DataFrame is highly fragmented *",
+            category=PerformanceWarning,
+        )
+        for name, val in pairs.items():
+            if isinstance(val, Callable):
+                val = val(df)
+            df[name] = val
+    return df
+
+
 class Assign(Elemwise):
     """Column Assignment"""
 
-    _parameters = ["frame", "key", "value"]
-    operation = staticmethod(methods.assign)
+    _parameters = ["frame"]
+    operation = staticmethod(assign)
+
+    @functools.cached_property
+    def keys(self):
+        return self.operands[1::2]
+
+    @functools.cached_property
+    def vals(self):
+        return self.operands[2::2]
 
     @functools.cached_property
     def _meta(self):
@@ -1745,23 +1773,61 @@ class Assign(Elemwise):
         ]
         return make_meta(self.operation(*args, **self._kwargs))
 
+    def _tree_repr_argument_construction(self, i, op, header):
+        if i == 0:
+            return super()._tree_repr_argument_construction(i, op, header)
+        if i % 2 == 1:
+            sep = "" if i == 1 else ","
+            header += f"{sep} {repr(op)[1:-1]}="
+        else:
+            header += f"{repr(op)}"
+        return header
+
     def _node_label_args(self):
-        return [self.frame, self.key, self.value]
+        return self.operands
+
+    def _simplify_down(self):
+        if isinstance(self.frame, Assign):
+            # if len(self.vals) == 1 and isinstance(self.vals[0], Callable):
+            #     # UDFs can't move around
+            #     return
+            if self._check_for_previously_created_column(self.frame):
+                # don't squash if we are using a column that was previously created
+                return
+            return Assign(*self.frame.operands, *self.operands[1:])
+
+    def _check_for_previously_created_column(self, child):
+        input_columns = []
+        for v in self.vals:
+            if isinstance(v, Expr):
+                input_columns.extend(v.columns)
+        return bool(set(input_columns) & set(child.keys))
 
     def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
             columns = determine_column_projection(self, parent, dependents)
-            if self.key not in columns:
-                return type(parent)(self.frame, *parent.operands[1:])
+            if not isinstance(columns, list):
+                columns = [columns]
 
-            columns = set(columns) - {self.key}
-            if columns == set(self.frame.columns):
+            cols = set(columns) - set(self.keys)
+            if cols == set(self.frame.columns):
                 # Protect against pushing the same projection twice
                 return
 
-            columns = [col for col in self.frame.columns if col in columns]
+            diff = set(self.keys) - set(columns)
+            if len(diff) == len(self.keys):
+                return type(parent)(self.frame, *parent.operands[1:])
+            elif len(diff) > 0:
+                new_args = []
+                for k, v in zip(self.keys, self.vals):
+                    if k in columns:
+                        new_args.extend([k, v])
+            else:
+                new_args = self.operands[1:]
+
+            columns = [col for col in self.frame.columns if col in cols]
             return type(parent)(
-                type(self)(self.frame[columns], *self.operands[1:]),
+                type(self)(self.frame[sorted(columns)], *new_args),
                 *parent.operands[1:],
             )
 
@@ -2648,7 +2714,27 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     return result
 
 
-def is_broadcastable(s):
+def is_broadcastable(dfs, s):
+    """
+    This Series is broadcastable against another dataframe in the sequence
+    """
+
+    def compare(s, df):
+        try:
+            return s.divisions == (min(df.columns), max(df.columns))
+        except TypeError:
+            return False
+
+    return (
+        s.ndim == 1
+        and s.npartitions == 1
+        and s.known_divisions
+        and any(compare(s, df) for df in dfs if df.ndim == 2)
+        or s.ndim == 0
+    )
+
+
+def _is_broadcastable(s):
     """
     This Series is broadcastable against another dataframe in the sequence
     """
@@ -2659,16 +2745,17 @@ def is_broadcastable(s):
 def non_blockwise_ancestors(expr):
     """Traverse through tree to find ancestors that are not blockwise or are IO"""
     from dask_expr._cumulative import CumulativeAggregations
+    from dask_expr._reductions import Reduction
 
     stack = [expr]
     while stack:
         e = stack.pop()
         if isinstance(e, IO):
             yield e
-        elif isinstance(e, (Blockwise, CumulativeAggregations)):
+        elif isinstance(e, (Blockwise, CumulativeAggregations, Reduction)):
             # TODO: Capture this in inheritance logic
             dependencies = e.dependencies()
-            stack.extend([expr for expr in dependencies if not is_broadcastable(expr)])
+            stack.extend([expr for expr in dependencies if not _is_broadcastable(expr)])
         else:
             yield e
 
@@ -2687,7 +2774,9 @@ def are_co_aligned(*exprs, allow_broadcast=True):
         return False
     # We tried avoiding an `npartitions` check above, but
     # now we need to consider "broadcastable" expressions.
-    exprs_except_broadcast = [expr for expr in exprs if not is_broadcastable(expr)]
+    exprs_except_broadcast = [
+        expr for expr in exprs if not is_broadcastable(exprs, expr)
+    ]
     if len(exprs_except_broadcast) < len(exprs):
         return are_co_aligned(*exprs_except_broadcast)
     return False

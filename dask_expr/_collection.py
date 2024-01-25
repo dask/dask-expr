@@ -26,7 +26,6 @@ from dask.dataframe.core import (
     has_parallel_type,
     is_arraylike,
     is_dataframe_like,
-    is_index_like,
     is_series_like,
     meta_warning,
     new_dd_object,
@@ -57,12 +56,15 @@ from pandas.api.types import is_scalar as pd_is_scalar
 from pandas.api.types import is_timedelta64_dtype
 from tlz import first
 
+import dask_expr._backends  # noqa: F401
 from dask_expr import _expr as expr
 from dask_expr._align import AlignPartitions
+from dask_expr._backends import dataframe_creation_dispatch
 from dask_expr._categorical import CategoricalAccessor, Categorize, GetCategories
 from dask_expr._concat import Concat
 from dask_expr._datetime import DatetimeAccessor
 from dask_expr._describe import DescribeNonNumeric, DescribeNumeric
+from dask_expr._dispatch import get_collection_type
 from dask_expr._expr import (
     BFill,
     Diff,
@@ -148,11 +150,19 @@ def _wrap_expr_op(self, other, op=None):
         if self.ndim == 1:
             other = other[self.columns[0]]
 
+    if (
+        not isinstance(other, expr.Expr)
+        and is_dataframe_like(other)
+        or is_series_like(other)
+    ):
+        other = self._create_alignable_frame(other).expr
+
     if not isinstance(other, expr.Expr):
         return new_collection(getattr(self.expr, op)(other))
     elif (
-        expr.are_co_aligned(self.expr, other)
+        expr.are_co_aligned(self.expr, other, allow_broadcast=False)
         or other.npartitions == self.npartitions == 1
+        and (self.ndim > other.ndim or self.ndim == 0)
     ):
         return new_collection(getattr(self.expr, op)(other))
     else:
@@ -532,7 +542,7 @@ class FrameBase(DaskMethodsMixin):
 
     def shuffle(
         self,
-        index: str | list,
+        on: str | list,
         ignore_index: bool = False,
         npartitions: int | None = None,
         shuffle_method: str | None = None,
@@ -542,7 +552,7 @@ class FrameBase(DaskMethodsMixin):
 
         Parameters
         ----------
-        index:
+        on:
             Column names to shuffle by.
         ignore_index: optional
             Whether to ignore the index. Default is ``False``.
@@ -558,19 +568,19 @@ class FrameBase(DaskMethodsMixin):
         # Preserve partition count by default
         npartitions = npartitions or self.npartitions
 
-        if isinstance(index, FrameBase):
-            if not expr.are_co_aligned(self.expr, index.expr):
+        if isinstance(on, FrameBase):
+            if not expr.are_co_aligned(self.expr, on.expr):
                 raise TypeError(
                     "index must be aligned with the DataFrame to use as shuffle index."
                 )
-        elif pd.api.types.is_list_like(index) and not is_dask_collection(index):
-            index = list(index)
+        elif pd.api.types.is_list_like(on) and not is_dask_collection(on):
+            on = list(on)
 
         # Returned shuffled result
         return new_collection(
             RearrangeByColumn(
                 self,
-                index,
+                on,
                 npartitions,
                 ignore_index,
                 shuffle_method,
@@ -725,6 +735,8 @@ class FrameBase(DaskMethodsMixin):
                 "Please provide exactly one of the ``npartitions=`` or "
                 "``divisions=`` keyword arguments."
             )
+        if divisions is not None:
+            check_divisions(divisions)
         if freq is not None:
             if not isinstance(self.divisions[0], pd.Timestamp):
                 raise TypeError("Can only repartition on frequency for timeseries")
@@ -765,6 +777,9 @@ class FrameBase(DaskMethodsMixin):
     def __rdivmod__(self, other):
         result = self.expr.__rdivmod__(other)
         return new_collection(result[0]), new_collection(result[1])
+
+    def __abs__(self):
+        return self.abs()
 
     def sum(
         self,
@@ -1565,9 +1580,14 @@ class FrameBase(DaskMethodsMixin):
         -------
         DataFrame, Series or Index
         """
-        from dask.dataframe.io import to_backend
+        from dask_expr._backends import dataframe_creation_dispatch
 
-        return to_backend(self.to_dask_dataframe(), backend=backend, **kwargs)
+        # Get desired backend
+        backend = backend or dataframe_creation_dispatch.backend
+        # Check that "backend" has a registered entrypoint
+        backend_entrypoint = dataframe_creation_dispatch.dispatch(backend)
+        # Call `DataFrameBackendEntrypoint.to_backend`
+        return backend_entrypoint.to_backend(self, **kwargs)
 
     def dot(self, other, meta=no_default):
         if not isinstance(other, FrameBase):
@@ -1615,6 +1635,7 @@ for op in [
     "__truediv__",
     "__rtruediv__",
     "__pow__",
+    "__rpow__",
     "__lt__",
     "__rlt__",
     "__gt__",
@@ -1745,24 +1766,29 @@ class DataFrame(FrameBase):
 
     def assign(self, **pairs):
         result = self
+        args = []
         for k, v in pairs.items():
             v = _maybe_from_pandas([v])[0]
             if not isinstance(k, str):
                 raise TypeError(f"Column name cannot be type {type(k)}")
 
             if callable(v):
-                v = v(result)
+                result = new_collection(expr.Assign(result, *args))
+                args = []
+                result = new_collection(expr.Assign(result, k, v(result)))
+                continue
 
-            if isinstance(v, (Scalar, Series)):
+            elif isinstance(v, (Scalar, Series)):
                 if isinstance(v, Series):
                     if not expr.are_co_aligned(
-                        self.expr, v.expr, allow_broadcast=False
+                        result.expr, v.expr, allow_broadcast=False
                     ):
-                        result, v = self.expr._align_divisions(v.expr)
+                        result = new_collection(expr.Assign(result, *args))
+                        args = []
+                        result, v = result.expr._align_divisions(v.expr)
 
-                result = new_collection(expr.Assign(result, k, v))
             elif not isinstance(v, FrameBase) and isinstance(v, Hashable):
-                result = new_collection(expr.Assign(result, k, v))
+                pass
             elif isinstance(v, Array):
                 if len(v.shape) > 1:
                     raise ValueError("Array assignment only supports 1-D arrays")
@@ -1771,19 +1797,14 @@ class DataFrame(FrameBase):
                         "Number of partitions do not match "
                         f"({v.npartitions} != {result.npartitions})"
                     )
-                result = new_collection(
-                    expr.Assign(
-                        result,
-                        k,
-                        from_dask_array(
-                            v, index=result.index.to_dask_dataframe(), meta=result._meta
-                        ),
-                    )
+                v = from_dask_array(
+                    v, index=result.index.to_dask_dataframe(), meta=result._meta
                 )
             else:
                 raise TypeError(f"Column assignment doesn't support type {type(v)}")
+            args.extend([k, v])
 
-        return result
+        return new_collection(expr.Assign(result, *args))
 
     def clip(self, lower=None, upper=None, axis=None, **kwargs):
         axis = self._validate_axis(axis)
@@ -1967,7 +1988,7 @@ class DataFrame(FrameBase):
                 # Check if key is in columns if key
                 # is not a normal attribute
                 if key in self.expr._meta.columns:
-                    return Series(self.expr[key])
+                    return new_collection(self.expr[key])
                 raise err
             except AttributeError:
                 # Fall back to `BaseFrame.__getattr__`
@@ -2714,7 +2735,10 @@ class Series(FrameBase):
     def map(self, arg, na_action=None, meta=None):
         if isinstance(arg, Series):
             if not expr.are_co_aligned(self.expr, arg.expr):
-                if not self.divisions == arg.divisions:
+                if not self.divisions == arg.divisions and {
+                    self.npartitions,
+                    arg.npartitions,
+                } != {1}:
                     raise NotImplementedError(
                         "passing a Series as arg isn't implemented yet"
                     )
@@ -3142,17 +3166,9 @@ class Scalar(FrameBase):
 
 def new_collection(expr):
     """Create new collection from an expr"""
-
     meta = expr._meta
     expr._name  # Ensure backend is imported
-    if is_dataframe_like(meta):
-        return DataFrame(expr)
-    elif is_series_like(meta):
-        return Series(expr)
-    elif is_index_like(meta):
-        return Index(expr)
-    else:
-        return Scalar(expr)
+    return get_collection_type(meta)(expr)
 
 
 def optimize(collection, fuse=True):
@@ -3219,6 +3235,7 @@ def from_graph(*args, **kwargs):
     return new_collection(FromGraph(*args, **kwargs))
 
 
+@dataframe_creation_dispatch.register_inplace("pandas")
 def from_dict(
     data,
     npartitions,
