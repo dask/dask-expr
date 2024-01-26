@@ -23,11 +23,12 @@ def df(pdf):
     yield from_pandas(pdf, npartitions=10)
 
 
-def test_map_partitions(df):
-    def combine_x_y(x, y, foo=None):
-        assert foo == "bar"
-        return x + y
+def combine_x_y(x, y, foo=None):
+    assert foo == "bar"
+    return x + y
 
+
+def test_map_partitions(df):
     df2 = df.map_partitions(combine_x_y, df + 1, foo="bar")
     assert_eq(df2, df + (df + 1))
 
@@ -35,14 +36,18 @@ def test_map_partitions(df):
     assert_eq(df2, df + (df + 1))
 
 
-def test_map_partitions_broadcast(df):
-    def combine_x_y(x, y, val, foo=None):
-        assert foo == "bar"
-        return x + y + val
+def combine_x_y_val(x, y, val, foo=None):
+    assert foo == "bar"
+    return x + y + val
 
-    df2 = df.map_partitions(combine_x_y, df["x"].sum(), 123, foo="bar")
+
+def test_map_partitions_broadcast(df):
+    df2 = df.map_partitions(combine_x_y_val, df["x"].sum(), 123, foo="bar")
     assert_eq(df2, df + df["x"].sum() + 123)
     assert_eq(df2.optimize(), df + df["x"].sum() + 123)
+
+
+from pandas import merge
 
 
 @pytest.mark.parametrize("opt", [True, False])
@@ -55,7 +60,7 @@ def test_map_partitions_merge(opt):
 
     # Partition-wise merge with map_partitions
     df3 = df1.map_partitions(
-        lambda l, r: l.merge(r, on="x"),
+        merge,
         df2,
         enforce_metadata=False,
         clear_divisions=True,
@@ -69,11 +74,12 @@ def test_map_partitions_merge(opt):
     assert_eq(df3, expect, check_index=False)
 
 
-def test_map_overlap():
-    def func(x):
-        x = x + x.sum()
-        return x
+def func(x):
+    x = x + x.sum()
+    return x
 
+
+def test_map_overlap():
     idx = pd.date_range("2020-01-01", periods=5, freq="D")
     pdf = pd.DataFrame(1, index=idx, columns=["a"])
     df = from_pandas(pdf, npartitions=2)
@@ -97,11 +103,12 @@ def test_map_overlap():
     assert_eq(result, expected, check_index=False)
 
 
-def test_map_overlap_raises():
-    def func(x):
-        x = x + x.sum()
-        return x
+def func(x):
+    x = x + x.sum()
+    return x
 
+
+def test_map_overlap_raises():
     idx = pd.date_range("2020-01-01", periods=5, freq="D")
     pdf = pd.DataFrame(1, index=idx, columns=["a"])
     df = from_pandas(pdf, npartitions=2)
@@ -122,13 +129,14 @@ def test_map_overlap_raises():
         df.map_overlap(func, before=1, after=-5).compute()
 
 
+def shifted_sum(df, before, after, c=0):
+    a = df.shift(before)
+    b = df.shift(-after)
+    return df + a + b + c
+
+
 @pytest.mark.parametrize("npartitions", [1, 4])
 def test_map_overlap(npartitions, pdf, df):
-    def shifted_sum(df, before, after, c=0):
-        a = df.shift(before)
-        b = df.shift(-after)
-        return df + a + b + c
-
     for before, after in [(0, 3), (3, 0), (3, 3), (0, 0)]:
         # DataFrame
         res = df.map_overlap(shifted_sum, before, after, before, after, c=2)
@@ -172,6 +180,10 @@ def test_map_partitions_partition_info(df):
     assert type(result) == pd.DataFrame
 
 
+def _rolling_2_sum(df):
+    return df.rolling(2).sum()
+
+
 def test_map_overlap_provide_meta():
     df = pd.DataFrame(
         {"x": [1, 2, 4, 7, 11], "y": [1.0, 2.0, 3.0, 4.0, 5.0]}
@@ -179,15 +191,11 @@ def test_map_overlap_provide_meta():
     ddf = from_pandas(df, npartitions=2)
 
     # Provide meta spec, but not full metadata
-    res = ddf.map_overlap(
-        lambda df: df.rolling(2).sum(), 2, 0, meta={"x": "i8", "y": "i8"}
-    )
+    res = ddf.map_overlap(_rolling_2_sum, 2, 0, meta={"x": "i8", "y": "i8"})
     sol = df.rolling(2).sum()
     assert_eq(res, sol)
 
-    res = map_overlap(
-        lambda df: df.rolling(2).sum(), ddf, 2, 0, meta={"x": "i8", "y": "i8"}
-    )
+    res = map_overlap(_rolling_2_sum, ddf, 2, 0, meta={"x": "i8", "y": "i8"})
     sol = df.rolling(2).sum()
     assert_eq(res, sol)
 
@@ -320,6 +328,14 @@ def test_map_overlap_multiple_dataframes(
     assert_eq(res, sol)
 
 
+def _assign(df):
+    return df.assign(C=df.A + df.B)
+
+
+def _rename_axis(df):
+    return df.rename_axis("newindex")
+
+
 def test_map_partitions_propagates_index_metadata():
     index = pd.Series(list("abcde"), name="myindex")
     df = pd.DataFrame(
@@ -328,12 +344,12 @@ def test_map_partitions_propagates_index_metadata():
     )
     ddf = from_pandas(df, npartitions=2)
     res = ddf.map_partitions(
-        lambda df: df.assign(C=df.A + df.B),
+        _assign,
         meta=[("A", "i4"), ("B", "i4"), ("C", "i4")],
     )
-    sol = df.assign(C=df.A + df.B)
+    sol = _assign(df)
     assert_eq(res, sol)
 
-    res = ddf.map_partitions(lambda df: df.rename_axis("newindex"))
-    sol = df.rename_axis("newindex")
+    res = ddf.map_partitions(_rename_axis)
+    sol = _rename_axis(df)
     assert_eq(res, sol)

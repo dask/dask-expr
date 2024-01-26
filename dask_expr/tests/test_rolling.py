@@ -59,12 +59,13 @@ def test_rolling_apis(df, pdf, window, api, how_args, min_periods, center):
     assert q._name == eq._name
 
 
+def my_sum(vals, foo=None, *, bar=None):
+    return vals.sum()
+
+
 @pytest.mark.parametrize("window", (1, 2))
 @pytest.mark.parametrize("df", (1, 2), indirect=True)
 def test_rolling_agg(df, pdf, window):
-    def my_sum(vals, foo=None, *, bar=None):
-        return vals.sum()
-
     result = df.rolling(window).agg(my_sum, "foo", bar="bar")
     expected = pdf.rolling(window).agg(my_sum, "foo", bar="bar")
     assert_eq(result, expected)
@@ -98,11 +99,11 @@ def test_rolling_apply(df, pdf, window, raw, foo, bar):
 
     result = df.rolling(window).apply(my_sum, **kwargs)
     expected = pdf.rolling(window).apply(my_sum, **kwargs)
-    assert_eq(result, expected)
+    assert_eq(result, expected, allow_cloudpickle=True)
 
     result = df.rolling(window).apply(my_sum, **kwargs)["foo"]
     expected = pdf.rolling(window).apply(my_sum, **kwargs)["foo"]
-    assert_eq(result, expected)
+    assert_eq(result, expected, allow_cloudpickle=True)
 
     # simplify up disabled for `apply`, function may access other columns
     q = df.rolling(window).apply(my_sum, **kwargs)["foo"].simplify()
@@ -135,10 +136,14 @@ def test_time_rolling_large_window_variable_chunks(window):
     assert_eq(ddf.rolling(window).mean(), df.rolling(window).mean())
 
 
+def _rolling_1s_count(df):
+    return df.rolling("1s").count()
+
+
 def test_rolling_one_element_window_empty_after(df, pdf):
     pdf.index = pd.date_range("2000-01-01", periods=12, freq="2s")
     df = from_pandas(pdf, npartitions=3)
-    result = df.map_overlap(lambda x: x.rolling("1s").count(), before="1s", after="1s")
+    result = df.map_overlap(_rolling_1s_count, before="1s", after="1s")
     expected = pdf.rolling("1s").count()
     assert_eq(result, expected)
 

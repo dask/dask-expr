@@ -134,10 +134,11 @@ def test_loc_with_array(df, pdf):
     assert_eq(df.loc[(df.x % 2 == 0).values], pdf.loc[(pdf.x % 2 == 0).values])
 
 
+def _col_loc_fun(_df):
+    return _df.columns.str.contains("y")
+
+
 def test_loc_with_function(df, pdf):
     assert_eq(df.loc[lambda df: df["x"] > 3, :], pdf.loc[lambda df: df["x"] > 3, :])
-
-    def _col_loc_fun(_df):
-        return _df.columns.str.contains("y")
 
     assert_eq(df.loc[:, _col_loc_fun], pdf.loc[:, _col_loc_fun])

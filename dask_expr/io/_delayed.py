@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from dask.dataframe.dispatch import make_meta
 from dask.dataframe.utils import check_meta
 from dask.delayed import Delayed, delayed
+from toolz import identity
 
 from dask_expr import new_collection
 from dask_expr._expr import Expr, PartitionsFiltered
@@ -81,10 +82,6 @@ class FromDelayed(PartitionsFiltered, BlockwiseIO):
             )
         else:
             return identity, (key, 0)
-
-
-def identity(x):
-    return x
 
 
 def from_delayed(

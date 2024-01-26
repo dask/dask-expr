@@ -1595,9 +1595,7 @@ class FrameBase(DaskMethodsMixin):
 
         if isinstance(other, DataFrame):
             s = self.map_partitions(M.dot, other, meta=meta)
-            return s.groupby(by=s.index).apply(
-                lambda x: x.sum(skipna=False), meta=s._meta_nonempty
-            )
+            return s.groupby(by=s.index).apply(_sum_skipna_false, meta=s._meta_nonempty)
 
         return self.map_partitions(_dot_series, other, meta=meta).sum(skipna=False)
 
@@ -4052,3 +4050,7 @@ def _compute_partition_stats(
         return (mins, maxes, lens)
     else:
         return (non_empty_mins, non_empty_maxes, lens)
+
+
+def _sum_skipna_false(part):
+    return part.sum(skipna=False)

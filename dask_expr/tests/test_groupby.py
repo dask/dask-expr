@@ -4,6 +4,7 @@ from collections import OrderedDict
 import dask
 import numpy as np
 import pytest
+from toolz import identity
 
 from dask_expr import from_pandas
 from dask_expr._groupby import GroupByUDFBlockwise
@@ -112,13 +113,13 @@ def test_groupby_reduction_optimize(pdf, df):
     assert ops[0].columns == ["x", "y"]
 
     df2 = df[["y"]]
-    agg = df2.groupby(df.x).y.apply(lambda x: x)
+    agg = df2.groupby(df.x).y.apply(identity)
     ops = [
         op for op in agg.expr.optimize(fuse=False).walk() if isinstance(op, FromPandas)
     ]
     assert len(ops) == 1
     assert ops[0].columns == ["x", "y"]
-    assert_eq(agg, pdf.replace(1, 5).groupby(pdf.replace(1, 5).x).y.apply(lambda x: x))
+    assert_eq(agg, pdf.replace(1, 5).groupby(pdf.replace(1, 5).x).y.apply(identity))
 
 
 @pytest.mark.parametrize(
@@ -204,18 +205,21 @@ def test_groupby_series(pdf, df):
         df.groupby(df2.a)
 
 
+def copy(x):
+    return x.copy()
+
+
 @pytest.mark.parametrize("group_keys", [True, False, None])
 def test_groupby_group_keys(group_keys, pdf):
     pdf = pdf.set_index("x")
     df = from_pandas(pdf, npartitions=10)
 
-    func = lambda g: g.copy()
-    expected = pdf.groupby("x").apply(func)
-    assert_eq(expected, df.groupby("x").apply(func, meta=expected))
+    expected = pdf.groupby("x").apply(copy)
+    assert_eq(expected, df.groupby("x").apply(copy, meta=expected))
 
-    expected = pdf.groupby("x", group_keys=group_keys).apply(func)
+    expected = pdf.groupby("x", group_keys=group_keys).apply(copy)
     assert_eq(
-        expected, df.groupby("x", group_keys=group_keys).apply(func, meta=expected)
+        expected, df.groupby("x", group_keys=group_keys).apply(copy, meta=expected)
     )
 
 
@@ -361,52 +365,54 @@ def test_groupby_repartition_to_one(pdf, df):
     assert_eq(result, expected)
 
 
+def func(x):
+    x["new"] = x.sum().sum()
+    return x
+
+
 def test_groupby_apply(df, pdf):
-    def test(x):
-        x["new"] = x.sum().sum()
-        return x
-
-    assert_eq(df.groupby(df.x).apply(test), pdf.groupby(pdf.x).apply(test))
+    assert_eq(df.groupby(df.x).apply(func), pdf.groupby(pdf.x).apply(func))
     assert_eq(
-        df.groupby(df.x, group_keys=False).apply(test),
-        pdf.groupby(pdf.x, group_keys=False).apply(test),
+        df.groupby(df.x, group_keys=False).apply(func),
+        pdf.groupby(pdf.x, group_keys=False).apply(func),
     )
-    assert_eq(df.groupby("x").apply(test), pdf.groupby("x").apply(test))
+    assert_eq(df.groupby("x").apply(func), pdf.groupby("x").apply(func))
     assert_eq(
-        df.groupby("x").apply(test, meta=pdf.groupby("x").apply(test).head(0)),
-        pdf.groupby("x").apply(test),
+        df.groupby("x").apply(func, meta=pdf.groupby("x").apply(func).head(0)),
+        pdf.groupby("x").apply(func),
     )
-    assert_eq(df.groupby(["x", "y"]).apply(test), pdf.groupby(["x", "y"]).apply(test))
+    assert_eq(df.groupby(["x", "y"]).apply(func), pdf.groupby(["x", "y"]).apply(func))
 
-    query = df.groupby("x").apply(test).optimize(fuse=False)
+    query = df.groupby("x").apply(func).optimize(fuse=False)
     assert query.expr.find_operations(Shuffle)
     assert query.expr.find_operations(GroupByUDFBlockwise)
 
-    query = df.groupby("x")[["y"]].apply(test).simplify()
-    expected = df[["x", "y"]].groupby("x")[["y"]].apply(test).simplify()
+    query = df.groupby("x")[["y"]].apply(func).simplify()
+    expected = df[["x", "y"]].groupby("x")[["y"]].apply(func).simplify()
     assert query._name == expected._name
-    assert_eq(query, pdf.groupby("x")[["y"]].apply(test))
+    assert_eq(query, pdf.groupby("x")[["y"]].apply(func))
 
 
 def test_groupby_transform(df, pdf):
-    def test(x):
-        return x
-
-    assert_eq(df.groupby(df.x).transform(test), pdf.groupby(pdf.x).transform(test))
-    assert_eq(df.groupby("x").transform(test), pdf.groupby("x").transform(test))
     assert_eq(
-        df.groupby("x").transform(test, meta=pdf.groupby("x").transform(test).head(0)),
-        pdf.groupby("x").transform(test),
+        df.groupby(df.x).transform(identity), pdf.groupby(pdf.x).transform(identity)
+    )
+    assert_eq(df.groupby("x").transform(identity), pdf.groupby("x").transform(identity))
+    assert_eq(
+        df.groupby("x").transform(
+            identity, meta=pdf.groupby("x").transform(identity).head(0)
+        ),
+        pdf.groupby("x").transform(identity),
     )
 
-    query = df.groupby("x").transform(test).optimize(fuse=False)
+    query = df.groupby("x").transform(identity).optimize(fuse=False)
     assert query.expr.find_operations(Shuffle)
     assert query.expr.find_operations(GroupByUDFBlockwise)
 
-    query = df.groupby("x")[["y"]].transform(test).simplify()
-    expected = df[["x", "y"]].groupby("x")[["y"]].transform(test).simplify()
+    query = df.groupby("x")[["y"]].transform(identity).simplify()
+    expected = df[["x", "y"]].groupby("x")[["y"]].transform(identity).simplify()
     assert query._name == expected._name
-    assert_eq(query, pdf.groupby("x")[["y"]].transform(test))
+    assert_eq(query, pdf.groupby("x")[["y"]].transform(identity))
 
 
 def test_groupby_shift(df, pdf):
@@ -433,10 +439,14 @@ def test_size(pdf, df):
     assert_eq(df.groupby("x").agg("size"), pdf.groupby("x").agg("size"))
 
 
+def div2(x):
+    return x // 2
+
+
 def test_groupby_numeric_only_lambda_caller(df, pdf):
     assert_eq(
-        df.groupby(lambda x: x // 2).mean(numeric_only=False),
-        pdf.groupby(lambda x: x // 2).mean(numeric_only=False),
+        df.groupby(div2).mean(numeric_only=False),
+        pdf.groupby(div2).mean(numeric_only=False),
     )
 
 
@@ -463,11 +473,15 @@ def test_groupby_single_agg_split_out(pdf, df, api, sort, split_out):
     assert_eq(agg, expect, sort_results=not sort)
 
 
+def dfsum(df):
+    return df.sum()
+
+
 @pytest.mark.parametrize(
     "func",
     [
-        lambda grouped: grouped.apply(lambda x: x.sum()),
-        lambda grouped: grouped.transform(lambda x: x.sum()),
+        lambda grouped: grouped.apply(dfsum),
+        lambda grouped: grouped.transform(dfsum),
     ],
 )
 def test_apply_or_transform_shuffle_multilevel(pdf, df, func):
@@ -533,9 +547,9 @@ def test_numeric_column_names():
     ddf = from_pandas(df, npartitions=2)
     assert_eq(ddf.groupby(0).sum(), df.groupby(0).sum())
     assert_eq(ddf.groupby([0, 2]).sum(), df.groupby([0, 2]).sum())
-    expected = df.groupby(0).apply(lambda x: x)
+    expected = df.groupby(0).apply(identity)
     assert_eq(
-        ddf.groupby(0).apply(lambda x: x, meta=expected),
+        ddf.groupby(0).apply(identity, meta=expected),
         expected,
     )
 
@@ -543,9 +557,9 @@ def test_numeric_column_names():
 def test_apply_divisions(pdf):
     pdf = pdf.set_index("x")
     df = from_pandas(pdf, npartitions=10)
-    result = df.groupby(["x", "y"]).apply(lambda x: x)
+    result = df.groupby(["x", "y"]).apply(identity)
     assert df.divisions == result.divisions
-    assert_eq(result, pdf.groupby(["x", "y"]).apply(lambda x: x))
+    assert_eq(result, pdf.groupby(["x", "y"]).apply(identity))
 
 
 def test_groupby_co_aligned_grouper(df, pdf):
@@ -580,10 +594,14 @@ def test_groupby_median(df, pdf):
     assert_eq(df.groupby("x").median()["y"], pdf.groupby("x").median()["y"])
 
 
+def _func(x, y):
+    return x + y
+
+
 def test_groupby_apply_args(df, pdf):
     assert_eq(
-        df.groupby("x").apply(lambda x, y: x + y, 1),
-        pdf.groupby("x").apply(lambda x, y: x + y, 1),
+        df.groupby("x").apply(_func, 1),
+        pdf.groupby("x").apply(_func, 1),
     )
 
 
@@ -723,17 +741,18 @@ def test_groupby_dir(df):
     assert "y" in dir(df.groupby("x"))
 
 
+def inc(df):
+    return df + 1
+
+
 def test_groupby_udf_user_warning(df, pdf):
-    def func(df):
-        return df + 1
-
-    expected = pdf.groupby("x").apply(func)
+    expected = pdf.groupby("x").apply(inc)
     with pytest.warns(UserWarning, match="`meta` is not specified"):
-        assert_eq(expected, df.groupby("x").apply(func))
+        assert_eq(expected, df.groupby("x").apply(inc))
 
-    expected = pdf.groupby("x").transform(func)
+    expected = pdf.groupby("x").transform(inc)
     with pytest.warns(UserWarning, match="`meta` is not specified"):
-        assert_eq(expected, df.groupby("x").transform(func))
+        assert_eq(expected, df.groupby("x").transform(inc))
 
 
 def test_groupby_index_array(pdf):

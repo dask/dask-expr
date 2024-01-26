@@ -100,10 +100,11 @@ def test_series_resample(obj, method, npartitions, freq, closed, label):
     assert expected.index[-1] == divisions[-1]
 
 
-def test_resample_agg(df, pdf):
-    def my_sum(vals, foo=None, *, bar=None):
-        return vals.sum()
+def my_sum(vals, foo=None, *, bar=None):
+    return vals.sum()
 
+
+def test_resample_agg(df, pdf):
     result = df.resample("2T").agg(my_sum, "foo", bar="bar")
     expected = pdf.resample("2T").agg(my_sum, "foo", bar="bar")
     assert_eq(result, expected)
