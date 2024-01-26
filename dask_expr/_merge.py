@@ -1,4 +1,5 @@
 import functools
+import itertools
 import math
 import operator
 
@@ -352,6 +353,46 @@ class Merge(Expr):
         return BlockwiseMerge(left, right, **self.kwargs)
 
     def _simplify_up(self, parent, dependents):
+        if isinstance(parent, Merge):
+            # TODO: Figuring out what we can rewrite and how is some work
+            if parent.how == self.how == "inner":
+                parent = (
+                    (parent.left_on, parent.left, 0)
+                    if parent.right is self
+                    else (parent.right_on, parent.right, 0)
+                )
+                all_frames = [
+                    parent,
+                    (self.left_on, self.left, 1),
+                    (self.right_on, self.right, 2),
+                ]
+
+                def cost(join_tuple):
+                    # This should be a more general cardinality esimate of the
+                    # resulting join but for now just sort them by size
+                    (_, left, _), (_, right, _) = join_tuple
+                    return (right.npartitions, left.npartitions)
+
+                first_merge = min(itertools.permutations(all_frames, 2), key=cost)
+                picked = {first_merge[0][2], first_merge[1][2]}
+                last_merge = next(
+                    (f for f in all_frames if f[2] not in picked), first_merge[0]
+                )
+                new_right = Merge(
+                    first_merge[1][1],
+                    first_merge[0][1],
+                    how=self.how,
+                    left_on=first_merge[1][0],
+                    right_on=first_merge[0][0],
+                    # FIXME: we loose params here
+                )
+                return Merge(
+                    last_merge[1],
+                    new_right,
+                    how=self.how,
+                    left_on=last_merge[0],
+                    right_on=first_merge[1][0],
+                )
         if isinstance(parent, (Projection, Index)):
             # Reorder the column projection to
             # occur before the Merge
