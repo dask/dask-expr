@@ -512,13 +512,13 @@ def test_sort_single_partition_tail():
     expected = pdf.sort_values("x", ascending=[True]).tail(10)
     assert_eq(result, expected, sort_results=False)
 
-    a = df.sort_values(["x"], ascending=[False]).tail(10, compute=False).expr
-    b = df.nsmallest(10, columns=["x"]).expr
-    assert a.optimize()._name == b.optimize()._name
+    result = df.sort_values(["x"], ascending=[False]).tail(10)
+    expected = pdf.sort_values(["x"], ascending=[False]).tail(10)
+    assert_eq(result, expected, sort_results=False)
 
-    a = df.sort_values(["x"], ascending=[True]).tail(10, compute=False).expr
-    b = df.nlargest(10, columns=["x"]).expr
-    assert a.optimize()._name == b.optimize()._name
+    result = df.sort_values(["x"], ascending=[True]).tail(10)
+    expected = pdf.sort_values(["x"], ascending=[True]).tail(10)
+    assert_eq(result, expected, sort_results=False)
 
     result = df.sort_values(["x", "y"], ascending=[False]).tail(10)
     expected = pdf.sort_values(["x", "y"], ascending=False).tail(10)
