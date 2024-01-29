@@ -348,7 +348,7 @@ class GroupbyAggregationBase(GroupByApplyConcatApply, GroupByBase):
 
     def _simplify_down(self):
         # Use agg-spec information to add column projection
-        required_columns = None
+        column_projection = None
         if isinstance(self.arg, dict):
             required_columns = (
                 set(self._by_columns)
