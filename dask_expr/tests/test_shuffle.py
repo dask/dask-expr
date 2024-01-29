@@ -444,7 +444,8 @@ def test_sort_tail_nsmallest(df, pdf):
     assert a.optimize()._name == b.optimize()._name
 
 
-def test_sort_values_conflicting_ascending_head_tail(df, pdf):
+def test_sort_values_conflicting_ascending_head_tail(pdf):
+    df = from_pandas(pdf, npartitions=1)
     assert_eq(
         df.sort_values(by=["x", "y"], ascending=[True, False]).head(10),
         pdf.sort_values(by=["x", "y"], ascending=[True, False]).head(10),
