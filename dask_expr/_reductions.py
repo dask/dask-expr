@@ -472,7 +472,6 @@ class ApplyConcatApply(Expr):
             combine = aggregate
             combine_kwargs = aggregate_kwargs
 
-        sort = getattr(self, "sort", False)
         split_every = getattr(self, "split_every", None)
         chunked = self._chunk_cls(
             self.frame, type(self), chunk, chunk_kwargs, *self._chunk_cls_args
@@ -503,7 +502,7 @@ class ApplyConcatApply(Expr):
             split_by=self.split_by,
             split_out=self.split_out,
             split_every=split_every,
-            sort=sort,
+            sort=getattr(self, "sort", False),
             shuffle_by_index=getattr(self, "shuffle_by_index", None),
             shuffle_method=getattr(self, "shuffle_method", None),
             ignore_index=getattr(self, "ignore_index", True),
