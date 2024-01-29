@@ -238,6 +238,7 @@ def test_dataframe_aggregations_multilevel(df, pdf):
         {"x": ["sum", "mean"]},
         ["min", "mean"],
         "sum",
+        "median",
     ],
 )
 def test_groupby_agg(pdf, df, spec):
@@ -578,6 +579,14 @@ def test_groupby_median(df, pdf):
     assert_eq(q, pdf.groupby("x").median())
     assert_eq(df.groupby("x")["y"].median(), pdf.groupby("x")["y"].median())
     assert_eq(df.groupby("x").median()["y"], pdf.groupby("x").median()["y"])
+    assert_eq(
+        df.groupby("x").median(split_every=2)["y"], pdf.groupby("x").median()["y"]
+    )
+    assert df.groupby("x").median(split_every=2).npartitions == df.npartitions // 2
+    assert (
+        df.groupby("x").median(split_every=2).optimize().npartitions
+        == df.npartitions // 2
+    )
 
 
 def test_groupby_apply_args(df, pdf):
