@@ -348,15 +348,18 @@ class GroupbyAggregationBase(GroupByApplyConcatApply, GroupByBase):
 
     def _simplify_down(self):
         # Use agg-spec information to add column projection
-        column_projection = None
+        required_columns = None
         if isinstance(self.arg, dict):
-            column_projection = (
+            required_columns = (
                 set(self._by_columns)
                 .union(self.arg.keys())
                 .intersection(self.frame.columns)
             )
-        if column_projection and column_projection < set(self.frame.columns):
-            return type(self)(self.frame[list(column_projection)], *self.operands[1:])
+            column_projection = [
+                column for column in self.frame.columns if column in required_columns
+            ]
+        if column_projection and column_projection != self.frame.columns:
+            return type(self)(self.frame[column_projection], *self.operands[1:])
 
 
 class GroupbyAggregation(GroupbyAggregationBase):
