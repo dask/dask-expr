@@ -643,3 +643,24 @@ def test_pairwise_merge_results_in_identical_output_df(
 
     # recursive join doesn't yet respect divisions in dask-expr
     assert_eq(ddf_pairwise, ddf_loop)
+
+
+def test_join_reorder():
+    pdf1 = pd.DataFrame({"x": range(100), "a": range(100)})
+    df1 = from_pandas(pdf1, 10)
+    pdf2 = pd.DataFrame({"x": range(50), "c": range(50)})
+    df2 = from_pandas(pdf2, 4)
+    pdf3 = pd.DataFrame({"x": range(40, 60), "b": range(20)})
+    df3 = from_pandas(pdf3, 2)
+
+    expected_pdf = pdf1.merge(pdf2).merge(pdf3)
+    expected_pdf2 = pdf3.merge(pdf2).merge(pdf1)
+    actual = df1.merge(df2).merge(df3)
+    expected = df3.merge(df2).merge(df1)
+
+    assert actual.simplify()._name == expected.simplify()._name
+    cols = expected_pdf.columns
+    assert_eq(expected_pdf2[cols], expected_pdf)
+    # FIXME: Col order is optimized away. Therefore compute and sort the columns
+    assert_eq(actual.compute()[cols], expected_pdf, check_index=False)
+    assert_eq(expected.compute()[cols], expected_pdf, check_index=False)
