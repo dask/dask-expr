@@ -1927,8 +1927,7 @@ def test_avoid_alignment():
     assert_eq(a.x + b.y, da.x + db.y)
 
     assert not any(isinstance(ex, AlignPartitions) for ex in (db.y + db.z).walk())
-    # TODO: We can potentially do better here
-    assert any(isinstance(ex, AlignPartitions) for ex in (da.x + db.y.sum()).walk())
+    assert not any(isinstance(ex, AlignPartitions) for ex in (da.x + db.y.sum()).walk())
 
 
 @pytest.mark.xfail(reason="can't hash HLG")
@@ -2294,3 +2293,11 @@ def test_axes(df, pdf):
     [assert_eq(d, p) for d, p in zip(df.axes, pdf.axes)]
     assert len(df.x.axes) == len(pdf.x.axes)
     assert_eq(df.x.axes[0], pdf.x.axes[0])
+
+
+def test_filter_optimize_condition():
+    pdf = pd.DataFrame({"a": [1, 2, 3, 4], "b": [True, False, True, False]})
+    df = from_pandas(pdf, npartitions=2)
+    result = df[df.b.fillna(True)]
+    expected = pdf[pdf.b.fillna(True)]
+    assert_eq(result, expected)
