@@ -1000,9 +1000,8 @@ class SortValues(BaseSetIndexSortValues):
 
         partitions = _SetPartitionsPreSetIndex(
             _divisions_by,
-            _divisions_by._meta._constructor(divisions).sort_values(
-                ascending=self._divisions_ascending
-            ),
+            _divisions_by._meta._constructor(divisions).sort_values(),
+            ascending=self._divisions_ascending,
         )
         assigned = Assign(self.frame, "_partitions", partitions)
         shuffled = Shuffle(
