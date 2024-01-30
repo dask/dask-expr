@@ -4204,7 +4204,6 @@ class Index(Series):
 
     # Methods and properties of Series that are not implemented on Index
 
-    @derived_from(pd.Index)
     def count(self, split_every=False):
         return new_collection(IndexCount(self, split_every))
 
