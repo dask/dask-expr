@@ -1273,12 +1273,20 @@ class NFirst(NLargest):
     reduction_chunk = _nfirst
     reduction_aggregate = _nfirst
 
+    @property
+    def chunk_kwargs(self):
+        return {"ascending": self.ascending, **super().chunk_kwargs}
+
 
 class NLast(NLargest):
     _parameters = ["frame", "n", "_columns", "ascending", "split_every"]
     _defaults = {"n": 5, "_columns": None, "ascending": None, "split_every": None}
     reduction_chunk = _nlast
     reduction_aggregate = _nlast
+
+    @property
+    def chunk_kwargs(self):
+        return {"ascending": self.ascending, **super().chunk_kwargs}
 
 
 class NLargestSlow(NLargest):
