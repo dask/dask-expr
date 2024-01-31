@@ -1185,7 +1185,7 @@ class Elemwise(Blockwise):
         if self._filter_passthrough and isinstance(parent, Filter):
             if self._name != parent.frame._name:
                 # We can't push the filter through the filter condition
-                pass
+                return
             parents = [x() for x in dependents[self._name] if x() is not None]
             if not all(isinstance(p, Filter) for p in parents):
                 return
