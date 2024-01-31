@@ -445,40 +445,29 @@ def test_sort_tail_nsmallest(df, pdf):
     assert a.optimize()._name == b.optimize()._name
 
 
+@pytest.mark.parametrize("ascending", [[True, False], [False, True]])
 @pytest.mark.parametrize("npartitions", [1, 3])
-def test_sort_values_conflicting_ascending_head_tail(pdf, npartitions):
+def test_sort_values_conflicting_ascending_head_tail(pdf, ascending, npartitions):
+    divisions_lru.data = OrderedDict()
+
     df = from_pandas(pdf, npartitions=npartitions)
 
-    a = df.sort_values(by=["x", "y"], ascending=[True, False]).head(10, compute=False)
-    b = new_collection(NFirst(df, _columns=["x", "y"], n=10, ascending=[True, False]))
+    a = df.sort_values(by=["x", "y"], ascending=ascending).head(10, compute=False)
+    b = new_collection(NFirst(df, _columns=["x", "y"], n=10, ascending=ascending))
     assert a.expr.optimize()._name == b.expr.optimize()._name
+    assert len(divisions_lru) == 0
     assert_eq(
         a.compute(),
-        pdf.sort_values(by=["x", "y"], ascending=[True, False]).head(10),
+        pdf.sort_values(by=["x", "y"], ascending=ascending).head(10),
     )
 
-    a = df.sort_values(by=["x", "y"], ascending=[False, True]).head(10, compute=False)
-    b = new_collection(NFirst(df, _columns=["x", "y"], n=10, ascending=[False, True]))
+    a = df.sort_values(by=["x", "y"], ascending=ascending).tail(10, compute=False)
+    b = new_collection(NLast(df, _columns=["x", "y"], n=10, ascending=ascending))
     assert a.expr.optimize()._name == b.expr.optimize()._name
+    assert len(divisions_lru) == 0
     assert_eq(
         a.compute(),
-        pdf.sort_values(by=["x", "y"], ascending=[False, True]).head(10),
-    )
-
-    a = df.sort_values(by=["x", "y"], ascending=[True, False]).tail(10, compute=False)
-    b = new_collection(NLast(df, _columns=["x", "y"], n=10, ascending=[True, False]))
-    assert a.expr.optimize()._name == b.expr.optimize()._name
-    assert_eq(
-        a.compute(),
-        pdf.sort_values(by=["x", "y"], ascending=[True, False]).tail(10),
-    )
-
-    a = df.sort_values(by=["x", "y"], ascending=[False, True]).tail(10, compute=False)
-    b = new_collection(NLast(df, _columns=["x", "y"], n=10, ascending=[False, True]))
-    assert a.expr.optimize()._name == b.expr.optimize()._name
-    assert_eq(
-        a.compute(),
-        pdf.sort_values(by=["x", "y"], ascending=[False, True]).tail(10),
+        pdf.sort_values(by=["x", "y"], ascending=ascending).tail(10),
     )
 
 
