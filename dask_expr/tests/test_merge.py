@@ -730,22 +730,22 @@ def test_filter_merge():
     assert_eq(df, expected)
 
     # FIXME: See code
-    # df = a.merge(b)
-    # df = df[df.d & df.z]
-    # aa = a[a.d]
-    # bb = b[b.z]
-    # expected = aa.merge(bb)
-    # assert df.optimize()._name == expected.optimize()._name
-    # assert_eq(df, expected)
+    df = a.merge(b)
+    df = df[df.d & df.z]
+    aa = a[a.d]
+    bb = b[b.z]
+    expected = aa.merge(bb)
+    assert df.simplify()._name == expected.simplify()._name
+    assert_eq(df, expected)
 
-    # df = a.merge(b)
-    # df = df[(df.a > 2) & df.z]
-    # aa = a[a.a > 2]
-    # bb = b[b.z]
-    # expected = aa.merge(bb)
-    # actual = df.optimize()
-    # assert actual._name == expected.optimize()._name
-    # assert_eq(df, expected)
+    df = a.merge(b)
+    df = df[(df.a > 2) & df.z]
+    aa = a[a.a > 2]
+    bb = b[b.z]
+    expected = aa.merge(bb)
+    actual = df.optimize()
+    assert actual._name == expected.optimize()._name
+    assert_eq(df, expected)
 
     # Bail if we engage non-elemwise expressions in the predicates
     df = a.merge(b)

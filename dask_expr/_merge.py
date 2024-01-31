@@ -365,14 +365,11 @@ class Merge(Expr):
             if isinstance(predicate, (Projection, Unaryop)):
                 predicate_cols = set(predicate.columns)
             elif isinstance(predicate, Binop):
-                # FIXME: This doesn't work yet. The optimizer drops the outer
-                # filter
-                # if isinstance(predicate, And):
-                #     new = Filter(self, predicate.left)
-                #     new_pred = predicate.right.substitute(self, new)
-                #     return Filter(new, new_pred)
+                if isinstance(predicate, And):
+                    new = Filter(self, predicate.left)
+                    new_pred = predicate.right.substitute(self, new)
+                    return Filter(new, new_pred)
 
-                # if isinstance(predicate.left, Projection):
                 if not isinstance(predicate.right, Expr):
                     predicate_cols = set(predicate.left.columns)
                 elif isinstance(predicate.right, Elemwise):
