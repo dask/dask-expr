@@ -1294,11 +1294,6 @@ class NLargestSlow(NLargest):
     reduction_aggregate = _nlargest_slow
 
 
-class NLargestSlow(NLargest):
-    reduction_chunk = _nlargest_slow
-    reduction_aggregate = _nlargest_slow
-
-
 class NSmallest(NLargest):
     reduction_chunk = M.nsmallest
     reduction_aggregate = M.nsmallest
