@@ -1185,13 +1185,14 @@ class Elemwise(Blockwise):
         if self._filter_passthrough and isinstance(parent, Filter):
             if self._name != parent.frame._name:
                 # We can't push the filter through the filter condition
-                return
+                pass
             parents = [x() for x in dependents[self._name] if x() is not None]
             if not all(isinstance(p, Filter) for p in parents):
                 return
-            return type(self)(
+            result = type(self)(
                 self.frame[parent.operand("predicate")], *self.operands[1:]
             )
+            return result
         return super()._simplify_up(parent, dependents)
 
 
