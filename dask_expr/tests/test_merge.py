@@ -646,13 +646,43 @@ def test_pairwise_merge_results_in_identical_output_df(
 
 
 def test_filter_merge():
-    pdf_a = pd.DataFrame({"a": range(5), "b": range(5), "c": range(5)})
-    pdf_b = pd.DataFrame({"c": [0, 2, 4, 6, 8], "x": range(5), "y": range(5)})
+    pdf_a = pd.DataFrame(
+        {
+            "a": range(5),
+            "b": range(5),
+            "c": range(5),
+            "d": [True, False, True, False, True],
+        }
+    )
+    pdf_b = pd.DataFrame(
+        {
+            "c": [0, 2, 4, 6, 8],
+            "x": range(5),
+            "y": range(5),
+            "z": [False, False, True, True, True],
+        }
+    )
 
     a = from_pandas(pdf_a)
     b = from_pandas(pdf_b)
 
     # Some simple cases
+    df = a.merge(b)
+    # A simple projection
+    df = df[df.z]
+    bb = b[b.z]
+    expected = a.merge(bb)
+    assert df.optimize()._name == expected.optimize()._name
+    assert_eq(df, expected)
+
+    # Unary op
+    df = a.merge(b)
+    df = df[~df.z]
+    bb = b[~b.z]
+    expected = a.merge(bb)
+    assert df.optimize()._name == expected.optimize()._name
+    assert_eq(df, expected)
+
     df = a.merge(b)
     df = df[df.x > 3]
     bb = b[b.x > 3]
@@ -698,6 +728,24 @@ def test_filter_merge():
     expected = a.merge(bb)
     assert df.optimize()._name == expected.optimize()._name
     assert_eq(df, expected)
+
+    # FIXME: See code
+    # df = a.merge(b)
+    # df = df[df.d & df.z]
+    # aa = a[a.d]
+    # bb = b[b.z]
+    # expected = aa.merge(bb)
+    # assert df.optimize()._name == expected.optimize()._name
+    # assert_eq(df, expected)
+
+    # df = a.merge(b)
+    # df = df[(df.a > 2) & df.z]
+    # aa = a[a.a > 2]
+    # bb = b[b.z]
+    # expected = aa.merge(bb)
+    # actual = df.optimize()
+    # assert actual._name == expected.optimize()._name
+    # assert_eq(df, expected)
 
     # Bail if we engage non-elemwise expressions in the predicates
     df = a.merge(b)
