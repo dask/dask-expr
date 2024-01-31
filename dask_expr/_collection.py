@@ -112,7 +112,6 @@ from dask_expr._shuffle import (
 )
 from dask_expr._str_accessor import StringAccessor
 from dask_expr._util import (
-    RaiseAttributeError,
     _BackendData,
     _convert_to_list,
     _get_shuffle_preferring_order,
@@ -4271,28 +4270,28 @@ class Index(Series):
 
     @property
     def index(self):
-        RaiseAttributeError()
+        raise AttributeError("'Index' object has no attribute 'index'")
 
     def sum(self, *args, **kwargs):
-        RaiseAttributeError()
+        raise AttributeError("'Index' object has no attribute 'sum'")
 
     def prod(self, *args, **kwargs):
-        RaiseAttributeError()
+        raise AttributeError("'Index' object has no attribute 'prod'")
 
     def mean(self, *args, **kwargs):
-        RaiseAttributeError()
+        raise AttributeError("'Index' object has no attribute 'mean'")
 
     def std(self, *args, **kwargs):
-        RaiseAttributeError()
+        raise AttributeError("'Index' object has no attribute 'std'")
 
     def var(self, *args, **kwargs):
-        RaiseAttributeError()
+        raise AttributeError("'Index' object has no attribute 'var'")
 
     def idxmax(self, *args, **kwargs):
-        RaiseAttributeError()
+        raise AttributeError("'Index' object has no attribute 'idxmax'")
 
     def idxmin(self, *args, **kwargs):
-        RaiseAttributeError()
+        raise AttributeError("'Index' object has no attribute 'idxmin'")
 
 
 class Scalar(FrameBase):
