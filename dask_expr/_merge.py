@@ -14,8 +14,11 @@ from dask.utils import apply, get_default_shuffle_method
 from toolz import merge_sorted, unique
 
 from dask_expr._expr import (
+    Binop,
     Blockwise,
+    Elemwise,
     Expr,
+    Filter,
     Index,
     PartitionsFiltered,
     Projection,
@@ -352,6 +355,36 @@ class Merge(Expr):
         return BlockwiseMerge(left, right, **self.kwargs)
 
     def _simplify_up(self, parent, dependents):
+        if isinstance(parent, Filter):
+            predicate = parent.predicate
+            if isinstance(predicate, Binop):
+                if isinstance(predicate.left, Projection):
+                    new_left = self.left
+                    new_right = self.right
+                    predicate_cols = set()
+                    if not isinstance(predicate.right, Expr):
+                        predicate_cols = set(predicate.left.columns)
+                    elif isinstance(predicate.right, Elemwise):
+                        predicate_cols = set(predicate.left.columns) | set(
+                            predicate.right.columns
+                        )
+                    if predicate_cols and predicate_cols.issubset(self.left.columns):
+                        left_filter = predicate.substitute(self, self.left)
+                        new_left = self.left[left_filter]
+                    if predicate_cols and predicate_cols.issubset(self.right.columns):
+                        right_filter = predicate.substitute(self, self.right)
+                        new_right = self.right[right_filter]
+                    return type(self)(
+                        new_left,
+                        new_right,
+                        how=self.how,
+                        left_on=self.left_on,
+                        right_on=self.right_on,
+                        left_index=self.left_index,
+                        right_index=self.right_index,
+                        suffixes=self.suffixes,
+                        indicator=self.indicator,
+                    )
         if isinstance(parent, (Projection, Index)):
             # Reorder the column projection to
             # occur before the Merge
@@ -608,12 +641,14 @@ class BroadcastJoin(Merge, PartitionsFiltered):
                 # Specify arg list for `merge_chunk`
                 _merge_args = [
                     (
-                        operator.getitem,
-                        (split_name, part_out),
-                        j,
-                    )
-                    if self.how != "inner"
-                    else (other, part_out),
+                        (
+                            operator.getitem,
+                            (split_name, part_out),
+                            j,
+                        )
+                        if self.how != "inner"
+                        else (other, part_out)
+                    ),
                     (bcast_name, j),
                 ]
                 if self.broadcast_side == "left":

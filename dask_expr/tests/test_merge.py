@@ -643,3 +643,65 @@ def test_pairwise_merge_results_in_identical_output_df(
 
     # recursive join doesn't yet respect divisions in dask-expr
     assert_eq(ddf_pairwise, ddf_loop)
+
+
+def test_filter_merge():
+    pdf_a = pd.DataFrame({"a": range(5), "b": range(5), "c": range(5)})
+    pdf_b = pd.DataFrame({"c": [0, 2, 4, 6, 8], "x": range(5), "y": range(5)})
+
+    a = from_pandas(pdf_a)
+    b = from_pandas(pdf_b)
+
+    # Some simple cases
+    df = a.merge(b)
+    df = df[df.x > 3]
+    bb = b[b.x > 3]
+    expected = a.merge(bb)
+    assert df.optimize()._name == expected.optimize()._name
+    assert_eq(df, expected)
+
+    df = a.merge(b)
+    df = df[df.b > 3]
+    aa = a[a.b > 3]
+    expected = aa.merge(b)
+    assert df.optimize()._name == expected.optimize()._name
+    assert_eq(df, expected)
+
+    df = a.merge(b)
+    df = df[3 < df.b]
+    aa = a[3 < a.b]
+    expected = aa.merge(b)
+    assert df.optimize()._name == expected.optimize()._name
+    assert_eq(df, expected)
+
+    # Apply to both!
+    df = a.merge(b)
+    df = df[df.c > 3]
+    aa = a[a.c > 3]
+    bb = b[b.c > 3]
+    expected = aa.merge(bb)
+    assert df.optimize()._name == expected.optimize()._name
+    assert_eq(df, expected)
+
+    # Works with more complex expressions, and multiple columns
+    df = a.merge(b)
+    df = df[df.a > df.b + 1]
+    aa = a[a.a > a.b + 1]
+    expected = aa.merge(b)
+    assert df.optimize()._name == expected.optimize()._name
+    assert_eq(df, expected)
+
+    # Only apply if all columns are in the table, not if only some are
+    df = a.merge(b)
+    df = df[df.c > df.x + 1]
+    bb = b[b.c > b.x + 1]
+    expected = a.merge(bb)
+    assert df.optimize()._name == expected.optimize()._name
+    assert_eq(df, expected)
+
+    # Bail if we engage non-elemwise expressions in the predicates
+    df = a.merge(b)
+    df = df[df.x > df.y.sum()]
+    bb = b[b.x > b.y.sum()]
+    not_expected = a.merge(bb)
+    assert df.optimize()._name != not_expected.optimize()._name
