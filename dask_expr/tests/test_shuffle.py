@@ -445,7 +445,13 @@ def test_sort_tail_nsmallest(df, pdf):
     assert a.optimize()._name == b.optimize()._name
 
 
-@pytest.mark.parametrize("ascending", [[True, False], [False, True]])
+@pytest.mark.parametrize(
+    "ascending",
+    [
+        pytest.param([True, False], id="[True, False]"),
+        pytest.param([False, True], id="[False, True]"),
+    ],
+)
 @pytest.mark.parametrize("npartitions", [1, 3])
 def test_sort_values_conflicting_ascending_head_tail(pdf, ascending, npartitions):
     divisions_lru.data = OrderedDict()
