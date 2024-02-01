@@ -56,15 +56,6 @@ _CACHED_PLAN_SIZE = 10
 _cached_plan = {}
 
 
-class _DatasetInfoCache(dict):
-    ...
-
-
-@normalize_token.register(_DatasetInfoCache)
-def _tokeniz_dataset_info_cache(x):
-    return x["checksum"]
-
-
 def _control_cached_plan(key):
     if len(_cached_plan) > _CACHED_PLAN_SIZE and key not in _cached_plan:
         key_to_pop = list(_cached_plan.keys())[0]
@@ -380,6 +371,11 @@ def to_parquet(
     if compute:
         out = out.compute(**compute_kwargs)
 
+    # Invalidate the filesystem listing cache for the output path after write.
+    # We do this before returning, even if `compute=False`. This helps ensure
+    # that reading files that were just written succeeds.
+    fs.invalidate_cache(path)
+
     return out
 
 
@@ -580,7 +576,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
 
         self.operands[
             type(self)._parameters.index("_dataset_info_cache")
-        ] = _DatasetInfoCache(dataset_info)
+        ] = dataset_info
         return dataset_info
 
     @property
