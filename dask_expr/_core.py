@@ -151,7 +151,7 @@ class Expr:
 
     def dependencies(self):
         # Dependencies are `Expr` operands only
-        return [operand for operand in operands if isinstance(operand, Expr)]
+        return [operand for operand in self.operands if isinstance(operand, Expr)]
 
     def _task(self, index: int):
         """The task for the i'th partition
