@@ -36,10 +36,7 @@ class Expr:
             try:
                 operands.append(kwargs.pop(parameter))
             except KeyError:
-                default = cls._defaults[parameter]
-                if callable(default):
-                    default = default()
-                operands.append(default)
+                operands.append(cls._defaults[parameter])
         assert not kwargs, kwargs
         inst = object.__new__(cls)
         inst.operands = [_unpack_collections(o) for o in operands]

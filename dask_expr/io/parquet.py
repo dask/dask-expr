@@ -56,6 +56,15 @@ _CACHED_PLAN_SIZE = 10
 _cached_plan = {}
 
 
+class _DatasetInfoCache(dict):
+    ...
+
+
+@normalize_token.register(_DatasetInfoCache)
+def _tokeniz_dataset_info_cache(x):
+    return x["checksum"]
+
+
 def _control_cached_plan(key):
     if len(_cached_plan) > _CACHED_PLAN_SIZE and key not in _cached_plan:
         key_to_pop = list(_cached_plan.keys())[0]
@@ -416,7 +425,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         "kwargs": None,
         "_partitions": None,
         "_series": False,
-        "_dataset_info_cache": list,
+        "_dataset_info_cache": None,
     }
     _pq_length_stats = None
     _absorb_projections = True
@@ -473,7 +482,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
     @property
     def _dataset_info(self):
         if rv := self.operand("_dataset_info_cache"):
-            return rv[0]
+            return rv
         # Process and split user options
         (
             dataset_options,
@@ -539,7 +548,12 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         checksum = []
         files_for_checksum = []
         if dataset_info["has_metadata_file"]:
-            files_for_checksum = [self.path + fs.sep + "_metadata"]
+            if isinstance(self.path, list):
+                files_for_checksum = [
+                    next(path for path in self.path if path.endswith("_metadata"))
+                ]
+            else:
+                files_for_checksum = [self.path + fs.sep + "_metadata"]
         else:
             files_for_checksum = dataset_info["ds"].files
 
@@ -564,7 +578,9 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         dataset_info["all_columns"] = all_columns
         dataset_info["calculate_divisions"] = self.calculate_divisions
 
-        self._dataset_info_cache.append(dataset_info)
+        self.operands[
+            type(self)._parameters.index("_dataset_info_cache")
+        ] = _DatasetInfoCache(dataset_info)
         return dataset_info
 
     @property
