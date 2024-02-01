@@ -1186,7 +1186,7 @@ class Elemwise(Blockwise):
             if self._name != parent.frame._name:
                 # We can't push the filter through the filter condition
                 return
-            parents = [x() for x in dependents[self._name] if x() is not None]
+            parents = dependents[self._name]
             if not all(isinstance(p, Filter) for p in parents):
                 return
             return type(self)(
@@ -3171,7 +3171,7 @@ def determine_column_projection(expr, parent, dependents, additional_columns=Non
         column_union = []
     else:
         column_union = parent.columns.copy()
-    parents = [x() for x in dependents[expr._name] if x() is not None]
+    parents = dependents[expr._name]
 
     for p in parents:
         if len(p.columns) > 0:

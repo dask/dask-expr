@@ -11,18 +11,18 @@ import pandas as pd
 import toolz
 from dask.dataframe.core import is_dataframe_like, is_index_like, is_series_like
 from dask.utils import funcname, import_required, is_arraylike
+from toolz.dicttoolz import merge
 
 from dask_expr._util import _BackendData, _tokenize_deterministic
 
 
-def _unpack_collections(o):
+def _unpack_expr(o):
     if isinstance(o, Expr):
-        return o
-
-    if hasattr(o, "expr"):
-        return o.expr
+        return o, o._name
+    elif hasattr(o, "expr"):
+        return o.expr, o.expr._name
     else:
-        return o
+        return o, None
 
 
 class Expr:
@@ -30,6 +30,7 @@ class Expr:
     _defaults = {}
 
     def __init__(self, *args, **kwargs):
+        self._dependencies = {}
         operands = list(args)
         for parameter in type(self)._parameters[len(operands) :]:
             try:
@@ -37,8 +38,32 @@ class Expr:
             except KeyError:
                 operands.append(type(self)._defaults[parameter])
         assert not kwargs, kwargs
-        operands = [_unpack_collections(o) for o in operands]
-        self.operands = operands
+        parsed_operands = []
+        children = set()
+        _subgraphs = []
+        _subgraph_instances = []
+        _graph_instances = {}
+        for o in operands:
+            expr, name = _unpack_expr(o)
+            parsed_operands.append(expr)
+            if name is not None:
+                children.add(name)
+                _subgraphs.append(expr._graph)
+                _subgraph_instances.append(expr._graph_instances)
+                _graph_instances[name] = expr
+
+        self.operands = parsed_operands
+        name = self._name
+        # Graph instances is a mapping name -> Expr instance
+        # Graph itself is a mapping of dependencies mapping names to a set of names
+        self._graph_instances = merge(_graph_instances, *_subgraph_instances)
+        self._graph = merge(*_subgraphs)
+        self._graph[name] = children
+        # Probably a bad idea to have a self ref
+        self._graph_instances[name] = self
+
+    def __hash__(self):
+        raise TypeError("Don't!")
 
     def __str__(self):
         s = ", ".join(
@@ -130,6 +155,21 @@ class Expr:
     def dependencies(self):
         # Dependencies are `Expr` operands only
         return [operand for operand in self.operands if isinstance(operand, Expr)]
+
+    @functools.cached_property
+    def _dependent_graph(self):
+        rv = defaultdict(set)
+        # This should be O(E)
+        for expr, dependencies in self._graph.items():
+            rv[expr]
+            for dep in dependencies:
+                rv[dep].add(expr)
+        for name, exprs in rv.items():
+            rv[name] = {self._graph_instances[e] for e in exprs}
+        return rv
+
+    def dependents(self):
+        return self._dependent_graph
 
     def _task(self, index: int):
         """The task for the i'th partition
@@ -312,7 +352,7 @@ class Expr:
     def simplify(self) -> Expr:
         expr = self
         while True:
-            dependents = collect_depdendents(expr)
+            dependents = expr.dependents()
             new = expr.simplify_once(dependents=dependents)
             if new._name == expr._name:
                 break
@@ -693,4 +733,6 @@ def collect_depdendents(expr) -> defaultdict:
         for dep in node.dependencies():
             stack.append(dep)
             dependents[dep._name].append(weakref.ref(node))
+    precalculated = expr.dependents()
+    assert precalculated == dependents
     return dependents

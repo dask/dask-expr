@@ -20,10 +20,7 @@ class _DelayedExpr(Expr):
     # Wraps a Delayed object to make it an Expr for now. This is hacky and we should
     # integrate this properly...
     # TODO
-
-    def __init__(self, obj):
-        self.obj = obj
-        self.operands = [obj]
+    _parameters = ["obj"]
 
     @property
     def _name(self):
