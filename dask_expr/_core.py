@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import functools
 import os
-import weakref
 from collections import defaultdict
 from collections.abc import Generator
 
@@ -718,21 +717,3 @@ class Expr:
             or issubclass(operation, Expr)
         ), "`operation` must be`Expr` subclass)"
         return (expr for expr in self.walk() if isinstance(expr, operation))
-
-
-def collect_depdendents(expr) -> defaultdict:
-    dependents = defaultdict(list)
-    stack = [expr]
-    seen = set()
-    while stack:
-        node = stack.pop()
-        if node._name in seen:
-            continue
-        seen.add(node._name)
-
-        for dep in node.dependencies():
-            stack.append(dep)
-            dependents[dep._name].append(weakref.ref(node))
-    precalculated = expr.dependents()
-    assert precalculated == dependents
-    return dependents
