@@ -70,6 +70,7 @@ class Expr(core.Expr):
     """
 
     _is_length_preserving = False
+    _filter_passthrough = False
 
     @functools.cached_property
     def ndim(self):
@@ -1186,8 +1187,7 @@ class Elemwise(Blockwise):
             if self._name != parent.frame._name:
                 # We can't push the filter through the filter condition
                 return
-            parents = [x() for x in dependents[self._name] if x() is not None]
-            if not all(isinstance(p, Filter) for p in parents):
+            if not is_filter_pushdown_available(self, parent, dependents):
                 return
             return type(self)(
                 self.frame[parent.operand("predicate")], *self.operands[1:]
@@ -1274,6 +1274,7 @@ class Fillna(Elemwise):
 
 class Replace(Elemwise):
     _projection_passthrough = True
+    _filter_passthrough = False
     _parameters = ["frame", "to_replace", "value", "regex"]
     _defaults = {"to_replace": None, "value": no_default, "regex": False}
     _keyword_only = ["value", "regex"]
@@ -1813,11 +1814,15 @@ class Eval(Elemwise):
 
 class Filter(Blockwise):
     _projection_passthrough = True
+    _filter_passthrough = True
     _parameters = ["frame", "predicate"]
     operation = operator.getitem
 
     def _simplify_up(self, parent, dependents):
-        if isinstance(parent, Projection):
+        if isinstance(parent, Projection) and not self.frame._filter_passthrough:
+            # We can't push Projections through filters if the preceding operation
+            # allows us to push filters further down the graph because Projections
+            # block filter pushdown
             return plain_column_projection(self, parent, dependents)
         if isinstance(parent, Index):
             return self.frame.index[self.predicate]
@@ -2031,6 +2036,7 @@ class ResetIndex(Elemwise):
     _defaults = {"drop": False, "name": no_default}
     _keyword_only = ["drop", "name"]
     operation = M.reset_index
+    _filter_passthrough = False
 
     @functools.cached_property
     def _kwargs(self) -> dict:
@@ -3170,6 +3176,48 @@ def determine_column_projection(expr, parent, dependents, additional_columns=Non
     ):
         return column_union[0]
     return column_union
+
+
+def is_filter_pushdown_available(expr, parent, dependents):
+    parents = [x() for x in dependents[expr._name] if x() is not None]
+    filters = {e._name for e in parents if isinstance(e, Filter)}
+    if len(filters) > 1:
+        # Don't push down for differing filters
+        return False
+    if len(parents) == 1:
+        return True
+
+    # We have to see if the non-filter ops are all exclusively part of the predicates
+    others = {e._name for e in parents if not isinstance(e, Filter)}
+    return _check_dependents_are_predicates(expr, others, parent, dependents)
+
+
+def _check_dependents_are_predicates(expr, other_names, parent: Expr, dependents):
+    # singleton approach should make this easier
+
+    # Walk down the predicate side from the filter to see if we can arrive at
+    # other_names without hitting an expression that has other dependents that
+    # are not part of the predicate, see test_merge_avoid_overeager_filter_pushdown
+    allowed_expressions = {parent._name}
+    stack = parent.dependencies()
+    seen = set()
+    while stack:
+        e = stack.pop()
+        if expr._name == e._name:
+            continue
+
+        if e._name in seen:
+            continue
+        seen.add(e._name)
+
+        e_dependents = {x()._name for x in dependents[e._name] if x() is not None}
+
+        if not e_dependents.issubset(allowed_expressions):
+            return False
+        allowed_expressions.add(e._name)
+        stack.extend(e.dependencies())
+
+    return other_names.issubset(allowed_expressions)
 
 
 def _sort_mixed(values):

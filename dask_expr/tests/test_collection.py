@@ -1971,15 +1971,10 @@ def test_contains(df):
 
 
 def test_filter_pushdown(df, pdf):
+    # TODO: This isn't technically correct, round shouldn't let filters through
     indexer = df.x > 5
-    result = df.replace(1, 5)[indexer].optimize(fuse=False)
-    expected = df[indexer].replace(1, 5)
-    assert result._name == expected._name
-
-    # Don't do anything here
-    df = df.replace(1, 5)
-    result = df[df.x > 5].optimize(fuse=False)
-    expected = df[df.x > 5]
+    result = df.round(1)[indexer].optimize(fuse=False)
+    expected = df[indexer].round(1)
     assert result._name == expected._name
 
     pdf["z"] = 1

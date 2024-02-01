@@ -13,8 +13,8 @@ from dask.dataframe.shuffle import partitioning_index
 from dask.utils import apply, get_default_shuffle_method
 from toolz import merge_sorted, unique
 
-from dask_expr._expr import And  # noqa: F401
-from dask_expr._expr import (
+from dask_expr._expr import (  # noqa: F401
+    And,
     Binop,
     Blockwise,
     Elemwise,
@@ -25,6 +25,7 @@ from dask_expr._expr import (
     Projection,
     Unaryop,
     determine_column_projection,
+    is_filter_pushdown_available,
 )
 from dask_expr._repartition import Repartition
 from dask_expr._shuffle import (
@@ -77,6 +78,7 @@ class Merge(Expr):
         "_npartitions": None,
         "broadcast": None,
     }
+    _filter_passthrough = True
 
     def __str__(self):
         return f"Merge({self._name[-7:]})"
@@ -358,6 +360,9 @@ class Merge(Expr):
 
     def _simplify_up(self, parent, dependents):
         if isinstance(parent, Filter):
+            if not is_filter_pushdown_available(self, parent, dependents):
+                if not isinstance(parent.predicate, And):
+                    return
             new_left = self.left
             new_right = self.right
             predicate_cols = set()

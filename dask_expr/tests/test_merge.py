@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from dask_expr import Merge, from_pandas, merge, repartition
-from dask_expr._expr import Projection
+from dask_expr._expr import Filter, Projection
 from dask_expr._shuffle import Shuffle
 from dask_expr.tests._util import _backend_library, assert_eq
 
@@ -729,7 +729,6 @@ def test_filter_merge():
     assert df.optimize()._name == expected.optimize()._name
     assert_eq(df, expected)
 
-    # FIXME: See code
     df = a.merge(b)
     df = df[df.d & df.z]
     aa = a[a.d]
@@ -753,3 +752,33 @@ def test_filter_merge():
     bb = b[b.x > b.y.sum()]
     not_expected = a.merge(bb)
     assert df.optimize()._name != not_expected.optimize()._name
+
+    df = a.merge(b)
+    df = df[df.d & df.z][["a"]]
+    aa = a[a.d]
+    bb = b[b.z]
+    expected = aa.merge(bb)[["a"]]
+    assert df.simplify()._name == expected.simplify()._name
+    assert_eq(df, expected)
+
+
+def test_merge_avoid_overeager_filter_pushdown():
+    df = pd.DataFrame({"a": [1, 2, 3], "b": 1})
+    ddf = from_pandas(df, npartitions=2)
+    df2 = pd.DataFrame({"a": [2, 3, 4], "c": 1})
+    ddf2 = from_pandas(df2, npartitions=2)
+    merged = ddf.merge(ddf2, on="a", how="left")
+    rhs = merged.c.sum()
+    q = merged[merged.a > 1].assign(c=rhs)
+    result = q.simplify()
+    assert q._name == result._name
+    assert isinstance(result.expr.frame, Filter)
+    assert isinstance(result.expr.frame.frame, Merge)
+
+    merged = ddf.merge(ddf2, on="a", how="left")
+    rhs = merged.a.sum()
+    q = merged[merged.a > 1].assign(c=rhs)
+    result = q.simplify()
+    assert q._name == result._name
+    assert isinstance(result.expr.frame, Filter)
+    assert isinstance(result.expr.frame.frame, Merge)
