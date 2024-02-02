@@ -2321,3 +2321,20 @@ def test_filter_optimize_condition():
 def test_scalar_repr(df):
     result = repr(df.size)
     assert result == "<dask_expr.expr.Scalar: expr=df.size(), dtype=int64>"
+
+
+def test_reset_index_filter_pushdown(df):
+    q = df.reset_index()
+    result = q[q.x > 5]
+    expected = df[df.x > 5].reset_index()
+    assert result.simplify()._name == expected._name
+
+    # We are accessing the index, so don't do anything
+    result = q[q["index"] > 5]
+    assert result.simplify()._name == result._name
+
+    q = df.x.reset_index(drop=True)
+    result = q[q > 5]
+    expected = df["x"]
+    expected = expected[expected > 5].reset_index(drop=True)
+    assert result.simplify()._name == expected.simplify()._name
