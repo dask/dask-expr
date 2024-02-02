@@ -2004,7 +2004,6 @@ def test_filter_pushdown_unavailable(df):
 
 
 def test_filter_pushdown(df, pdf):
-    # TODO: This isn't technically correct, round shouldn't let filters through
     indexer = df.x > 5
     result = df.rename_axis(index="hello")[indexer].optimize(fuse=False)
     expected = df[indexer].rename_axis(index="hello")
