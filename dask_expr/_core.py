@@ -28,29 +28,36 @@ def _unpack_collections(o):
 class Expr:
     _parameters = []
     _defaults = {}
+    _instances = weakref.WeakValueDictionary()
 
-    def __init__(self, *args, **kwargs):
-        self._simplified = {}
+    def __new__(cls, *args, **kwargs):
         operands = list(args)
-        for parameter in type(self)._parameters[len(operands) :]:
+        for parameter in cls._parameters[len(operands) :]:
             try:
                 operands.append(kwargs.pop(parameter))
             except KeyError:
-                operands.append(type(self)._defaults[parameter])
+                operands.append(cls._defaults[parameter])
         assert not kwargs, kwargs
-        operands = [_unpack_collections(o) for o in operands]
-        self.operands = operands
-        if self._required_attribute:
-            dep = next(iter(self.dependencies()))._meta
-            if not hasattr(dep, self._required_attribute):
-                # Raise a ValueError instead of AttributeError to
-                # avoid infinite recursion
-                raise ValueError(f"{dep} has no attribute {self._required_attribute}")
+        inst = object.__new__(cls)
+        inst.operands = [_unpack_collections(o) for o in operands]
+        inst._simplified = {}
+        _name = inst._name
+        if _name in Expr._instances:
+            return Expr._instances[_name]
 
-    @property
-    def _required_attribute(self) -> str:
-        # Specify if the first `dependency` must support
-        # a specific attribute for valid behavior.
+        Expr._instances[_name] = inst
+        return inst
+
+    def _tune_down(self):
+        return None
+
+    def _tune_up(self, parent):
+        return None
+
+    def _cull_down(self):
+        return None
+
+    def _cull_up(self, parent):
         return None
 
     def __str__(self):
@@ -217,28 +224,26 @@ class Expr:
             _continue = False
 
             # Rewrite this node
-            if down_name in expr.__dir__():
-                out = getattr(expr, down_name)()
+            out = getattr(expr, down_name)()
+            if out is None:
+                out = expr
+            if not isinstance(out, Expr):
+                return out
+            if out._name != expr._name:
+                expr = out
+                continue
+
+            # Allow children to rewrite their parents
+            for child in expr.dependencies():
+                out = getattr(child, up_name)(expr)
                 if out is None:
                     out = expr
                 if not isinstance(out, Expr):
                     return out
-                if out._name != expr._name:
+                if out is not expr and out._name != expr._name:
                     expr = out
-                    continue
-
-            # Allow children to rewrite their parents
-            for child in expr.dependencies():
-                if up_name in child.__dir__():
-                    out = getattr(child, up_name)(expr)
-                    if out is None:
-                        out = expr
-                    if not isinstance(out, Expr):
-                        return out
-                    if out is not expr and out._name != expr._name:
-                        expr = out
-                        _continue = True
-                        break
+                    _continue = True
+                    break
 
             if _continue:
                 continue
@@ -313,6 +318,8 @@ class Expr:
             changed = False
             for operand in expr.operands:
                 if isinstance(operand, Expr):
+                    # Bandaid for now, waiting for Singleton
+                    dependents[operand._name].append(weakref.ref(expr))
                     new = operand.simplify_once(dependents=dependents)
                     if new._name != operand._name:
                         changed = True
@@ -325,13 +332,13 @@ class Expr:
 
             break
 
-        self._simplified[key] = expr  # Cache the result
+        self._simplified = {key: expr}  # Cache the last result
         return expr
 
     def simplify(self) -> Expr:
         expr = self
         while True:
-            dependents = collect_depdendents(expr)
+            dependents = collect_dependents(expr)
             new = expr.simplify_once(dependents=dependents)
             if new._name == expr._name:
                 break
@@ -414,8 +421,8 @@ class Expr:
         try:
             return object.__getattribute__(self, key)
         except AttributeError as err:
-            if key == "_meta":
-                # Avoid a recursive loop if/when `self._meta`
+            if key.startswith("_meta"):
+                # Avoid a recursive loop if/when `self._meta*`
                 # produces an `AttributeError`
                 raise RuntimeError(
                     f"Failed to generate metadata for {self}. "
@@ -429,6 +436,8 @@ class Expr:
             if key in _parameters:
                 idx = _parameters.index(key)
                 return self.operands[idx]
+            if is_dataframe_like(self._meta) and key in self._meta.columns:
+                return self[key]
 
             link = "https://github.com/dask-contrib/dask-expr/blob/main/README.md#api-coverage"
             raise AttributeError(
@@ -478,7 +487,11 @@ class Expr:
         >>> (df + 10).substitute(10, 20)
         df + 20
         """
+        return self._substitute(old, new, _seen=set())
 
+    def _substitute(self, old, new, _seen):
+        if self._name in _seen:
+            return self
         # Check if we are replacing a literal
         if isinstance(old, Expr):
             substitute_literal = False
@@ -493,7 +506,7 @@ class Expr:
         update = False
         for operand in self.operands:
             if isinstance(operand, Expr):
-                val = operand.substitute(old, new)
+                val = operand._substitute(old, new, _seen)
                 if operand._name != val._name:
                     update = True
                 new_exprs.append(val)
@@ -508,7 +521,7 @@ class Expr:
                 # do so for the `Fused.exprs` operand.
                 val = []
                 for op in operand:
-                    val.append(op.substitute(old, new))
+                    val.append(op._substitute(old, new, _seen))
                     if val[-1]._name != op._name:
                         update = True
                 new_exprs.append(val)
@@ -525,6 +538,8 @@ class Expr:
 
         if update:  # Only recreate if something changed
             return type(self)(*new_exprs)
+        else:
+            _seen.add(self._name)
         return self
 
     def substitute_parameters(self, substitutions: dict) -> Expr:
@@ -697,7 +712,7 @@ class Expr:
         return (expr for expr in self.walk() if isinstance(expr, operation))
 
 
-def collect_depdendents(expr) -> defaultdict:
+def collect_dependents(expr) -> defaultdict:
     dependents = defaultdict(list)
     stack = [expr]
     seen = set()

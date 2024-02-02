@@ -4,8 +4,9 @@ import dask
 import numpy as np
 import pytest
 
-from dask_expr import from_pandas
+from dask_expr import from_pandas, new_collection
 from dask_expr._expr import Assign, Blockwise
+from dask_expr._reductions import NFirst, NLast
 from dask_expr._repartition import RepartitionToFewer
 from dask_expr._shuffle import TaskShuffle, divisions_lru
 from dask_expr.io import FromPandas
@@ -316,8 +317,10 @@ def test_sort_values(df, pdf, shuffle):
         df.sort_values("x", shuffle_method=shuffle, upsample=2.0), pdf.sort_values("x")
     )
 
-    with pytest.raises(NotImplementedError, match="a single boolean for ascending"):
-        df.sort_values(by=["x", "y"], shuffle_method=shuffle, ascending=[True, True])
+    assert_eq(
+        df.sort_values(by=["x", "y"], shuffle_method=shuffle, ascending=[True, True]),
+        pdf.sort_values(by=["x", "y"], ascending=[True, True]),
+    )
     with pytest.raises(NotImplementedError, match="sorting by named columns"):
         df.sort_values(by=1, shuffle_method=shuffle)
 
@@ -363,7 +366,7 @@ def test_sort_values_descending(df, pdf):
     )
 
 
-def test_sort_head_nlargest(df):
+def test_sort_head_nlargest(df, pdf):
     a = df.sort_values("x", ascending=False).head(10, compute=False).expr
     b = df.nlargest(10, columns=["x"]).expr
     assert a.optimize()._name == b.optimize()._name
@@ -372,6 +375,36 @@ def test_sort_head_nlargest(df):
     b = df.nsmallest(10, columns=["x"]).expr
     assert a.optimize()._name == b.optimize()._name
 
+    a = df.sort_values("x", ascending=[False]).head(10, compute=False).expr
+    b = df.nlargest(10, columns=["x"]).expr
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values("x", ascending=[True]).head(10, compute=False).expr
+    b = df.nsmallest(10, columns=["x"]).expr
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values(["x"], ascending=[False]).head(10, compute=False).expr
+    b = df.nlargest(10, columns=["x"]).expr
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values(["x"], ascending=[True]).head(10, compute=False).expr
+    b = df.nsmallest(10, columns=["x"]).expr
+    assert a.optimize()._name == b.optimize()._name
+
+    a = (
+        df.sort_values(["x", "y"], ascending=[False, False])
+        .head(10, compute=False)
+        .expr
+    )
+    b = df.nlargest(10, columns=["x", "y"]).expr
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values(["x", "y"], ascending=[True, True]).head(10, compute=False).expr
+    b = df.nsmallest(10, columns=["x", "y"]).expr
+    assert a.optimize()._name == b.optimize()._name
+
+
+def test_sort_tail_nsmallest(df, pdf):
     a = df.sort_values("x", ascending=False).tail(10, compute=False).expr
     b = df.nsmallest(10, columns=["x"]).expr
     assert a.optimize()._name == b.optimize()._name
@@ -379,6 +412,69 @@ def test_sort_head_nlargest(df):
     a = df.sort_values("x", ascending=True).tail(10, compute=False).expr
     b = df.nlargest(10, columns=["x"]).expr
     assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values("x", ascending=[False]).tail(10, compute=False).expr
+    b = df.nsmallest(10, columns=["x"]).expr
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values("x", ascending=[True]).tail(10, compute=False).expr
+    b = df.nlargest(10, columns=["x"]).expr
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values(["x"], ascending=[False]).tail(10, compute=False).expr
+    b = df.nsmallest(10, columns=["x"]).expr
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values(["x"], ascending=[True]).tail(10, compute=False).expr
+    b = df.nlargest(10, columns=["x"]).expr
+    assert a.optimize()._name == b.optimize()._name
+
+    with pytest.raises(ValueError, match="Length of ascending"):
+        df.sort_values(["x", "y"], ascending=[False]).tail(10, compute=False)
+
+    a = df.sort_values(["x", "y"], ascending=[True, True]).tail(10, compute=False).expr
+    b = df.nlargest(10, columns=["x", "y"]).expr
+    assert a.optimize()._name == b.optimize()._name
+
+    a = (
+        df.sort_values(["x", "y"], ascending=[False, False])
+        .tail(10, compute=False)
+        .expr
+    )
+    b = df.nsmallest(10, columns=["x", "y"]).expr
+    assert a.optimize()._name == b.optimize()._name
+
+
+@pytest.mark.parametrize(
+    "ascending",
+    [
+        pytest.param([True, False], id="[True, False]"),
+        pytest.param([False, True], id="[False, True]"),
+    ],
+)
+@pytest.mark.parametrize("npartitions", [1, 3])
+def test_sort_values_conflicting_ascending_head_tail(pdf, ascending, npartitions):
+    divisions_lru.data = OrderedDict()
+
+    df = from_pandas(pdf, npartitions=npartitions)
+
+    a = df.sort_values(by=["x", "y"], ascending=ascending).head(10, compute=False)
+    b = new_collection(NFirst(df, _columns=["x", "y"], n=10, ascending=ascending))
+    assert a.expr.optimize()._name == b.expr.optimize()._name
+    assert len(divisions_lru) == 0
+    assert_eq(
+        a.compute(),
+        pdf.sort_values(by=["x", "y"], ascending=ascending).head(10),
+    )
+
+    a = df.sort_values(by=["x", "y"], ascending=ascending).tail(10, compute=False)
+    b = new_collection(NLast(df, _columns=["x", "y"], n=10, ascending=ascending))
+    assert a.expr.optimize()._name == b.expr.optimize()._name
+    assert len(divisions_lru) == 0
+    assert_eq(
+        a.compute(),
+        pdf.sort_values(by=["x", "y"], ascending=ascending).tail(10),
+    )
 
 
 @xfail_gpu("cudf udf support")
@@ -454,12 +550,13 @@ def test_index_nulls(null_value):
     )
     ddf = from_pandas(df, npartitions=2)
     with pytest.raises(NotImplementedError, match="presence of nulls"):
-        ddf.set_index(
-            ddf["non_numeric"].map({"foo": "foo", "bar": null_value})
-        ).compute()
+        with pytest.warns(UserWarning):
+            ddf.set_index(
+                ddf["non_numeric"].map({"foo": "foo", "bar": null_value})
+            ).compute()
 
 
-@pytest.mark.parametrize("freq", ["16H", "-16H"])
+@pytest.mark.parametrize("freq", ["16h", "-16h"])
 def test_set_index_with_dask_dt_index(freq):
     values = {
         "x": [1, 2, 3, 4] * 3,
@@ -547,6 +644,14 @@ def test_set_index_sort_values_one_partition(pdf):
     assert_eq(pdf.set_index("x"), query)
     assert len(divisions_lru) == 0
     assert len(list(query.expr.find_operations(RepartitionToFewer))) > 0
+
+
+def test_set_index_triggers_calc_when_accessing_divisions(pdf, df):
+    divisions_lru.data = OrderedDict()
+    query = df.set_index("x")
+    assert len(divisions_lru.data) == 0
+    divisions = query.divisions  # noqa: F841
+    assert len(divisions_lru.data) == 1
 
 
 def test_shuffle(df, pdf):

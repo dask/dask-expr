@@ -70,6 +70,12 @@ class Expr(core.Expr):
     """
 
     _is_length_preserving = False
+    _filter_passthrough = False
+
+    def _filter_passthrough_available(self, parent, dependents):
+        return self._filter_passthrough and is_filter_pushdown_available(
+            self, parent, dependents
+        )
 
     @functools.cached_property
     def ndim(self):
@@ -87,35 +93,6 @@ class Expr(core.Expr):
 
     def __hash__(self):
         return hash(self._name)
-
-    def __getattr__(self, key):
-        try:
-            return object.__getattribute__(self, key)
-        except AttributeError as err:
-            if key == "_meta":
-                # Avoid a recursive loop if/when `self._meta`
-                # produces an `AttributeError`
-                raise RuntimeError(
-                    f"Failed to generate metadata for {self}. "
-                    "This operation may not be supported by the current backend."
-                )
-
-            # Allow operands to be accessed as attributes
-            # as long as the keys are not already reserved
-            # by existing methods/properties
-            _parameters = type(self)._parameters
-            if key in _parameters:
-                idx = _parameters.index(key)
-                return self.operands[idx]
-            if is_dataframe_like(self._meta) and key in self._meta.columns:
-                return self[key]
-
-            link = "https://github.com/dask-contrib/dask-expr/blob/main/README.md#api-coverage"
-            raise AttributeError(
-                f"{err}\n\n"
-                "This often means that you are attempting to use an unsupported "
-                f"API function. Current API coverage is documented here: {link}."
-            )
 
     @property
     def index(self):
@@ -491,13 +468,6 @@ class Blockwise(Expr):
     operation = None
     _keyword_only = []
     _projection_passthrough = False
-    _filter_passthrough = False
-
-    @property
-    def _required_attribute(self):
-        if isinstance(self.operation, type(M.method_caller)):
-            return self.operation.method
-        return None
 
     @functools.cached_property
     def _meta(self):
@@ -1213,16 +1183,15 @@ class Elemwise(Blockwise):
     optimizations, like `len` will care about which operations preserve length
     """
 
-    _filter_passthrough = True
     _is_length_preserving = True
 
     def _simplify_up(self, parent, dependents):
-        if self._filter_passthrough and isinstance(parent, Filter):
-            parents = [x() for x in dependents[self._name] if x() is not None]
-            if not all(isinstance(p, Filter) for p in parents):
-                return
+        if isinstance(parent, Filter) and self._filter_passthrough_available(
+            parent, dependents
+        ):
             return type(self)(
-                self.frame[parent.operand("predicate")], *self.operands[1:]
+                self.frame[parent.predicate.substitute(self, self.frame)],
+                *self.operands[1:],
             )
         return super()._simplify_up(parent, dependents)
 
@@ -1239,8 +1208,6 @@ class RenameFrame(Elemwise):
             self.operand("columns"), Mapping
         ):
             reverse_mapping = {val: key for key, val in self.operand("columns").items()}
-            if is_series_like(parent._meta):
-                return
 
             columns = determine_column_projection(self, parent, dependents)
             columns = [
@@ -1266,6 +1233,7 @@ class ColumnsSetter(RenameFrame):
 class RenameSeries(Elemwise):
     _parameters = ["frame", "index", "sorted_index"]
     _defaults = {"sorted_index": False}
+    _filter_passthrough = True
 
     @functools.cached_property
     def _meta(self):
@@ -1313,7 +1281,6 @@ class Replace(Elemwise):
 
 
 class Isin(Elemwise):
-    _filter_passthrough = False
     _projection_passthrough = True
     _parameters = ["frame", "values"]
     operation = M.isin
@@ -1346,6 +1313,7 @@ class ToTimestamp(Elemwise):
     _parameters = ["frame", "freq", "how"]
     _defaults = {"freq": None, "how": "start"}
     operation = M.to_timestamp
+    _filter_passthrough = True
 
     def _divisions(self):
         return tuple(
@@ -1415,6 +1383,7 @@ class AsType(Elemwise):
 
     _parameters = ["frame", "dtypes"]
     operation = M.astype
+    _filter_passthrough = True
 
     @functools.cached_property
     def _meta(self):
@@ -1525,6 +1494,7 @@ class Abs(Elemwise):
 
 class RenameAxis(Elemwise):
     _projection_passthrough = True
+    _filter_passthrough = True
     _parameters = ["frame", "mapper", "index", "columns", "axis"]
     _defaults = {
         "mapper": no_default,
@@ -1547,6 +1517,7 @@ class ToFrame(Elemwise):
     _defaults = {"name": no_default}
     _keyword_only = ["name"]
     operation = M.to_frame
+    _filter_passthrough = True
 
 
 class ToFrameIndex(Elemwise):
@@ -1554,12 +1525,11 @@ class ToFrameIndex(Elemwise):
     _defaults = {"name": no_default, "index": True}
     _keyword_only = ["name", "index"]
     operation = M.to_frame
+    _filter_passthrough = True
 
 
-class ToSeriesIndex(Elemwise):
-    _parameters = ["frame", "index", "name"]
+class ToSeriesIndex(ToFrameIndex):
     _defaults = {"name": no_default, "index": None}
-    _keyword_only = ["name", "index"]
     operation = M.to_series
 
 
@@ -1841,13 +1811,57 @@ class Eval(Elemwise):
         return {**self.expr_kwargs}
 
 
+class CaseWhen(Elemwise):
+    _parameters = ["frame"]
+
+    @functools.cached_property
+    def caselist(self):
+        c = self.operands[1:]
+        return [(c[i], c[i + 1]) for i in range(0, len(c), 2)]
+
+    @functools.cached_property
+    def _meta(self):
+        c = self.operands[1:]
+        caselist = [
+            (
+                meta_nonempty(c[i]._meta) if isinstance(c[i], Expr) else c[i],
+                meta_nonempty(c[i + 1]._meta)
+                if isinstance(c[i + 1], Expr)
+                else c[i + 1],
+            )
+            for i in range(0, len(c), 2)
+        ]
+        return make_meta(meta_nonempty(self.frame._meta).case_when(caselist))
+
+    @staticmethod
+    def operation(ser, *caselist):
+        caselist = [(caselist[i], caselist[i + 1]) for i in range(0, len(caselist), 2)]
+        return ser.case_when(list(caselist))
+
+
 class Filter(Blockwise):
     _projection_passthrough = True
+    _filter_passthrough = True
     _parameters = ["frame", "predicate"]
     operation = operator.getitem
 
     def _simplify_up(self, parent, dependents):
+        if isinstance(parent, Filter) and not isinstance(self.frame, Filter):
+            if not self.frame._filter_passthrough_available(self, dependents):
+                # We want to collect filters again when we can't move them
+                # anymore. Otherwise, a chain of Filters might nlock Projections
+                # We start with the first Filter, e.g. if my child isn't a filter
+                # anymore. Filters above that don't know if the first Filter can
+                # still move further
+                return self.frame[
+                    self.predicate & parent.predicate.substitute(self, self.frame)
+                ]
         if isinstance(parent, Projection):
+            if self.frame._filter_passthrough_available(self, dependents):
+                # We can't push Projections through filters if the preceding operation
+                # allows us to push filters further down the graph because Projections
+                # block filter pushdown
+                return
             return plain_column_projection(self, parent, dependents)
         if isinstance(parent, Index):
             return self.frame.index[self.predicate]
@@ -1858,7 +1872,6 @@ class Projection(Elemwise):
 
     _parameters = ["frame", "columns"]
     operation = operator.getitem
-    _filter_passthrough = False
 
     @property
     def columns(self):
@@ -1924,7 +1937,6 @@ class Index(Elemwise):
 
     _parameters = ["frame"]
     operation = getattr
-    _filter_passthrough = False
 
     @functools.cached_property
     def _meta(self):
@@ -2076,6 +2088,7 @@ class ResetIndex(Elemwise):
 class AddPrefixSeries(Elemwise):
     _parameters = ["frame", "prefix"]
     operation = M.add_prefix
+    _filter_passthrough = True
 
     def _divisions(self):
         return tuple(self.prefix + str(division) for division in self.frame.divisions)
@@ -3229,6 +3242,48 @@ def plain_column_projection(expr, parent, dependents, additional_columns=None):
     if column_union == parent.operand("columns"):
         return result
     return type(parent)(result, parent.operand("columns"))
+
+
+def is_filter_pushdown_available(expr, parent, dependents):
+    parents = [x() for x in dependents[expr._name] if x() is not None]
+    filters = {e._name for e in parents if isinstance(e, Filter)}
+    if len(filters) > 1:
+        # Don't push down for differing filters
+        return False
+    if len(parents) == 1:
+        return True
+
+    # We have to see if the non-filter ops are all exclusively part of the predicates
+    others = {e._name for e in parents if not isinstance(e, Filter)}
+    return _check_dependents_are_predicates(expr, others, parent, dependents)
+
+
+def _check_dependents_are_predicates(expr, other_names, parent: Expr, dependents):
+    # singleton approach should make this easier
+
+    # Walk down the predicate side from the filter to see if we can arrive at
+    # other_names without hitting an expression that has other dependents that
+    # are not part of the predicate, see test_filter_pushdown_unavailable
+    allowed_expressions = {parent._name}
+    stack = parent.dependencies()
+    seen = set()
+    while stack:
+        e = stack.pop()
+        if expr._name == e._name:
+            continue
+
+        if e._name in seen:
+            continue
+        seen.add(e._name)
+
+        e_dependents = {x()._name for x in dependents[e._name] if x() is not None}
+
+        if not e_dependents.issubset(allowed_expressions):
+            return False
+        allowed_expressions.add(e._name)
+        stack.extend(e.dependencies())
+
+    return other_names.issubset(allowed_expressions)
 
 
 def calc_divisions_for_align(*exprs):
