@@ -1408,9 +1408,9 @@ class AsType(Elemwise):
         return meta
 
     def _simplify_up(self, parent, dependents):
-        if isinstance(parent, Filter):
-            if not is_filter_pushdown_available(self, parent, dependents):
-                return
+        if isinstance(parent, Filter) and self._filter_passthrough_available(
+            parent, dependents
+        ):
             return self._filter_simplification(parent)
         if isinstance(parent, Projection):
             dtypes = self.operand("dtypes")
@@ -2094,10 +2094,9 @@ class ResetIndex(Elemwise):
         return (None,) * (self.frame.npartitions + 1)
 
     def _simplify_up(self, parent, dependents):
-        if isinstance(parent, Filter):
-            if not is_filter_pushdown_available(self, parent, dependents):
-                return
-
+        if isinstance(parent, Filter) and self._filter_passthrough_available(
+            parent, dependents
+        ):
             parents = [
                 p().columns
                 for p in dependents[self._name]
