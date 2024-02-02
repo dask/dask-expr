@@ -78,7 +78,6 @@ class Merge(Expr):
         "_npartitions": None,
         "broadcast": None,
     }
-    _filter_passthrough = True
 
     @property
     def _filter_passthrough(self):
