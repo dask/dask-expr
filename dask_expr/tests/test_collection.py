@@ -2345,3 +2345,14 @@ def test_reset_index_filter_pushdown(df):
     expected = df["x"]
     expected = expected[expected > 5].reset_index()
     assert result.simplify()._name == expected.simplify()._name
+
+
+def test_astype_filter_pushdown(df, pdf):
+    result = df.astype("float64")
+    result = result[result.x > 5.0]
+    expected = df[df.x > 5.0].astype("float64")
+    assert result.simplify()._name == expected._name
+
+    expected = pdf.astype("float64")
+    expected = expected[expected.x > 5.0]
+    assert_eq(result, expected)

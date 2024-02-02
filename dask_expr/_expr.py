@@ -1403,6 +1403,10 @@ class AsType(Elemwise):
         return meta
 
     def _simplify_up(self, parent, dependents):
+        if isinstance(parent, Filter):
+            if not is_filter_pushdown_available(self, parent, dependents):
+                return
+            return self._filter_simplification(parent)
         if isinstance(parent, Projection):
             dtypes = self.operand("dtypes")
             columns = determine_column_projection(self, parent, dependents)
