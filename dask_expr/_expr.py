@@ -1850,7 +1850,11 @@ class Filter(Blockwise):
     def _simplify_up(self, parent, dependents):
         if isinstance(parent, Filter) and not isinstance(self.frame, Filter):
             if not self.frame._filter_passthrough_available(self, dependents):
-                # collect filters if we can't move them anymore
+                # We want to collect filters again when we can't move them
+                # anymore. Otherwise, a chain of Filters might nlock Projections
+                # We start with the first Filter, e.g. if my child isn't a filter
+                # anymore. Filters above that don't know if the first Filter can
+                # still move further
                 return self.frame[
                     self.predicate & parent.predicate.substitute(self, self.frame)
                 ]
