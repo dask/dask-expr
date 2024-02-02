@@ -442,7 +442,7 @@ class Expr:
     def dask(self):
         return self.__dask_graph__()
 
-    def substitute(self, old, new) -> Expr:
+    def substitute(self, old, new, _seen=None) -> Expr:
         """Substitute a specific term within the expression
 
         Note that replacing non-`Expr` terms may produce
@@ -461,7 +461,10 @@ class Expr:
         >>> (df + 10).substitute(10, 20)
         df + 20
         """
-
+        if _seen is None:
+            _seen = set()
+        if self._name in _seen:
+            return self
         # Check if we are replacing a literal
         if isinstance(old, Expr):
             substitute_literal = False
@@ -508,6 +511,8 @@ class Expr:
 
         if update:  # Only recreate if something changed
             return type(self)(*new_exprs)
+        else:
+            _seen.add(self._name)
         return self
 
     def substitute_parameters(self, substitutions: dict) -> Expr:
