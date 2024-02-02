@@ -1182,16 +1182,15 @@ class Elemwise(Blockwise):
 
     def _simplify_up(self, parent, dependents):
         if self._filter_passthrough and isinstance(parent, Filter):
-            return self._filter_simplification(parent, dependents)
+            if not is_filter_pushdown_available(self, parent, dependents):
+                return
+            return self._filter_simplification(parent)
         return super()._simplify_up(parent, dependents)
 
-    def _filter_simplification(self, parent, dependents):
-        if not is_filter_pushdown_available(self, parent, dependents):
-            return
-        return type(self)(
-            self.frame[parent.predicate.substitute(self, self.frame)],
-            *self.operands[1:],
-        )
+    def _filter_simplification(self, parent, predicate=None):
+        if predicate is None:
+            predicate = parent.predicate.substitute(self, self.frame)
+        return type(self)(self.frame[predicate], *self.operands[1:])
 
 
 class RenameFrame(Elemwise):
@@ -2078,18 +2077,29 @@ class ResetIndex(Elemwise):
 
     def _simplify_up(self, parent, dependents):
         if isinstance(parent, Filter):
+            if not is_filter_pushdown_available(self, parent, dependents):
+                return
+
             parents = [
                 p().columns
                 for p in dependents[self._name]
                 if p() is not None and not isinstance(p(), Filter)
             ]
+            predicate = None
             if not set(flatten(parents, list)).issubset(set(self.frame.columns)):
-                # one of the filters is in the Index, bail for now
-                return
-            if self.frame.ndim == 1 and not self.operand("drop"):
-                # change of dimensionality, bail for now
-                return
-            return self._filter_simplification(parent, dependents)
+                # one of the filters is the Index
+                name = self.operand("name")
+                if name is no_default:
+                    name = "index"
+                # replace the projection of the former index with the actual index
+                subs = Projection(self, name)
+                predicate = parent.predicate.substitute(subs, Index(self.frame))
+            elif self.frame.ndim == 1 and not self.operand("drop"):
+                name = self.frame._meta.name
+                # Avoid Projection since we are already a Series
+                subs = Projection(self, name)
+                predicate = parent.predicate.substitute(subs, self.frame)
+            return self._filter_simplification(parent, predicate)
 
         if isinstance(parent, Projection):
             return plain_column_projection(self, parent, dependents)
