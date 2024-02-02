@@ -56,6 +56,7 @@ from dask_expr._expr import (
     Assign,
     Blockwise,
     Expr,
+    Filter,
     MapPartitions,
     Projection,
     RenameFrame,
@@ -64,6 +65,7 @@ from dask_expr._expr import (
     _extract_meta,
     are_co_aligned,
     determine_column_projection,
+    is_filter_pushdown_available,
     no_default,
 )
 from dask_expr._reductions import ApplyConcatApply, Chunk, Reduction
@@ -216,6 +218,7 @@ class SingleAggregation(GroupByApplyConcatApply, GroupByBase):
 
     groupby_chunk = None
     groupby_aggregate = None
+    _filter_passthrough = True
 
     @classmethod
     def chunk(cls, df, *by, **kwargs):
@@ -251,6 +254,18 @@ class SingleAggregation(GroupByApplyConcatApply, GroupByBase):
         }
 
     def _simplify_up(self, parent, dependents):
+        if isinstance(parent, Filter):
+            if not is_filter_pushdown_available(self, parent, dependents):
+                return
+
+            parents = [
+                p().columns
+                for p in dependents[self._name]
+                if p() is not None and not isinstance(p(), Filter)
+            ]
+            if not set(flatten(parents, list)).issubset(set(self._by_columns)):
+                return
+
         return groupby_projection(self, parent, dependents)
 
 
