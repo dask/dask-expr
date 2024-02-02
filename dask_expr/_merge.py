@@ -380,14 +380,6 @@ class Merge(Expr):
                 predicate_cols = set(predicate.columns)
             elif isinstance(predicate, Binop):
                 if isinstance(predicate, And):
-                    # if isinstance(predicate.left, And):
-                    #     predicate_first = predicate.right
-                    #     predicate_second = predicate.left
-                    # else:
-                    #     predicate_first = predicate.left
-                    #     predicate_second = predicate.right
-                    # new = Filter(self, predicate_first)
-                    # new_pred = predicate_second.substitute(self, new)
                     new = Filter(self, predicate.left)
                     new_pred = predicate.right.substitute(self, new)
                     return Filter(new, new_pred)
