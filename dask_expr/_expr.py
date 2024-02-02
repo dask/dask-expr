@@ -2105,6 +2105,7 @@ class ResetIndex(Elemwise):
             predicate = None
             if not set(flatten(parents, list)).issubset(set(self.frame.columns)):
                 # one of the filters is the Index
+                self._filter_passthrough_available(parent, dependents)
                 name = self.operand("name")
                 if name is no_default:
                     name = "index"
@@ -3283,8 +3284,8 @@ def plain_column_projection(expr, parent, dependents, additional_columns=None):
 def is_filter_pushdown_available(expr, parent, dependents):
     parents = [x() for x in dependents[expr._name] if x() is not None]
     filters = {e._name for e in parents if isinstance(e, Filter)}
-    if len(filters) > 1:
-        # Don't push down for differing filters
+    if len(filters) != 1:
+        # Don't push down if not exactly one Filter
         return False
     if len(parents) == 1:
         return True
