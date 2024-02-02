@@ -550,9 +550,10 @@ def test_index_nulls(null_value):
     )
     ddf = from_pandas(df, npartitions=2)
     with pytest.raises(NotImplementedError, match="presence of nulls"):
-        ddf.set_index(
-            ddf["non_numeric"].map({"foo": "foo", "bar": null_value})
-        ).compute()
+        with pytest.warns(UserWarning):
+            ddf.set_index(
+                ddf["non_numeric"].map({"foo": "foo", "bar": null_value})
+            ).compute()
 
 
 @pytest.mark.parametrize("freq", ["16h", "-16h"])
@@ -643,6 +644,14 @@ def test_set_index_sort_values_one_partition(pdf):
     assert_eq(pdf.set_index("x"), query)
     assert len(divisions_lru) == 0
     assert len(list(query.expr.find_operations(RepartitionToFewer))) > 0
+
+
+def test_set_index_triggers_calc_when_accessing_divisions(pdf, df):
+    divisions_lru.data = OrderedDict()
+    query = df.set_index("x")
+    assert len(divisions_lru.data) == 0
+    divisions = query.divisions  # noqa: F841
+    assert len(divisions_lru.data) == 1
 
 
 def test_shuffle(df, pdf):

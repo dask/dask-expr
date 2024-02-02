@@ -1844,6 +1844,7 @@ class CaseWhen(Elemwise):
 
 class Filter(Blockwise):
     _projection_passthrough = True
+    _filter_passthrough = True
     _parameters = ["frame", "predicate"]
     operation = operator.getitem
 
