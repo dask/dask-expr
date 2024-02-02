@@ -1183,16 +1183,14 @@ class Elemwise(Blockwise):
 
     def _simplify_up(self, parent, dependents):
         if self._filter_passthrough and isinstance(parent, Filter):
-            if self._name != parent.frame._name:
-                # We can't push the filter through the filter condition
-                return
-            parents = [x() for x in dependents[self._name] if x() is not None]
-            if not all(isinstance(p, Filter) for p in parents):
-                return
-            return type(self)(
-                self.frame[parent.operand("predicate")], *self.operands[1:]
-            )
+            return self._filter_simplification(parent, dependents)
         return super()._simplify_up(parent, dependents)
+
+    def _filter_simplification(self, parent, dependents):
+        parents = [x() for x in dependents[self._name] if x() is not None]
+        if not all(isinstance(p, Filter) for p in parents):
+            return
+        return type(self)(self.frame[parent.operand("predicate")], *self.operands[1:])
 
 
 class RenameFrame(Elemwise):
@@ -2059,6 +2057,7 @@ class ResetIndex(Elemwise):
     _defaults = {"drop": False, "name": no_default}
     _keyword_only = ["drop", "name"]
     operation = M.reset_index
+    _filter_passthrough = True
 
     @functools.cached_property
     def _kwargs(self) -> dict:
@@ -2069,6 +2068,24 @@ class ResetIndex(Elemwise):
 
     def _divisions(self):
         return (None,) * (self.frame.npartitions + 1)
+
+    def _simplify_up(self, parent, dependents):
+        if isinstance(parent, Filter):
+            parents = [
+                p().columns
+                for p in dependents[self._name]
+                if p() is not None and not isinstance(p(), Filter)
+            ]
+            if not set(flatten(parents, list)).issubset(set(self.frame.columns)):
+                # one of the filters is in the Index, bail for now
+                return
+            if self.frame.ndim == 1 and not self.operand("drop"):
+                # change of dimensionality, bail for now
+                return
+            return self._filter_simplification(parent, dependents)
+
+        if isinstance(parent, Projection):
+            return plain_column_projection(self, parent, dependents)
 
 
 class AddPrefixSeries(Elemwise):
@@ -2299,7 +2316,6 @@ class BlockwiseTailIndex(BlockwiseTail):
 
 class Binop(Elemwise):
     _parameters = ["left", "right"]
-    _filter_passthrough = False
 
     def __str__(self):
         return f"{self.left} {self._operator_repr} {self.right}"
