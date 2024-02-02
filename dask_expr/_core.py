@@ -314,7 +314,7 @@ class Expr:
     def simplify(self) -> Expr:
         expr = self
         while True:
-            dependents = collect_depdendents(expr)
+            dependents = collect_dependents(expr)
             new = expr.simplify_once(dependents=dependents)
             if new._name == expr._name:
                 break
@@ -463,7 +463,11 @@ class Expr:
         >>> (df + 10).substitute(10, 20)
         df + 20
         """
+        return self._substitute(old, new, _seen=set())
 
+    def _substitute(self, old, new, _seen):
+        if self._name in _seen:
+            return self
         # Check if we are replacing a literal
         if isinstance(old, Expr):
             substitute_literal = False
@@ -478,7 +482,7 @@ class Expr:
         update = False
         for operand in self.operands:
             if isinstance(operand, Expr):
-                val = operand.substitute(old, new)
+                val = operand._substitute(old, new, _seen)
                 if operand._name != val._name:
                     update = True
                 new_exprs.append(val)
@@ -493,7 +497,7 @@ class Expr:
                 # do so for the `Fused.exprs` operand.
                 val = []
                 for op in operand:
-                    val.append(op.substitute(old, new))
+                    val.append(op._substitute(old, new, _seen))
                     if val[-1]._name != op._name:
                         update = True
                 new_exprs.append(val)
@@ -510,6 +514,8 @@ class Expr:
 
         if update:  # Only recreate if something changed
             return type(self)(*new_exprs)
+        else:
+            _seen.add(self._name)
         return self
 
     def substitute_parameters(self, substitutions: dict) -> Expr:
@@ -682,7 +688,7 @@ class Expr:
         return (expr for expr in self.walk() if isinstance(expr, operation))
 
 
-def collect_depdendents(expr) -> defaultdict:
+def collect_dependents(expr) -> defaultdict:
     dependents = defaultdict(list)
     stack = [expr]
     seen = set()

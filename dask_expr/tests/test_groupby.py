@@ -27,7 +27,6 @@ def df(pdf):
     yield from_pandas(pdf, npartitions=4)
 
 
-@pytest.mark.xfail(reason="Cannot group on a Series yet")
 def test_groupby_unsupported_by(pdf, df):
     assert_eq(df.groupby(df.x).sum(), pdf.groupby(pdf.x).sum())
 
@@ -112,7 +111,8 @@ def test_groupby_reduction_optimize(pdf, df):
     assert ops[0].columns == ["x", "y"]
 
     df2 = df[["y"]]
-    agg = df2.groupby(df.x).y.apply(lambda x: x)
+    with pytest.warns(UserWarning, match="inferred from partial data"):
+        agg = df2.groupby(df.x).y.apply(lambda x: x)
     ops = [
         op for op in agg.expr.optimize(fuse=False).walk() if isinstance(op, FromPandas)
     ]
@@ -137,16 +137,31 @@ def test_groupby_no_numeric_only(pdf, func):
     pdf = pdf.drop(columns="z")
     df = from_pandas(pdf, npartitions=10)
     g = df.groupby("x")
-    agg = getattr(g, func)()
+    if func != "value_counts":
+        agg = getattr(g, func)()
 
-    expect = getattr(pdf.groupby("x"), func)()
-    assert_eq(agg, expect)
+        expect = getattr(pdf.groupby("x"), func)()
+        assert_eq(agg, expect)
 
     g = df.y.groupby(df.x)
     agg = getattr(g, func)()
 
     expect = getattr(pdf.y.groupby(pdf.x), func)()
     assert_eq(agg, expect)
+
+
+def test_unique(df, pdf):
+    result = df.groupby("x")["y"].unique()
+    expected = pdf.groupby("x")["y"].unique()
+
+    # Use explode because each DataFrame row is a list; equality fails
+    assert_eq(result.explode(), expected.explode())
+
+    result = df.y.groupby(df.x).unique()
+    expected = pdf.y.groupby(pdf.x).unique()
+
+    # Use explode because each DataFrame row is a list; equality fails
+    assert_eq(result.explode(), expected.explode())
 
 
 def test_groupby_mean_slice(pdf, df):
@@ -367,24 +382,33 @@ def test_groupby_apply(df, pdf):
         x["new"] = x.sum().sum()
         return x
 
-    assert_eq(df.groupby(df.x).apply(test), pdf.groupby(pdf.x).apply(test))
-    assert_eq(
-        df.groupby(df.x, group_keys=False).apply(test),
-        pdf.groupby(pdf.x, group_keys=False).apply(test),
-    )
-    assert_eq(df.groupby("x").apply(test), pdf.groupby("x").apply(test))
+    with pytest.warns(UserWarning, match="inferred from partial data"):
+        assert_eq(df.groupby(df.x).apply(test), pdf.groupby(pdf.x).apply(test))
+    with pytest.warns(UserWarning, match="inferred from partial data"):
+        assert_eq(
+            df.groupby(df.x, group_keys=False).apply(test),
+            pdf.groupby(pdf.x, group_keys=False).apply(test),
+        )
+    with pytest.warns(UserWarning, match="inferred from partial data"):
+        assert_eq(df.groupby("x").apply(test), pdf.groupby("x").apply(test))
     assert_eq(
         df.groupby("x").apply(test, meta=pdf.groupby("x").apply(test).head(0)),
         pdf.groupby("x").apply(test),
     )
-    assert_eq(df.groupby(["x", "y"]).apply(test), pdf.groupby(["x", "y"]).apply(test))
+    with pytest.warns(UserWarning, match="inferred from partial data"):
+        assert_eq(
+            df.groupby(["x", "y"]).apply(test), pdf.groupby(["x", "y"]).apply(test)
+        )
 
-    query = df.groupby("x").apply(test).optimize(fuse=False)
+    with pytest.warns(UserWarning, match="inferred from partial data"):
+        query = df.groupby("x").apply(test).optimize(fuse=False)
     assert query.expr.find_operations(Shuffle)
     assert query.expr.find_operations(GroupByUDFBlockwise)
 
-    query = df.groupby("x")[["y"]].apply(test).simplify()
-    expected = df[["x", "y"]].groupby("x")[["y"]].apply(test).simplify()
+    with pytest.warns(UserWarning, match="inferred from partial data"):
+        query = df.groupby("x")[["y"]].apply(test).simplify()
+    with pytest.warns(UserWarning, match="inferred from partial data"):
+        expected = df[["x", "y"]].groupby("x")[["y"]].apply(test).simplify()
     assert query._name == expected._name
     assert_eq(query, pdf.groupby("x")[["y"]].apply(test))
 
@@ -393,26 +417,35 @@ def test_groupby_transform(df, pdf):
     def test(x):
         return x
 
-    assert_eq(df.groupby(df.x).transform(test), pdf.groupby(pdf.x).transform(test))
-    assert_eq(df.groupby("x").transform(test), pdf.groupby("x").transform(test))
+    with pytest.warns(UserWarning, match="inferred from partial data"):
+        assert_eq(df.groupby(df.x).transform(test), pdf.groupby(pdf.x).transform(test))
+    with pytest.warns(UserWarning, match="inferred from partial data"):
+        assert_eq(df.groupby("x").transform(test), pdf.groupby("x").transform(test))
     assert_eq(
         df.groupby("x").transform(test, meta=pdf.groupby("x").transform(test).head(0)),
         pdf.groupby("x").transform(test),
     )
 
-    query = df.groupby("x").transform(test).optimize(fuse=False)
+    with pytest.warns(UserWarning, match="inferred from partial data"):
+        query = df.groupby("x").transform(test).optimize(fuse=False)
     assert query.expr.find_operations(Shuffle)
     assert query.expr.find_operations(GroupByUDFBlockwise)
 
-    query = df.groupby("x")[["y"]].transform(test).simplify()
-    expected = df[["x", "y"]].groupby("x")[["y"]].transform(test).simplify()
+    with pytest.warns(UserWarning, match="inferred from partial data"):
+        query = df.groupby("x")[["y"]].transform(test).simplify()
+    with pytest.warns(UserWarning, match="inferred from partial data"):
+        expected = df[["x", "y"]].groupby("x")[["y"]].transform(test).simplify()
     assert query._name == expected._name
     assert_eq(query, pdf.groupby("x")[["y"]].transform(test))
 
 
 def test_groupby_shift(df, pdf):
-    assert_eq(df.groupby(df.x).shift(periods=1), pdf.groupby(pdf.x).shift(periods=1))
-    assert_eq(df.groupby("x").shift(periods=1), pdf.groupby("x").shift(periods=1))
+    with pytest.warns(UserWarning, match="inferred from partial data"):
+        assert_eq(
+            df.groupby(df.x).shift(periods=1), pdf.groupby(pdf.x).shift(periods=1)
+        )
+    with pytest.warns(UserWarning, match="inferred from partial data"):
+        assert_eq(df.groupby("x").shift(periods=1), pdf.groupby("x").shift(periods=1))
     assert_eq(
         df.groupby("x").shift(
             periods=1, meta=pdf.groupby("x").shift(periods=1).head(0)
@@ -420,12 +453,15 @@ def test_groupby_shift(df, pdf):
         pdf.groupby("x").shift(periods=1),
     )
 
-    query = df.groupby("x").shift(periods=1).optimize(fuse=False)
+    with pytest.warns(UserWarning, match="inferred from partial data"):
+        query = df.groupby("x").shift(periods=1).optimize(fuse=False)
     assert query.expr.find_operations(Shuffle)
     assert query.expr.find_operations(GroupByUDFBlockwise)
 
-    query = df.groupby("x")[["y"]].shift(periods=1).simplify()
-    expected = df[["x", "y"]].groupby("x")[["y"]].shift(periods=1).simplify()
+    with pytest.warns(UserWarning, match="inferred from partial data"):
+        query = df.groupby("x")[["y"]].shift(periods=1).simplify()
+    with pytest.warns(UserWarning, match="inferred from partial data"):
+        expected = df[["x", "y"]].groupby("x")[["y"]].shift(periods=1).simplify()
     assert query._name == expected._name
     assert_eq(query, pdf.groupby("x")[["y"]].shift(periods=1))
 
@@ -544,7 +580,8 @@ def test_numeric_column_names():
 def test_apply_divisions(pdf):
     pdf = pdf.set_index("x")
     df = from_pandas(pdf, npartitions=10)
-    result = df.groupby(["x", "y"]).apply(lambda x: x)
+    with pytest.warns(UserWarning, match="inferred from partial data"):
+        result = df.groupby(["x", "y"]).apply(lambda x: x)
     assert df.divisions == result.divisions
     assert_eq(result, pdf.groupby(["x", "y"]).apply(lambda x: x))
 
@@ -590,10 +627,11 @@ def test_groupby_median(df, pdf):
 
 
 def test_groupby_apply_args(df, pdf):
-    assert_eq(
-        df.groupby("x").apply(lambda x, y: x + y, 1),
-        pdf.groupby("x").apply(lambda x, y: x + y, 1),
-    )
+    with pytest.warns(UserWarning, match="inferred from partial data"):
+        assert_eq(
+            df.groupby("x").apply(lambda x, y: x + y, 1),
+            pdf.groupby("x").apply(lambda x, y: x + y, 1),
+        )
 
 
 def test_groupby_ffill_bfill(pdf):

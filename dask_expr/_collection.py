@@ -16,11 +16,13 @@ from dask import compute, delayed
 from dask.array import Array
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
 from dask.core import flatten
+from dask.dataframe._compat import PANDAS_GE_220
 from dask.dataframe.accessor import CachedAccessor
 from dask.dataframe.core import (
     _concat,
     _convert_to_numeric,
     _Frame,
+    _repr_data_series,
     _sqrt_and_convert_to_timedelta,
     check_divisions,
     has_parallel_type,
@@ -46,11 +48,13 @@ from dask.utils import (
     M,
     derived_from,
     get_meta_library,
+    maybe_pluralize,
     memory_repr,
     put_lines,
     random_state_data,
     typename,
 )
+from dask.widgets import get_template
 from fsspec.utils import stringify_path
 from pandas import CategoricalDtype
 from pandas.api.types import is_bool_dtype, is_datetime64_any_dtype, is_numeric_dtype
@@ -109,7 +113,6 @@ from dask_expr._shuffle import (
 )
 from dask_expr._str_accessor import StringAccessor
 from dask_expr._util import (
-    RaiseAttributeError,
     _BackendData,
     _convert_to_list,
     _get_shuffle_preferring_order,
@@ -785,7 +788,7 @@ class FrameBase(DaskMethodsMixin):
             Arguments and keywords to pass to the function. Arguments and
             keywords may contain ``FrameBase`` or regular python objects.
             DataFrame-like args (both dask and pandas) must have the same
-            number of partitions as ``self` or comprise a single partition.
+            number of partitions as ``self`` or comprise a single partition.
             Key-word arguments, Single-partition arguments, and general
             python-object arguments will be broadcasted to all partitions.
         enforce_metadata : bool, default True
@@ -1814,6 +1817,7 @@ class FrameBase(DaskMethodsMixin):
             axis=axis,
         )
 
+    @derived_from(pd.DataFrame)
     def rename_axis(
         self, mapper=no_default, index=no_default, columns=no_default, axis=0
     ):
@@ -1832,7 +1836,6 @@ class FrameBase(DaskMethodsMixin):
             other = from_pandas(other, npartitions=npartitions)
         return other
 
-    @derived_from(pd.Series)
     @derived_from(pd.DataFrame)
     def align(self, other, join="outer", axis=None, fill_value=None):
         other = self._create_alignable_frame(other, join)
@@ -2154,6 +2157,67 @@ class FrameBase(DaskMethodsMixin):
         else:
             return func(self, *args, **kwargs)
 
+    def sample(self, n=None, frac=None, replace=False, random_state=None):
+        """Random sample of items
+
+        Parameters
+        ----------
+        n : int, optional
+            Number of items to return is not supported by dask. Use frac
+            instead.
+        frac : float, optional
+            Approximate fraction of items to return. This sampling fraction is
+            applied to all partitions equally. Note that this is an
+            **approximate fraction**. You should not expect exactly ``len(df) * frac``
+            items to be returned, as the exact number of elements selected will
+            depend on how your data is partitioned (but should be pretty close
+            in practice).
+        replace : boolean, optional
+            Sample with or without replacement. Default = False.
+        random_state : int or ``np.random.RandomState``
+            If an int, we create a new RandomState with this as the seed;
+            Otherwise we draw from the passed RandomState.
+
+        See Also
+        --------
+        DataFrame.random_split
+        pandas.DataFrame.sample
+        """
+        if n is not None:
+            msg = (
+                "sample does not support the number of sampled items "
+                "parameter, 'n'. Please use the 'frac' parameter instead."
+            )
+            if isinstance(n, Number) and 0 <= n <= 1:
+                warnings.warn(msg)
+                frac = n
+            else:
+                raise ValueError(msg)
+
+        if frac is None:
+            raise ValueError("frac must not be None")
+
+        if random_state is None:
+            random_state = np.random.RandomState()
+
+        state_data = random_state_data(self.npartitions, random_state)
+        return new_collection(
+            expr.Sample(self, state_data=state_data, frac=frac, replace=replace)
+        )
+
+    def _repr_data(self):
+        raise NotImplementedError
+
+    @property
+    def _repr_divisions(self):
+        name = f"npartitions={self.npartitions}"
+        if self.known_divisions:
+            divisions = pd.Index(self.divisions, name=name)
+        else:
+            # avoid to be converted to NaN
+            divisions = pd.Index([""] * (self.npartitions + 1), name=name)
+        return divisions
+
 
 def _dot_series(*args, **kwargs):
     # .sum() is invoked on each partition before being applied to all
@@ -2213,6 +2277,11 @@ class DataFrame(FrameBase):
     @property
     def shape(self):
         return self.size / max(len(self.columns), 1), len(self.columns)
+
+    @property
+    def ndim(self):
+        """Return dimensionality"""
+        return 2
 
     @property
     def empty(self):
@@ -2754,54 +2823,6 @@ class DataFrame(FrameBase):
             return num_axis.get(axis, axis)
         else:
             return axis
-
-    def sample(self, n=None, frac=None, replace=False, random_state=None):
-        """Random sample of items
-
-        Parameters
-        ----------
-        n : int, optional
-            Number of items to return is not supported by dask. Use frac
-            instead.
-        frac : float, optional
-            Approximate fraction of items to return. This sampling fraction is
-            applied to all partitions equally. Note that this is an
-            **approximate fraction**. You should not expect exactly ``len(df) * frac``
-            items to be returned, as the exact number of elements selected will
-            depend on how your data is partitioned (but should be pretty close
-            in practice).
-        replace : boolean, optional
-            Sample with or without replacement. Default = False.
-        random_state : int or ``np.random.RandomState``
-            If an int, we create a new RandomState with this as the seed;
-            Otherwise we draw from the passed RandomState.
-
-        See Also
-        --------
-        DataFrame.random_split
-        pandas.DataFrame.sample
-        """
-        if n is not None:
-            msg = (
-                "sample does not support the number of sampled items "
-                "parameter, 'n'. Please use the 'frac' parameter instead."
-            )
-            if isinstance(n, Number) and 0 <= n <= 1:
-                warnings.warn(msg)
-                frac = n
-            else:
-                raise ValueError(msg)
-
-        if frac is None:
-            raise ValueError("frac must not be None")
-
-        if random_state is None:
-            random_state = np.random.RandomState()
-
-        state_data = random_state_data(self.npartitions, random_state)
-        return new_collection(
-            expr.Sample(self, state_data=state_data, frac=frac, replace=replace)
-        )
 
     @derived_from(pd.DataFrame, ua_args=["index"])
     def rename(self, index=None, columns=None):
@@ -3563,6 +3584,34 @@ class DataFrame(FrameBase):
     ):
         return self._corr(method, min_periods, numeric_only, split_every)
 
+    @derived_from(pd.DataFrame)
+    def to_string(self, max_rows=5):
+        # option_context doesn't affect
+        return self._repr_data().to_string(max_rows=max_rows, show_dimensions=False)
+
+    @derived_from(pd.DataFrame)
+    def to_html(self, max_rows=5):
+        # pd.Series doesn't have html repr
+        data = self._repr_data().to_html(max_rows=max_rows, show_dimensions=False)
+        layers = len({k for (k, _) in self.dask.keys()})
+        return get_template("dataframe.html.j2").render(
+            data=data,
+            name=self._name,
+            layers=maybe_pluralize(layers, "graph layer"),
+        )
+
+    def _repr_data(self):
+        meta = self._meta
+        index = self._repr_divisions
+        cols = meta.columns
+        if len(cols) == 0:
+            series_df = pd.DataFrame([[]] * len(index), columns=cols, index=index)
+        else:
+            series_df = pd.concat(
+                [_repr_data_series(s, index=index) for _, s in meta.items()], axis=1
+            )
+        return series_df
+
 
 class Series(FrameBase):
     """Series-like Expr Collection"""
@@ -3583,6 +3632,11 @@ class Series(FrameBase):
     @property
     def axes(self):
         return [self.index]
+
+    @property
+    def ndim(self):
+        """Return dimensionality"""
+        return 1
 
     @property
     def _elemwise(self):
@@ -3909,9 +3963,11 @@ class Series(FrameBase):
     def explode(self):
         return new_collection(expr.ExplodeSeries(self))
 
+    @derived_from(pd.Series)
     def add_prefix(self, prefix):
         return new_collection(expr.AddPrefixSeries(self, prefix))
 
+    @derived_from(pd.Series)
     def add_suffix(self, suffix):
         return new_collection(expr.AddSuffixSeries(self, suffix))
 
@@ -4026,6 +4082,7 @@ class Series(FrameBase):
             raise TypeError("lag must be an integer")
         return self.corr(self if lag == 0 else self.shift(lag), split_every=split_every)
 
+    @derived_from(pd.Series)
     def describe(
         self,
         split_every=False,
@@ -4057,6 +4114,23 @@ class Series(FrameBase):
     @derived_from(pd.Series)
     def is_monotonic_decreasing(self):
         return new_collection(IsMonotonicDecreasing(self))
+
+    @derived_from(pd.Series)
+    def to_string(self, max_rows=5):
+        # option_context doesn't affect
+        return self._repr_data().to_string(max_rows=max_rows)
+
+    def _repr_data(self):
+        return _repr_data_series(self._meta, self._repr_divisions)
+
+    if PANDAS_GE_220:
+
+        @derived_from(pd.Series)
+        def case_when(self, caselist):
+            if not isinstance(caselist, list):
+                raise TypeError("The caselist argument should be a list")
+            caselist = list(flatten([[c, v] for c, v in caselist], container=list))
+            return new_collection(expr.CaseWhen(self, *caselist))
 
 
 for name in [
@@ -4207,14 +4281,30 @@ class Index(Series):
     def count(self, split_every=False):
         return new_collection(IndexCount(self, split_every))
 
-    index = RaiseAttributeError()
-    sum = RaiseAttributeError()
-    prod = RaiseAttributeError()
-    mean = RaiseAttributeError()
-    std = RaiseAttributeError()
-    var = RaiseAttributeError()
-    idxmin = RaiseAttributeError()
-    idxmax = RaiseAttributeError()
+    @property
+    def index(self):
+        raise AttributeError("'Index' object has no attribute 'index'")
+
+    def sum(self, *args, **kwargs):
+        raise AttributeError("'Index' object has no attribute 'sum'")
+
+    def prod(self, *args, **kwargs):
+        raise AttributeError("'Index' object has no attribute 'prod'")
+
+    def mean(self, *args, **kwargs):
+        raise AttributeError("'Index' object has no attribute 'mean'")
+
+    def std(self, *args, **kwargs):
+        raise AttributeError("'Index' object has no attribute 'std'")
+
+    def var(self, *args, **kwargs):
+        raise AttributeError("'Index' object has no attribute 'var'")
+
+    def idxmax(self, *args, **kwargs):
+        raise AttributeError("'Index' object has no attribute 'idxmax'")
+
+    def idxmin(self, *args, **kwargs):
+        raise AttributeError("'Index' object has no attribute 'idxmin'")
 
 
 class Scalar(FrameBase):
@@ -4436,6 +4526,31 @@ def read_table(
         path = stringify_path(path)
     return new_collection(
         ReadTable(
+            path,
+            columns=usecols,
+            dtype_backend=dtype_backend,
+            storage_options=storage_options,
+            kwargs=kwargs,
+            header=header,
+        )
+    )
+
+
+def read_fwf(
+    path,
+    *args,
+    header="infer",
+    usecols=None,
+    dtype_backend=None,
+    storage_options=None,
+    **kwargs,
+):
+    from dask_expr.io.csv import ReadFwf
+
+    if not isinstance(path, str):
+        path = stringify_path(path)
+    return new_collection(
+        ReadFwf(
             path,
             columns=usecols,
             dtype_backend=dtype_backend,
