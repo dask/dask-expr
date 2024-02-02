@@ -3254,7 +3254,7 @@ def _check_dependents_are_predicates(expr, other_names, parent: Expr, dependents
 
     # Walk down the predicate side from the filter to see if we can arrive at
     # other_names without hitting an expression that has other dependents that
-    # are not part of the predicate, see test_merge_avoid_overeager_filter_pushdown
+    # are not part of the predicate, see test_filter_pushdown_unavailable
     allowed_expressions = {parent._name}
     stack = parent.dependencies()
     seen = set()

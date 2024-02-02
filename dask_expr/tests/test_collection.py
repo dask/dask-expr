@@ -1976,6 +1976,17 @@ def test_contains(df):
         1 in df.x  # noqa: B015
 
 
+def test_filter_pushdown_unavailable(df):
+    df = df.rename_axis(index="hello")
+    result = df[df.x > 5] + df.x.sum()
+    assert result.simplify()._name == result._name
+
+    result = df[df.x > 5] + df.x.sum()
+    result = result[["x"]]
+    expected = df[["x"]][df.x > 5] + df.x.sum()
+    assert result.simplify()._name == expected.simplify()._name
+
+
 def test_filter_pushdown(df, pdf):
     indexer = df.x > 5
     result = df.rename_axis(index="hello")[indexer].optimize(fuse=False)
@@ -1985,14 +1996,6 @@ def test_filter_pushdown(df, pdf):
     df = df.rename_axis(index="hello")
     result = df[df.x > 5].simplify()
     assert result._name == expected._name
-
-    result = df[df.x > 5] + df.x.sum()
-    assert result.simplify()._name == result._name
-
-    result = df[df.x > 5] + df.x.sum()
-    result = result[["x"]]
-    expected = df[["x"]][df.x > 5] + df.x.sum()
-    assert result.simplify()._name == expected.simplify()._name
 
     pdf["z"] = 1
     df = from_pandas(pdf, npartitions=10)
