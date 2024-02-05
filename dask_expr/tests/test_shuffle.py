@@ -5,7 +5,6 @@ import numpy as np
 import pytest
 
 from dask_expr import from_pandas, new_collection
-from dask_expr._core import Expr
 from dask_expr._expr import Assign, Blockwise
 from dask_expr._reductions import NFirst, NLast
 from dask_expr._repartition import RepartitionToFewer
@@ -648,7 +647,6 @@ def test_set_index_sort_values_one_partition(pdf):
 
 
 def test_set_index_triggers_calc_when_accessing_divisions(pdf, df):
-    Expr._instances = {}  # divisions can be cached in the instance
     divisions_lru.data = OrderedDict()
     query = df.set_index("x")
     assert len(divisions_lru.data) == 0

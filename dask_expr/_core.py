@@ -40,7 +40,6 @@ class Expr:
         assert not kwargs, kwargs
         inst = object.__new__(cls)
         inst.operands = [_unpack_collections(o) for o in operands]
-        inst._simplified = {}
         _name = inst._name
         if _name in Expr._instances:
             return Expr._instances[_name]
@@ -268,7 +267,7 @@ class Expr:
 
         return expr
 
-    def simplify_once(self, dependents: defaultdict):
+    def simplify_once(self, dependents: defaultdict, simplified: dict):
         """Simplify an expression
 
         This leverages the ``._simplify_down`` and ``._simplify_up``
@@ -279,6 +278,8 @@ class Expr:
 
         dependents: defaultdict[list]
             The dependents for every node.
+        simplified: dict
+            Cache of simplified expressions for these dependents.
 
         Returns
         -------
@@ -286,9 +287,8 @@ class Expr:
             output expression
         """
         # Check if we've already simplified for these dependents
-        key = _tokenize_deterministic(sorted(dependents.keys()))
-        if key in self._simplified:
-            return self._simplified[key]
+        if self._name in simplified:
+            return simplified[self._name]
 
         expr = self
 
@@ -320,7 +320,10 @@ class Expr:
                 if isinstance(operand, Expr):
                     # Bandaid for now, waiting for Singleton
                     dependents[operand._name].append(weakref.ref(expr))
-                    new = operand.simplify_once(dependents=dependents)
+                    new = operand.simplify_once(
+                        dependents=dependents, simplified=simplified
+                    )
+                    simplified[operand._name] = new
                     if new._name != operand._name:
                         changed = True
                 else:
@@ -332,14 +335,14 @@ class Expr:
 
             break
 
-        self._simplified = {key: expr}  # Cache the last result
         return expr
 
     def simplify(self) -> Expr:
         expr = self
         while True:
             dependents = collect_dependents(expr)
-            new = expr.simplify_once(dependents=dependents)
+            simplified = {}
+            new = expr.simplify_once(dependents=dependents, simplified=simplified)
             if new._name == expr._name:
                 break
             expr = new
