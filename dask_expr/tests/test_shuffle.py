@@ -648,7 +648,7 @@ def test_set_index_sort_values_one_partition(pdf):
 
 
 def test_set_index_triggers_calc_when_accessing_divisions(pdf, df):
-    Expr._instances = {}  # Divisions can be cached in the instance
+    Expr._instances = {}  # divisions can be cached in the instance
     divisions_lru.data = OrderedDict()
     query = df.set_index("x")
     assert len(divisions_lru.data) == 0
