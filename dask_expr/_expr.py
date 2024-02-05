@@ -3281,6 +3281,11 @@ def _check_dependents_are_predicates(expr, other_names, parent: Expr, dependents
         e_dependents = {x()._name for x in dependents[e._name] if x() is not None}
 
         if not e_dependents.issubset(allowed_expressions):
+            from dask_expr.io._delayed import _DelayedExpr
+
+            if isinstance(e, _DelayedExpr):
+                continue
+
             return False
         allowed_expressions.add(e._name)
         stack.extend(e.dependencies())
@@ -3291,6 +3296,7 @@ def _check_dependents_are_predicates(expr, other_names, parent: Expr, dependents
 def calc_divisions_for_align(*exprs):
     dfs = [df for df in exprs if isinstance(df, Expr) and df.ndim > 0]
     if not all(df.known_divisions for df in dfs):
+        are_co_aligned(*exprs)
         raise ValueError(
             "Not all divisions are known, can't align "
             "partitions. Please use `set_index` "
