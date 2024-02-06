@@ -2791,6 +2791,9 @@ class _DelayedExpr(Expr):
         self.obj = obj
         self.operands = [obj]
 
+    def __str__(self):
+        return f"{type(self).__name__}({str(self.obj)})"
+
     @property
     def _name(self):
         return self.obj.key
