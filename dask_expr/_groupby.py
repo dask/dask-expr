@@ -539,11 +539,13 @@ class Size(SingleAggregation):
             and not isinstance(self._slice, list)
             or self.frame.ndim == 1
         ):
-            # Single projections influence the result and are allowed
+            # Scalar slices influence the result and are allowed, e.g. the name of
+            # the series is different
             return
 
         # We can remove every column since pandas reduces to a Series anyway
         by_columns = self._by_columns
+        by_columns = [c for c in by_columns if c in self.frame.columns]
         if set(by_columns) == set(self.frame.columns):
             return
 

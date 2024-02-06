@@ -932,3 +932,9 @@ def test_groupby_size_drop_columns(df, pdf):
     result = df[["y", "z"]].groupby(df.x).size()
     assert result.simplify()._name == df[[]].groupby(df.x).size().simplify()._name
     assert_eq(result, pdf[["y", "z"]].groupby(pdf.x).size())
+
+    pdf = pdf.set_index("x")
+    df = from_pandas(pdf, npartitions=10)
+    result = df.groupby("x").size()
+    assert_eq(result, pdf.groupby("x").size())
+    assert result.simplify()._name == df[[]].groupby("x").size().simplify()._name
