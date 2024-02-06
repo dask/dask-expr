@@ -341,8 +341,7 @@ class Expr:
         expr = self
         while True:
             dependents = collect_dependents(expr)
-            simplified = {}
-            new = expr.simplify_once(dependents=dependents, simplified=simplified)
+            new = expr.simplify_once(dependents=dependents, simplified={})
             if new._name == expr._name:
                 break
             expr = new

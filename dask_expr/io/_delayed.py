@@ -23,7 +23,6 @@ class _DelayedExpr(Expr):
     _parameters = ["obj"]
 
     def __init__(self, obj):
-        self._simplified = {}
         self.obj = obj
         self.operands = [obj]
 
