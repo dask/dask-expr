@@ -1372,6 +1372,16 @@ def test_columns_assignment():
     assert_eq(df, ddf)
 
 
+def test_parent_mixed_column_assignment():
+    pdf = pd.DataFrame(list(range(100)))
+    df = from_pandas(pdf, npartitions=4)
+    df["fold"] = 0
+    df["fold"] = df["fold"].map_partitions(
+        lambda x: pd.Series(np.random.randint(0, 4, len(x)))
+    )
+    df.simplify()
+
+
 def test_setitem_triggering_realign():
     a = from_pandas(pd.DataFrame({"A": range(12)}), npartitions=3)
     b = from_pandas(pd.Series(range(12), name="B"), npartitions=4)
