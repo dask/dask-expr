@@ -1745,7 +1745,7 @@ class GroupBy:
         ):
             if len(result.columns) < 1:
                 raise NotImplementedError(
-                    "Cannnot call `SeriesGroupBy.var` on the key column. "
+                    "Cannot call `SeriesGroupBy.var` on the key column. "
                     "Please use `aggregate` if you really need to do this."
                 )
             result = result[result.columns[0]]
@@ -1785,7 +1785,7 @@ class GroupBy:
         ):
             if len(result.columns) < 1:
                 raise NotImplementedError(
-                    "Cannnot call `SeriesGroupBy.std` on the key column. "
+                    "Cannot call `SeriesGroupBy.std` on the key column. "
                     "Please use `aggregate` if you really need to do this."
                 )
             result = result[result.columns[0]]
