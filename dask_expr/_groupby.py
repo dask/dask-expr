@@ -539,7 +539,7 @@ class Size(SingleAggregation):
             and not isinstance(self._slice, list)
             or self.frame.ndim == 1
         ):
-            # Scalar slices influence the result and are allowed, e.g. the name of
+            # Scalar slices influence the result and are allowed, i.e., the name of
             # the series is different
             return
 
