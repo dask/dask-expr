@@ -31,6 +31,7 @@ from dask_expr._expr import Filter, OpAlignPartitions, ToFrame, are_co_aligned
 from dask_expr._reductions import Len
 from dask_expr._shuffle import Shuffle
 from dask_expr.datasets import timeseries
+from dask_expr.io import FromPandas
 from dask_expr.tests._util import _backend_library, assert_eq, xfail_gpu
 
 # Set DataFrame backend for this module
@@ -247,6 +248,26 @@ def test_squeeze():
 
     with pytest.raises(ValueError, match=f"No axis test for object type {type(ddf)}"):
         ddf.squeeze(axis="test")
+
+
+def test_filter_pushdown_reducer_in_predicate():
+    pdf = pd.DataFrame(
+        {"a": [1, 2, 3, 4, 5, 100], "b": ["a", "b", "b", "a", "b", "c"], "c": 1, "d": 2}
+    )
+    df = from_pandas(pdf, npartitions=2)
+    df = df[df.b.isin(["a", "b"])]
+    avg = df["a"].mean()
+
+    result = df[df["a"] > avg]["a"]
+    pdf = pdf[pdf.b.isin(["a", "b"])]
+    avg = pdf["a"].mean()
+    expected = pdf[pdf["a"] > avg]["a"]
+    assert_eq(result, expected)
+    q = result.simplify()
+    assert isinstance(q.expr, Filter)  # Projection was pushed through
+    assert isinstance(q.expr.frame, Filter)  # Filters not squashed
+    assert isinstance(q.expr.frame.frame.frame, FromPandas)
+    assert q.expr.frame.frame.frame.columns == ["a", "b"]
 
 
 def test_index_divisions():
@@ -882,6 +903,13 @@ def test_isin(df, pdf):
     values = [1, 2]
     assert_eq(pdf.isin(values), df.isin(values))
     assert_eq(pdf.x.isin(values), df.x.isin(values))
+
+
+def test_isin_repr(df):
+    result = df.isin([1, 2])
+    # This was raising previously
+    result = result.__repr__()
+    assert "<dask_expr.expr.DataFrame: expr=Isin(frame=df, values=" in result
 
 
 def test_round(pdf):
@@ -2349,3 +2377,38 @@ def test_filter_optimize_condition():
 def test_scalar_repr(df):
     result = repr(df.size)
     assert result == "<dask_expr.expr.Scalar: expr=df.size(), dtype=int64>"
+
+
+def test_reset_index_filter_pushdown(df):
+    q = df.reset_index()
+    result = q[q.x > 5]
+    expected = df[df.x > 5].reset_index()
+    assert result.simplify()._name == expected._name
+
+    # We are accessing the index, so don't do anything
+    result = q[q["index"] > 5]
+    expected = df[df.index > 5].reset_index()
+    assert result.simplify()._name == expected._name
+
+    q = df.x.reset_index(drop=True)
+    result = q[q > 5]
+    expected = df["x"]
+    expected = expected[expected > 5].reset_index(drop=True)
+    assert result.simplify()._name == expected.simplify()._name
+
+    q = df.x.reset_index()
+    result = q[q.x > 5]
+    expected = df["x"]
+    expected = expected[expected > 5].reset_index()
+    assert result.simplify()._name == expected.simplify()._name
+
+
+def test_astype_filter_pushdown(df, pdf):
+    result = df.astype("float64")
+    result = result[result.x > 5.0]
+    expected = df[df.x > 5.0].astype("float64")
+    assert result.simplify()._name == expected._name
+
+    expected = pdf.astype("float64")
+    expected = expected[expected.x > 5.0]
+    assert_eq(result, expected)

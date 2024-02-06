@@ -909,6 +909,14 @@ def test_series_groupby_cumfunc_with_named_index(npartitions, func):
     assert_eq(result, expected)
 
 
+@pytest.mark.parametrize("attr", ("std", "var"))
+def test_series_groupby_not_supported(df, attr):
+    # See: https://github.com/dask-contrib/dask-expr/issues/840
+    g = df.groupby("x")
+    with pytest.raises(NotImplementedError, match="Please use `aggregate`"):
+        getattr(g.x, attr)()
+
+
 def test_groupby_size_drop_columns(df, pdf):
     result = df.groupby("x").size()
     assert result.simplify()._name == df[["x"]].groupby("x").size().simplify()._name

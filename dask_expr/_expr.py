@@ -1275,15 +1275,19 @@ class Elemwise(Blockwise):
         if isinstance(parent, Filter) and self._filter_passthrough_available(
             parent, dependents
         ):
+            predicate = None
             if self.frame.ndim == 1 and self.ndim == 2:
                 name = self.frame._meta.name
                 # Avoid Projection since we are already a Series
                 subs = Projection(self, name)
                 predicate = parent.predicate.substitute(subs, self.frame)
-            else:
-                predicate = parent.predicate.substitute(self, self.frame)
-            return type(self)(self.frame[predicate], *self.operands[1:])
+            return self._filter_simplification(parent, predicate)
         return super()._simplify_up(parent, dependents)
+
+    def _filter_simplification(self, parent, predicate=None):
+        if predicate is None:
+            predicate = parent.predicate.substitute(self, self.frame)
+        return type(self)(self.frame[predicate], *self.operands[1:])
 
 
 class RenameFrame(Elemwise):
@@ -1496,6 +1500,10 @@ class AsType(Elemwise):
         return meta
 
     def _simplify_up(self, parent, dependents):
+        if isinstance(parent, Filter) and self._filter_passthrough_available(
+            parent, dependents
+        ):
+            return self._filter_simplification(parent)
         if isinstance(parent, Projection):
             dtypes = self.operand("dtypes")
             columns = determine_column_projection(self, parent, dependents)
@@ -1936,19 +1944,33 @@ class Filter(Blockwise):
         if isinstance(parent, Filter) and not isinstance(self.frame, Filter):
             if not self.frame._filter_passthrough_available(self, dependents):
                 # We want to collect filters again when we can't move them
-                # anymore. Otherwise, a chain of Filters might nlock Projections
+                # anymore. Otherwise, a chain of Filters might block Projections
                 # We start with the first Filter, e.g. if my child isn't a filter
                 # anymore. Filters above that don't know if the first Filter can
                 # still move further
-                return self.frame[
-                    self.predicate & parent.predicate.substitute(self, self.frame)
-                ]
+                if is_filter_pushdown_available(
+                    self, parent, dependents, allow_reduction=False
+                ):
+                    # We can only squash 2 filters together if the predicate of parent
+                    # does not directly depend on self, e.g. if
+                    # sum is in the predicate of parent, then removing self would
+                    # alter the condition of parent because the sum changes, this is
+                    # only relevant in broadcasting cases
+                    return self.frame[
+                        self.predicate & parent.predicate.substitute(self, self.frame)
+                    ]
         if isinstance(parent, Projection):
             if self.frame._filter_passthrough_available(self, dependents):
                 # We can't push Projections through filters if the preceding operation
                 # allows us to push filters further down the graph because Projections
                 # block filter pushdown
-                return
+                if not isinstance(self.frame, Filter):
+                    return
+                elif is_filter_pushdown_available(
+                    self.frame, self, dependents, allow_reduction=False
+                ):
+                    return
+
             return plain_column_projection(self, parent, dependents)
         if isinstance(parent, Index):
             return self.frame.index[self.predicate]
@@ -2160,6 +2182,7 @@ class ResetIndex(Elemwise):
     _defaults = {"drop": False, "name": no_default}
     _keyword_only = ["drop", "name"]
     operation = M.reset_index
+    _filter_passthrough = True
 
     @functools.cached_property
     def _kwargs(self) -> dict:
@@ -2170,6 +2193,35 @@ class ResetIndex(Elemwise):
 
     def _divisions(self):
         return (None,) * (self.frame.npartitions + 1)
+
+    def _simplify_up(self, parent, dependents):
+        if isinstance(parent, Filter) and self._filter_passthrough_available(
+            parent, dependents
+        ):
+            parents = [
+                p().columns
+                for p in dependents[self._name]
+                if p() is not None and not isinstance(p(), Filter)
+            ]
+            predicate = None
+            if not set(flatten(parents, list)).issubset(set(self.frame.columns)):
+                # one of the filters is the Index
+                self._filter_passthrough_available(parent, dependents)
+                name = self.operand("name")
+                if name is no_default:
+                    name = "index"
+                # replace the projection of the former index with the actual index
+                subs = Projection(self, name)
+                predicate = parent.predicate.substitute(subs, Index(self.frame))
+            elif self.frame.ndim == 1 and not self.operand("drop"):
+                name = self.frame._meta.name
+                # Avoid Projection since we are already a Series
+                subs = Projection(self, name)
+                predicate = parent.predicate.substitute(subs, self.frame)
+            return self._filter_simplification(parent, predicate)
+
+        if isinstance(parent, Projection):
+            return plain_column_projection(self, parent, dependents)
 
 
 class AddPrefixSeries(Elemwise):
@@ -2401,7 +2453,6 @@ class BlockwiseTailIndex(BlockwiseTail):
 
 class Binop(Elemwise):
     _parameters = ["left", "right"]
-    _filter_passthrough = False
 
     def __str__(self):
         return f"{self.left} {self._operator_repr} {self.right}"
@@ -2776,6 +2827,9 @@ class _DelayedExpr(Expr):
     def __init__(self, obj):
         self.obj = obj
         self.operands = [obj]
+
+    def __str__(self):
+        return f"{type(self).__name__}({str(self.obj)})"
 
     @property
     def _name(self):
@@ -3346,21 +3400,25 @@ def plain_column_projection(expr, parent, dependents, additional_columns=None):
     return type(parent)(result, parent.operand("columns"))
 
 
-def is_filter_pushdown_available(expr, parent, dependents):
+def is_filter_pushdown_available(expr, parent, dependents, allow_reduction=True):
     parents = [x() for x in dependents[expr._name] if x() is not None]
     filters = {e._name for e in parents if isinstance(e, Filter)}
-    if len(filters) > 1:
-        # Don't push down for differing filters
+    if len(filters) != 1:
+        # Don't push down if not exactly one Filter
         return False
     if len(parents) == 1:
         return True
 
     # We have to see if the non-filter ops are all exclusively part of the predicates
     others = {e._name for e in parents if not isinstance(e, Filter)}
-    return _check_dependents_are_predicates(expr, others, parent, dependents)
+    return _check_dependents_are_predicates(
+        expr, others, parent, dependents, allow_reduction
+    )
 
 
-def _check_dependents_are_predicates(expr, other_names, parent: Expr, dependents):
+def _check_dependents_are_predicates(
+    expr, other_names, parent: Expr, dependents, allow_reduction=True
+):
     # singleton approach should make this easier
 
     # Walk down the predicate side from the filter to see if we can arrive at
@@ -3379,6 +3437,10 @@ def _check_dependents_are_predicates(expr, other_names, parent: Expr, dependents
         seen.add(e._name)
 
         e_dependents = {x()._name for x in dependents[e._name] if x() is not None}
+
+        if not allow_reduction:
+            if isinstance(e, Reduction):
+                return False
 
         if not e_dependents.issubset(allowed_expressions):
             if isinstance(e, _DelayedExpr):
@@ -3497,6 +3559,7 @@ from dask_expr._reductions import (
     NBytes,
     NuniqueApprox,
     Prod,
+    Reduction,
     Size,
     Sum,
     Var,
