@@ -1,5 +1,7 @@
 from collections import OrderedDict
+from itertools import product
 
+import numpy as np
 import pytest
 
 from dask_expr import from_pandas
@@ -72,3 +74,26 @@ def test_broadcasting_scalar(pdf, df, op):
         )
         > 0
     )
+
+
+@pytest.mark.parametrize("sorted_index", [False, True])
+@pytest.mark.parametrize("sorted_map_index", [False, True])
+def test_series_map(sorted_index, sorted_map_index):
+    base = pd.Series(
+        ["".join(np.random.choice(["a", "b", "c"], size=3)) for x in range(100)]
+    )
+    if not sorted_index:
+        index = np.arange(100)
+        np.random.shuffle(index)
+        base.index = index
+    map_index = ["".join(x) for x in product("abc", repeat=3)]
+    mapper = pd.Series(np.random.randint(50, size=len(map_index)), index=map_index)
+    if not sorted_map_index:
+        map_index = np.array(map_index)
+        np.random.shuffle(map_index)
+        mapper.index = map_index
+    expected = base.map(mapper)
+    dask_base = from_pandas(base, npartitions=1, sort=False)
+    dask_map = from_pandas(mapper, npartitions=1, sort=False)
+    result = dask_base.map(dask_map)
+    assert_eq(expected, result)

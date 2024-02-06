@@ -660,6 +660,15 @@ class MaybeAlignPartitions(Expr):
     _projection_passthrough = False
 
     def _divisions(self):
+        if {df.npartitions for df in self.args} == {1}:
+            divs = []
+            for df in self.args:
+                divs.extend(list(df.divisions))
+            try:
+                return min(divs), max(divs)
+            except TypeError:
+                # either unknown divisions or int-str mix
+                return None, None
         return calc_divisions_for_align(*self.args)
 
     def _simplify_up(self, parent, dependents):
@@ -684,7 +693,11 @@ class OpAlignPartitions(MaybeAlignPartitions):
         # This can be expensive when something that has expensive division
         # calculation is in the Expression
         dfs = self.args
-        if len(dfs) == 1 or all(dfs[0].divisions == df.divisions for df in dfs):
+        if (
+            len(dfs) == 1
+            or all(dfs[0].divisions == df.divisions for df in dfs)
+            or len(self.divisions) == 2
+        ):
             return self._op(self.frame, self.op, self.other, *self.operands[3:])
 
         from dask_expr._repartition import RepartitionDivisions
