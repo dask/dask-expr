@@ -2470,6 +2470,9 @@ class DataFrame(FrameBase):
             - inner: form intersection of calling frame's index (or column if
               on is specified) with other frame's index, preserving the order
               of the calling's one
+            - leftsemi: Choose all rows in left where the join keys can be found
+              in right. Won't duplicate rows if the keys are duplicated in right.
+              Drops all columns from right.
 
         on : label or list
             Column or index level names to join on. These must be found in both
