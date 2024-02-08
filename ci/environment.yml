@@ -11,5 +11,4 @@ dependencies:
   - pre-commit
   - pip:
       - git+https://github.com/dask/distributed
-      # DNM
-      - git+https://github.com/crusaderky/dask@deterministic_tokenize
+      - git+https://github.com/dask/dask
