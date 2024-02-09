@@ -856,7 +856,7 @@ def test_merge_scalar_comparison():
 
 def test_merge_leftsemi():
     pdf1 = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6, 1, 2, 3], "b": 1})
-    pdf2 = pd.DataFrame({"a": [1, 2, 2, 4, 4], "c": 1})
+    pdf2 = pd.DataFrame({"a": [1, 2, 2, 4, 4, 10], "c": 1})
     df1 = from_pandas(pdf1, npartitions=2)
     df2 = from_pandas(pdf2, npartitions=2)
     assert_eq(
