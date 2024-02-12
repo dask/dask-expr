@@ -23,12 +23,14 @@ from dask_expr._expr import (  # noqa: F401
     Filter,
     Index,
     Isin,
+    MaybeAlignPartitions,
     PartitionsFiltered,
     Projection,
     Unaryop,
     determine_column_projection,
     is_filter_pushdown_available,
 )
+from dask_expr._reductions import Reduction
 from dask_expr._repartition import Repartition
 from dask_expr._shuffle import (
     RearrangeByColumn,
@@ -36,6 +38,7 @@ from dask_expr._shuffle import (
     _select_columns_or_index,
 )
 from dask_expr._util import _convert_to_list, _tokenize_deterministic, is_scalar
+from dask_expr.io import IO
 
 _HASH_COLUMN_NAME = "__hash_partition"
 _PARTITION_COLUMN = "_partitions"
@@ -135,6 +138,35 @@ class Merge(Expr):
             kwargs["how"] = "left"
         return make_meta(left.merge(right, **kwargs))
 
+    def _find_partition_changer(self, expr):
+        # Look for an operation that reorganizes the number of partitions
+        # We ignore Blockwise stuff and reducers
+        stack = [expr]
+        seen = set()
+        result_nodes = []
+        while stack:
+            node = stack.pop()
+            if node._name in seen:
+                continue
+            seen.add(node._name)
+
+            if isinstance(node, Reduction):
+                continue
+            elif node.ndim == 0 or node.npartitions == 1:
+                continue
+            elif isinstance(node, IO):
+                return node
+            elif isinstance(node, (Blockwise, MaybeAlignPartitions)):
+                stack.extend(node.dependencies())
+                continue
+
+            result_nodes.append(node)
+        if len(result_nodes):
+            # The node with the maximum number of partitions will most likely have
+            # dominated the resulting partition count
+            return list(sorted(result_nodes, key=lambda x: x.npartitions))[-1]
+        return expr
+
     @functools.cached_property
     def _npartitions(self):
         if self.operand("_npartitions") is not None:
@@ -144,14 +176,21 @@ class Merge(Expr):
         if self.left.npartitions <= self.right.npartitions:
             df_lower = self.left
             df_higher = self.right
+            merge_base_columns = self._find_partition_changer(self.right).columns
         else:
             df_lower = self.right
             df_higher = self.left
+            merge_base_columns = self._find_partition_changer(self.left).columns
         npartitions = df_higher.npartitions
-        factor = (len(df_lower.columns) + len(df_higher.columns)) / len(
-            df_higher.columns
-        )
-        return int(npartitions * factor)
+        common_merge_columns = []
+        if self.left_on is not None and self.right_on is not None:
+            common_merge_columns = set(_convert_to_list(self.left_on)) & set(
+                _convert_to_list(self.right_on)
+            )
+        factor = (
+            len(df_lower.columns) + len(df_higher.columns) - len(common_merge_columns)
+        ) / len(merge_base_columns)
+        return int(math.floor(npartitions * factor))
 
     @property
     def _bcast_left(self):
@@ -807,6 +846,12 @@ class BlockwiseMerge(Merge, Blockwise):
     """
 
     is_broadcast_join = False
+
+    @functools.cached_property
+    def _npartitions(self):
+        if self.operand("_npartitions") is not None:
+            return self.operand("_npartitions")
+        return max(self.left.npartitions, self.right.npartitions)
 
     def _divisions(self):
         if self.left.npartitions == self.right.npartitions:
