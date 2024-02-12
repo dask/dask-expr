@@ -139,7 +139,19 @@ class Merge(Expr):
     def _npartitions(self):
         if self.operand("_npartitions") is not None:
             return self.operand("_npartitions")
-        return max(self.left.npartitions, self.right.npartitions)
+        if min(self.left.npartitions, self.right.npartitions) == 1:
+            return max(self.left.npartitions, self.right.npartitions)
+        if self.left.npartitions <= self.right.npartitions:
+            df_lower = self.left
+            df_higher = self.right
+        else:
+            df_lower = self.right
+            df_higher = self.left
+        npartitions = df_higher.npartitions
+        factor = (len(df_lower.columns) + len(df_higher.columns)) / len(
+            df_higher.columns
+        )
+        return int(npartitions * factor)
 
     @property
     def _bcast_left(self):
