@@ -507,6 +507,41 @@ class ApplyConcatApply(Expr):
             ignore_index=getattr(self, "ignore_index", True),
         )
 
+    def _adjust_for_pipelinebreaker(self):
+        if self._pipeline_breaker_counter is not None:
+            return
+        from dask_expr.io.io import IO
+
+        seen = set()
+        stack = self.dependencies()
+        io_nodes = []
+        counter = 1
+
+        while stack:
+            node = stack.pop()
+
+            if node._name in seen:
+                continue
+            seen.add(node._name)
+
+            if isinstance(node, IO):
+                io_nodes.append(node)
+                continue
+            elif isinstance(node, ApplyConcatApply):
+                counter += 1
+                continue
+            stack.extend(node.dependencies())
+        if len(io_nodes) == 0:
+            return
+        io_nodes_new = [
+            io.substitute_parameters({"_pipeline_breaker_counter": counter})
+            for io in io_nodes
+        ]
+        expr = self
+        for io_node_old, io_node_new in zip(io_nodes, io_nodes_new):
+            expr = expr.substitute(io_node_old, io_node_new)
+        return expr.substitute_parameters({"_pipeline_breaker_counter": counter})
+
 
 class Unique(ApplyConcatApply):
     _parameters = ["frame", "split_every", "split_out", "shuffle_method"]
@@ -773,13 +808,23 @@ class Reduction(ApplyConcatApply):
         if isinstance(parent, Projection):
             return plain_column_projection(self, parent, dependents)
 
+    def _pipe_down(self):
+        return self._adjust_for_pipelinebreaker()
+
 
 class Sum(Reduction):
-    _parameters = ["frame", "skipna", "numeric_only", "split_every"]
+    _parameters = [
+        "frame",
+        "skipna",
+        "numeric_only",
+        "split_every",
+        "_pipeline_breaker_counter",
+    ]
     _defaults = {
         "split_every": False,
         "numeric_only": False,
         "skipna": True,
+        "_pipeline_breaker_counter": None,
     }
     reduction_chunk = M.sum
 
@@ -1090,8 +1135,21 @@ class Moment(ArrayReduction):
 
 
 class Mean(Reduction):
-    _parameters = ["frame", "skipna", "numeric_only", "split_every", "axis"]
-    _defaults = {"skipna": True, "numeric_only": False, "split_every": False, "axis": 0}
+    _parameters = [
+        "frame",
+        "skipna",
+        "numeric_only",
+        "split_every",
+        "axis",
+        "_pipeline_breaker_counter",
+    ]
+    _defaults = {
+        "skipna": True,
+        "numeric_only": False,
+        "split_every": False,
+        "axis": 0,
+        "_pipeline_breaker_counter": None,
+    }
 
     @functools.cached_property
     def _meta(self):
@@ -1267,8 +1325,21 @@ def _nlast(df, columns, n, ascending):
 
 
 class NFirst(NLargest):
-    _parameters = ["frame", "n", "_columns", "ascending", "split_every"]
-    _defaults = {"n": 5, "_columns": None, "ascending": None, "split_every": None}
+    _parameters = [
+        "frame",
+        "n",
+        "_columns",
+        "ascending",
+        "split_every",
+        "_pipeline_breaker_counter",
+    ]
+    _defaults = {
+        "n": 5,
+        "_columns": None,
+        "ascending": None,
+        "split_every": None,
+        "_pipeline_breaker_counter": None,
+    }
     reduction_chunk = _nfirst
     reduction_aggregate = _nfirst
 

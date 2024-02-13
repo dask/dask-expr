@@ -1205,7 +1205,7 @@ class RenameSeries(Elemwise):
         args = [
             meta_nonempty(op._meta) if isinstance(op, Expr) else op for op in self._args
         ]
-        return self.operation(*args, **self._kwargs)
+        return make_meta(self.operation(*args, **self._kwargs))
 
     @staticmethod
     def operation(df, index, sorted_index):
@@ -2062,6 +2062,9 @@ class ResetIndex(Elemwise):
     operation = M.reset_index
     _filter_passthrough = True
 
+    def __new__(cls, *args, **kwargs):
+        return super().__new__(cls, *args, **kwargs)
+
     @functools.cached_property
     def _kwargs(self) -> dict:
         kwargs = {"drop": self.drop}
@@ -2099,7 +2102,11 @@ class ResetIndex(Elemwise):
             return self._filter_simplification(parent, predicate)
 
         if isinstance(parent, Projection):
-            if self.frame.ndim == 1 and not self.drop and not isinstance(parent, list):
+            if (
+                self.frame.ndim == 1
+                and not self.drop
+                and not isinstance(parent.operand("columns"), list)
+            ):
                 col = parent.operand("columns")
                 if col in (self.name, "index"):
                     return

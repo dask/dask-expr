@@ -53,6 +53,12 @@ class Expr:
     def _tune_up(self, parent):
         return None
 
+    def _pipe_down(self):
+        return None
+
+    def _pipe_up(self, parent):
+        return None
+
     def _cull_down(self):
         return None
 
@@ -342,6 +348,7 @@ class Expr:
         while True:
             dependents = collect_dependents(expr)
             new = expr.simplify_once(dependents=dependents, simplified={})
+            new = new.rewrite("pipe")
             if new._name == expr._name:
                 break
             expr = new
