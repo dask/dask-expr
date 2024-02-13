@@ -11,7 +11,7 @@ from dask_expr.io import ReadParquet
 
 
 def _make_file(dir, df=None):
-    fn = os.path.join(str(dir), f"myfile.{format}")
+    fn = os.path.join(str(dir), f"myfile.parquet")
     if df is None:
         df = pd.DataFrame({c: range(10) for c in "abcde"})
     df.to_parquet(fn)
