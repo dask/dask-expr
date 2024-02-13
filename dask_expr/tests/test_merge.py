@@ -5,6 +5,7 @@ import pytest
 
 from dask_expr import Merge, from_pandas, merge, repartition
 from dask_expr._expr import Filter, Projection
+from dask_expr._merge import BroadcastJoin
 from dask_expr._shuffle import Shuffle
 from dask_expr.tests._util import _backend_library, assert_eq
 
@@ -774,6 +775,27 @@ def test_filter_merge():
     assert df.simplify()._name == df._name
 
 
+def test_filter_merge_suffixes():
+    pdf1 = pd.DataFrame({"a": [1, 2, 3, 4], "b": 1})
+    pdf2 = pd.DataFrame({"a": [1, 2, 3, 4], "b": 2})
+    df1 = from_pandas(pdf1, npartitions=2)
+    df2 = from_pandas(pdf2, npartitions=2)
+    q = df1.merge(df2, on="a", suffixes=("", "_right"))
+    result = q[q.b < 2]
+    expected = pdf1.merge(pdf2, on="a", suffixes=("", "_right"))
+    assert_eq(result, expected[expected.b < 2], check_index=False)
+    result = q[q.b > 1]
+    expected = df1.merge(df2, on="a", suffixes=("", "_right"))
+    assert_eq(result, expected[expected.b > 1], check_index=False)
+
+    q = df1.merge(df2, on="a", suffixes=("_left", "_right"))
+    result = q[q.b_left < 2]
+    # Don't do anything for now
+    assert result._name == result.simplify()._name
+    expected = df1.merge(df2, on="a", suffixes=("_left", "_right"))
+    assert_eq(result, expected[expected.b_left < 2], check_index=False)
+
+
 def test_merge_avoid_overeager_filter_pushdown():
     df = pd.DataFrame({"a": [1, 2, 3], "b": 1})
     ddf = from_pandas(df, npartitions=2)
@@ -840,3 +862,52 @@ def test_isin_filter_pushdown(how):
         & (table.l_commitdate < table.l_receiptdate)
     ].sort_values(by="o_orderkey", ascending=False)
     assert_eq(result, expected, check_index=False)
+
+
+def test_merge_filter_pushdown_broadcast():
+    pdf = pd.DataFrame({"a": [1, 2, 3], "b": 1})
+    pdf2 = pd.DataFrame({"c": [1, 2, 3], "b": 1})
+    df1 = from_pandas(pdf, npartitions=2)
+    df2 = from_pandas(pdf2, npartitions=2)
+    result = df1.merge(df2, broadcast=True, shuffle_method="tasks")
+    result = result[result.a > 1]
+    result.optimize().pprint()
+    assert len(list(result.optimize().find_operations(BroadcastJoin))) > 0
+
+
+def test_merge_scalar_comparison():
+    pdf = pd.DataFrame({"a": [1, 2, 3], "b": 1})
+    pdf2 = pd.DataFrame({"c": [1, 2, 3], "b": 1})
+    df = from_pandas(pdf, npartitions=2)
+    df2 = from_pandas(pdf2, npartitions=2)
+    result = df.merge(df2)
+    result = result[result.a > df.a.mean()]
+    expected = pdf.merge(pdf2)
+    expected = expected[expected.a > pdf.a.mean()]
+    assert_eq(result, expected, check_index=False)
+
+
+def test_merge_leftsemi():
+    pdf1 = pd.DataFrame({"aa": [1, 2, 3, 4, 5, 6, 1, 2, 3], "bb": 1})
+    pdf2 = pd.DataFrame({"aa": [1, 2, 2, 4, 4, 10], "cc": 1})
+
+    df1 = from_pandas(pdf1, npartitions=2)
+    df2 = from_pandas(pdf2, npartitions=2)
+    assert_eq(
+        df1.merge(df2, how="leftsemi"),
+        pdf1[pdf1.aa.isin(pdf2.aa)],
+        check_index=False,
+    )
+    df2 = df2.rename(columns={"aa": "dd"})
+    assert_eq(
+        df1.merge(df2, how="leftsemi", left_on="aa", right_on="dd"),
+        pdf1[pdf1.aa.isin(pdf2.aa)],
+        check_index=False,
+    )
+    with pytest.raises(NotImplementedError, match="right_index=True"):
+        df1.merge(df2, how="leftsemi")
+
+    pdf2 = pdf2.set_index("aa")
+    df2 = from_pandas(pdf2, npartitions=2)
+    with pytest.raises(NotImplementedError, match="on columns from the index"):
+        df1.merge(df2, how="leftsemi", on="aa")

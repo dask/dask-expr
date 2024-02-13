@@ -3,14 +3,13 @@ from __future__ import annotations
 import functools
 from collections import OrderedDict, UserDict
 from collections.abc import Hashable, Sequence
-from types import LambdaType
 from typing import Any, Literal, TypeVar, cast
 
 import dask
 import numpy as np
 import pandas as pd
 from dask import config
-from dask.base import normalize_object, normalize_token, tokenize
+from dask.base import normalize_token, tokenize
 from dask.dataframe._compat import is_string_dtype
 from dask.utils import get_default_shuffle_method
 from packaging.version import Version
