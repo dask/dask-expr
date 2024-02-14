@@ -123,6 +123,8 @@ class Repartition(Expr):
             raise NotImplementedError()
 
     def _simplify_up(self, parent, dependents):
+        if isinstance(parent, Filter):
+            print()
         if isinstance(parent, Filter) and self._filter_passthrough_available(
             parent, dependents
         ):
