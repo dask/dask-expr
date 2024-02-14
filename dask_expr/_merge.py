@@ -13,13 +13,21 @@ from dask.dataframe.shuffle import partitioning_index
 from dask.utils import apply, get_default_shuffle_method
 from toolz import merge_sorted, unique
 
-from dask_expr._expr import (
+from dask_expr._expr import (  # noqa: F401
+    And,
+    Binop,
     Blockwise,
+    DropDuplicatesBlockwise,
+    Elemwise,
     Expr,
+    Filter,
     Index,
+    Isin,
     PartitionsFiltered,
     Projection,
+    Unaryop,
     determine_column_projection,
+    is_filter_pushdown_available,
 )
 from dask_expr._repartition import Repartition
 from dask_expr._shuffle import (
@@ -73,6 +81,33 @@ class Merge(Expr):
         "broadcast": None,
     }
 
+    @property
+    def _filter_passthrough(self):
+        raise NotImplementedError(
+            "please use _filter_passthrough_available to make this decision"
+        )
+
+    def _filter_passthrough_available(self, parent, dependents):
+        if is_filter_pushdown_available(self, parent, dependents) or isinstance(
+            parent.predicate, And
+        ):
+            predicate = parent.predicate
+            # This protects against recursion, no need to separate ands if the first
+            # condition violates the join direction
+            while isinstance(predicate, And):
+                predicate = predicate.left
+            predicate_columns = self._predicate_columns(predicate)
+            if predicate_columns is None:
+                return False
+            if predicate_columns.issubset(self.left.columns):
+                return self.how in ("left", "inner", "leftsemi")
+            elif predicate_columns.issubset(self.right.columns):
+                return self.how in ("right", "inner")
+            elif len(predicate_columns) > 0:
+                return False
+            return True
+        return False
+
     def __str__(self):
         return f"Merge({self._name[-7:]})"
 
@@ -95,7 +130,10 @@ class Merge(Expr):
     def _meta(self):
         left = meta_nonempty(self.left._meta)
         right = meta_nonempty(self.right._meta)
-        return make_meta(left.merge(right, **self.kwargs))
+        kwargs = self.kwargs.copy()
+        if kwargs["how"] == "leftsemi":
+            kwargs["how"] = "left"
+        return make_meta(left.merge(right, **kwargs))
 
     @functools.cached_property
     def _npartitions(self):
@@ -144,7 +182,7 @@ class Merge(Expr):
             elif (
                 use_left
                 and self.right.npartitions == 1
-                and self.how in ("inner", "left")
+                and self.how in ("inner", "left", "leftsemi")
             ):
                 return self.left.divisions
             else:
@@ -185,7 +223,7 @@ class Merge(Expr):
         s_method = self.shuffle_method or get_default_shuffle_method()
         if (
             s_method in ("tasks", "p2p")
-            and self.how in ("inner", "left", "right")
+            and self.how in ("inner", "left", "right", "leftsemi")
             and self.how != broadcast_side
             and broadcast is not False
         ):
@@ -203,7 +241,7 @@ class Merge(Expr):
             or self.left.npartitions == 1
             and self.how in ("right", "inner")
             or self.right.npartitions == 1
-            and self.how in ("left", "inner")
+            and self.how in ("left", "inner", "leftsemi")
         )
 
     @functools.cached_property
@@ -278,7 +316,6 @@ class Merge(Expr):
                 shuffle_right_on = right.index._meta.name
                 if shuffle_right_on is None:
                     shuffle_right_on = "_index"
-
             if self.is_broadcast_join:
                 left, right = self._bcast_left, self._bcast_right
 
@@ -351,7 +388,63 @@ class Merge(Expr):
         # Blockwise merge
         return BlockwiseMerge(left, right, **self.kwargs)
 
+    def _predicate_columns(self, predicate):
+        if isinstance(predicate, (Projection, Unaryop, Isin)):
+            return set(predicate.columns)
+        elif isinstance(predicate, Binop):
+            if isinstance(predicate, And):
+                return None
+
+            if not isinstance(predicate.right, Expr):
+                return set(predicate.left.columns)
+            elif isinstance(predicate.right, Elemwise):
+                return set(predicate.left.columns) | set(predicate.right.columns)
+            else:
+                return None
+        else:
+            # Unsupported predicate type
+            return None
+
     def _simplify_up(self, parent, dependents):
+        if isinstance(parent, Filter):
+            if not self._filter_passthrough_available(parent, dependents):
+                return
+            predicate = parent.predicate
+            if not self._filter_passthrough_available(parent, dependents):
+                return
+
+            if isinstance(predicate, And):
+                new = Filter(self, predicate.left)
+                new_pred = predicate.right.substitute(self, new)
+                return Filter(new, new_pred)
+
+            predicate_cols = self._predicate_columns(parent.predicate)
+            new_left, new_right = self.left, self.right
+            left_suffix, right_suffix = self.suffixes[0], self.suffixes[1]
+            if predicate_cols and predicate_cols.issubset(self.left.columns):
+                if left_suffix != "" and any(
+                    f"{col}{left_suffix}" in self.columns and col in self.right.columns
+                    for col in predicate_cols
+                ):
+                    # column was renamed so the predicate must go into the other side
+                    pass
+                else:
+                    left_filter = predicate.substitute(self, self.left)
+                    new_left = self.left[left_filter]
+            if predicate_cols and predicate_cols.issubset(self.right.columns):
+                if right_suffix != "" and any(
+                    f"{col}{right_suffix}" in self.columns and col in self.left.columns
+                    for col in predicate_cols
+                ):
+                    # column was renamed so the predicate must go into the other side
+                    pass
+                else:
+                    right_filter = predicate.substitute(self, self.right)
+                    new_right = self.right[right_filter]
+            if new_right is self.right and new_left is self.left:
+                # don't drop the filter
+                return
+            return type(self)(new_left, new_right, *self.operands[2:])
         if isinstance(parent, (Projection, Index)):
             # Reorder the column projection to
             # occur before the Merge
@@ -608,15 +701,17 @@ class BroadcastJoin(Merge, PartitionsFiltered):
                 # Specify arg list for `merge_chunk`
                 _merge_args = [
                     (
-                        operator.getitem,
-                        (split_name, part_out),
-                        j,
-                    )
-                    if self.how != "inner"
-                    else (other, part_out),
+                        (
+                            operator.getitem,
+                            (split_name, part_out),
+                            j,
+                        )
+                        if self.how != "inner"
+                        else (other, part_out)
+                    ),
                     (bcast_name, j),
                 ]
-                if self.broadcast_side == "left":
+                if self.broadcast_side in ("left", "leftsemi"):
                     _merge_args.reverse()
 
                 inter_key = (inter_name, part_out, j)
@@ -665,6 +760,13 @@ def create_assign_index_merge_transfer():
         )
 
     return assign_index_merge_transfer
+
+
+class SemiMerge(Merge):
+    def _lower(self):
+        # This is cheap and avoids shuffling unnecessary data
+        right = DropDuplicatesBlockwise(self.right)
+        return Merge(self.left, right, *self.operands[2:])
 
 
 class BlockwiseMerge(Merge, Blockwise):

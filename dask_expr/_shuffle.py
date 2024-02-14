@@ -33,6 +33,7 @@ from dask_expr._expr import (
     Assign,
     Blockwise,
     Expr,
+    Filter,
     PartitionsFiltered,
     Projection,
     ToSeriesIndex,
@@ -52,10 +53,8 @@ from dask_expr._reductions import (
     NBytes,
     NFirst,
     NLargest,
-    NLargestSlow,
     NLast,
     NSmallest,
-    NSmallestSlow,
     Prod,
     Size,
     Sum,
@@ -63,7 +62,7 @@ from dask_expr._reductions import (
     ValueCounts,
 )
 from dask_expr._repartition import Repartition, RepartitionToFewer
-from dask_expr._util import LRU, _convert_to_list, is_valid_nth_dtype
+from dask_expr._util import LRU, _convert_to_list
 
 
 class ShuffleBase(Expr):
@@ -83,6 +82,7 @@ class ShuffleBase(Expr):
         "index_shuffle": None,
     }
     _is_length_preserving = True
+    _filter_passthrough = True
 
     def __str__(self):
         return f"Shuffle({self._name[-7:]})"
@@ -91,6 +91,10 @@ class ShuffleBase(Expr):
         return [self.frame, self.partitioning_index]
 
     def _simplify_up(self, parent, dependents):
+        if isinstance(parent, Filter) and self._filter_passthrough_available(
+            parent, dependents
+        ):
+            return self._filter_simplification(parent)
         if isinstance(parent, Projection):
             # Move the column projection to come
             # before the abstract Shuffle
@@ -860,10 +864,7 @@ class SetIndex(BaseSetIndexSortValues):
             and isinstance(self._other, (int, str))
             and self._other in self.frame.columns
         ):
-            if is_valid_nth_dtype(self.frame._meta.dtypes[self._other]):
-                head = NSmallest(self.frame, n=parent.n, _columns=self._other)
-            else:
-                head = NSmallestSlow(self.frame, n=parent.n, _columns=self._other)
+            head = NFirst(self.frame, n=parent.n, _columns=self._other, ascending=True)
             return SetIndex(head, _other=self._other)
 
         if (
@@ -871,10 +872,7 @@ class SetIndex(BaseSetIndexSortValues):
             and isinstance(self._other, (int, str))
             and self._other in self.frame.columns
         ):
-            if is_valid_nth_dtype(self.frame._meta.dtypes[self._other]):
-                tail = NLargest(self.frame, n=parent.n, _columns=self._other)
-            else:
-                tail = NLargestSlow(self.frame, n=parent.n, _columns=self._other)
+            tail = NLast(self.frame, n=parent.n, _columns=self._other, ascending=True)
             return SetIndex(tail, _other=self._other)
 
         if isinstance(parent, Projection):
@@ -1022,48 +1020,15 @@ class SortValues(BaseSetIndexSortValues):
     def _simplify_up(self, parent, dependents):
         from dask_expr._expr import Filter, Head, Tail
 
-        _all_ascending = (
-            self.ascending
-            if isinstance(self.ascending, bool)
-            else all(ascending for ascending in self.ascending)
-        )
-        _all_descending = (
-            not self.ascending
-            if isinstance(self.ascending, bool)
-            else all(not ascending for ascending in self.ascending)
-        )
-
         if isinstance(parent, Head):
-            if _all_ascending:
-                if is_valid_nth_dtype(self._meta_by_dtype):
-                    return NSmallest(self.frame, n=parent.n, _columns=self.by)
-                else:
-                    return NSmallestSlow(self.frame, n=parent.n, _columns=self.by)
-            elif _all_descending:
-                if is_valid_nth_dtype(self._meta_by_dtype):
-                    return NLargest(self.frame, n=parent.n, _columns=self.by)
-                else:
-                    return NLargestSlow(self.frame, n=parent.n, _columns=self.by)
-            else:
-                return NFirst(
-                    self.frame, n=parent.n, _columns=self.by, ascending=self.ascending
-                )
+            return NFirst(
+                self.frame, n=parent.n, _columns=self.by, ascending=self.ascending
+            )
 
         if isinstance(parent, Tail):
-            if _all_ascending:
-                if is_valid_nth_dtype(self._meta_by_dtype):
-                    return NLargest(self.frame, n=parent.n, _columns=self.by)
-                else:
-                    return NLargestSlow(self.frame, n=parent.n, _columns=self.by)
-            elif _all_descending:
-                if is_valid_nth_dtype(self._meta_by_dtype):
-                    return NSmallest(self.frame, n=parent.n, _columns=self.by)
-                else:
-                    return NSmallestSlow(self.frame, n=parent.n, _columns=self.by)
-            else:
-                return NLast(
-                    self.frame, n=parent.n, _columns=self.by, ascending=self.ascending
-                )
+            return NLast(
+                self.frame, n=parent.n, _columns=self.by, ascending=self.ascending
+            )
 
         if isinstance(parent, Filter):
             return SortValues(

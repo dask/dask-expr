@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import os
+import weakref
 from collections import defaultdict
 from collections.abc import Generator
 
@@ -15,7 +16,7 @@ from toolz.dicttoolz import merge
 from dask_expr._util import _BackendData, _tokenize_deterministic
 
 
-def _unpack_expr(o):
+def _unpack_collections(o):
     if isinstance(o, Expr):
         return o, o._name
     elif hasattr(o, "expr"):
@@ -27,23 +28,24 @@ def _unpack_expr(o):
 class Expr:
     _parameters = []
     _defaults = {}
+    _instances = weakref.WeakValueDictionary()
 
-    def __init__(self, *args, **kwargs):
-        self._dependencies = {}
+    def __new__(cls, *args, **kwargs):
         operands = list(args)
-        for parameter in type(self)._parameters[len(operands) :]:
+        for parameter in cls._parameters[len(operands) :]:
             try:
                 operands.append(kwargs.pop(parameter))
             except KeyError:
-                operands.append(type(self)._defaults[parameter])
+                operands.append(cls._defaults[parameter])
         assert not kwargs, kwargs
+
         parsed_operands = []
         children = set()
         _subgraphs = []
         _subgraph_instances = []
         _graph_instances = {}
         for o in operands:
-            expr, name = _unpack_expr(o)
+            expr, name = _unpack_collections(o)
             parsed_operands.append(expr)
             if name is not None:
                 children.add(name)
@@ -51,18 +53,45 @@ class Expr:
                 _subgraph_instances.append(expr._graph_instances)
                 _graph_instances[name] = expr
 
-        self.operands = parsed_operands
-        name = self._name
+        inst = object.__new__(cls)
+        inst.operands = parsed_operands
+        _name = inst._name
+
         # Graph instances is a mapping name -> Expr instance
         # Graph itself is a mapping of dependencies mapping names to a set of names
-        self._graph_instances = merge(_graph_instances, *_subgraph_instances)
-        self._graph = merge(*_subgraphs)
-        self._graph[name] = children
+
+        if _name in Expr._instances:
+            inst = Expr._instances[_name]
+            inst._graph_instances.update(merge(_graph_instances, *_subgraph_instances))
+            inst._graph.update(merge(*_subgraphs))
+            inst._graph[_name].update(children)
+            # Probably a bad idea to have a self ref
+            inst._graph_instances[_name] = inst
+            return inst
+
+        Expr._instances[_name] = inst
+        inst._graph_instances = merge(_graph_instances, *_subgraph_instances)
+        inst._graph = merge(*_subgraphs)
+        inst._graph[_name] = children
         # Probably a bad idea to have a self ref
-        self._graph_instances[name] = self
+        inst._graph_instances[_name] = inst
 
     def __hash__(self):
-        raise TypeError("Expr objects can't be used in sets or dicts or similar, use the _name instead")
+        raise TypeError(
+            "Expr objects can't be used in sets or dicts or similar, use the _name instead"
+        )
+
+    def _tune_down(self):
+        return None
+
+    def _tune_up(self, parent):
+        return None
+
+    def _cull_down(self):
+        return None
+
+    def _cull_up(self, parent):
+        return None
 
     def __str__(self):
         s = ", ".join(
@@ -243,28 +272,26 @@ class Expr:
             _continue = False
 
             # Rewrite this node
-            if down_name in expr.__dir__():
-                out = getattr(expr, down_name)()
+            out = getattr(expr, down_name)()
+            if out is None:
+                out = expr
+            if not isinstance(out, Expr):
+                return out
+            if out._name != expr._name:
+                expr = out
+                continue
+
+            # Allow children to rewrite their parents
+            for child in expr.dependencies():
+                out = getattr(child, up_name)(expr)
                 if out is None:
                     out = expr
                 if not isinstance(out, Expr):
                     return out
-                if out._name != expr._name:
+                if out is not expr and out._name != expr._name:
                     expr = out
-                    continue
-
-            # Allow children to rewrite their parents
-            for child in expr.dependencies():
-                if up_name in child.__dir__():
-                    out = getattr(child, up_name)(expr)
-                    if out is None:
-                        out = expr
-                    if not isinstance(out, Expr):
-                        return out
-                    if out is not expr and out._name != expr._name:
-                        expr = out
-                        _continue = True
-                        break
+                    _continue = True
+                    break
 
             if _continue:
                 continue
@@ -289,7 +316,7 @@ class Expr:
 
         return expr
 
-    def simplify_once(self, dependents: defaultdict):
+    def simplify_once(self, dependents: defaultdict, simplified: dict):
         """Simplify an expression
 
         This leverages the ``._simplify_down`` and ``._simplify_up``
@@ -300,12 +327,18 @@ class Expr:
 
         dependents: defaultdict[list]
             The dependents for every node.
+        simplified: dict
+            Cache of simplified expressions for these dependents.
 
         Returns
         -------
         expr:
             output expression
         """
+        # Check if we've already simplified for these dependents
+        if self._name in simplified:
+            return simplified[self._name]
+
         expr = self
 
         while True:
@@ -334,7 +367,12 @@ class Expr:
             changed = False
             for operand in expr.operands:
                 if isinstance(operand, Expr):
-                    new = operand.simplify_once(dependents=dependents)
+                    # Bandaid for now, waiting for Singleton
+                    dependents[operand._name].append(weakref.ref(expr))
+                    new = operand.simplify_once(
+                        dependents=dependents, simplified=simplified
+                    )
+                    simplified[operand._name] = new
                     if new._name != operand._name:
                         changed = True
                 else:
@@ -352,7 +390,7 @@ class Expr:
         expr = self
         while True:
             dependents = expr.dependents()
-            new = expr.simplify_once(dependents=dependents)
+            new = expr.simplify_once(dependents=dependents, simplified={})
             if new._name == expr._name:
                 break
             expr = new
@@ -500,7 +538,11 @@ class Expr:
         >>> (df + 10).substitute(10, 20)
         df + 20
         """
+        return self._substitute(old, new, _seen=set())
 
+    def _substitute(self, old, new, _seen):
+        if self._name in _seen:
+            return self
         # Check if we are replacing a literal
         if isinstance(old, Expr):
             substitute_literal = False
@@ -515,7 +557,7 @@ class Expr:
         update = False
         for operand in self.operands:
             if isinstance(operand, Expr):
-                val = operand.substitute(old, new)
+                val = operand._substitute(old, new, _seen)
                 if operand._name != val._name:
                     update = True
                 new_exprs.append(val)
@@ -530,7 +572,7 @@ class Expr:
                 # do so for the `Fused.exprs` operand.
                 val = []
                 for op in operand:
-                    val.append(op.substitute(old, new))
+                    val.append(op._substitute(old, new, _seen))
                     if val[-1]._name != op._name:
                         update = True
                 new_exprs.append(val)
@@ -547,6 +589,8 @@ class Expr:
 
         if update:  # Only recreate if something changed
             return type(self)(*new_exprs)
+        else:
+            _seen.add(self._name)
         return self
 
     def substitute_parameters(self, substitutions: dict) -> Expr:

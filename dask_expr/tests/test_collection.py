@@ -11,7 +11,7 @@ import dask
 import dask.array as da
 import numpy as np
 import pytest
-from dask.dataframe._compat import PANDAS_GE_210
+from dask.dataframe._compat import PANDAS_GE_210, PANDAS_GE_220
 from dask.dataframe.utils import UNKNOWN_CATEGORIES
 from dask.utils import M
 
@@ -27,10 +27,11 @@ from dask_expr import (
     to_numeric,
     to_timedelta,
 )
-from dask_expr._expr import are_co_aligned
+from dask_expr._expr import Filter, OpAlignPartitions, ToFrame, are_co_aligned
 from dask_expr._reductions import Len
 from dask_expr._shuffle import Shuffle
 from dask_expr.datasets import timeseries
+from dask_expr.io import FromPandas
 from dask_expr.tests._util import _backend_library, assert_eq, xfail_gpu
 
 # Set DataFrame backend for this module
@@ -214,10 +215,12 @@ def test_map_index():
     ddf = from_pandas(df, npartitions=2)
     assert ddf.known_divisions is True
 
-    cleared = ddf.index.map(lambda x: x * 10)
+    with pytest.warns(UserWarning):
+        cleared = ddf.index.map(lambda x: x * 10)
     assert cleared.known_divisions is False
 
-    applied = ddf.index.map(lambda x: x * 10, is_monotonic=True)
+    with pytest.warns(UserWarning):
+        applied = ddf.index.map(lambda x: x * 10, is_monotonic=True)
     assert applied.known_divisions is True
     assert applied.divisions == tuple(x * 10 for x in ddf.divisions)
 
@@ -245,6 +248,26 @@ def test_squeeze():
 
     with pytest.raises(ValueError, match=f"No axis test for object type {type(ddf)}"):
         ddf.squeeze(axis="test")
+
+
+def test_filter_pushdown_reducer_in_predicate():
+    pdf = pd.DataFrame(
+        {"a": [1, 2, 3, 4, 5, 100], "b": ["a", "b", "b", "a", "b", "c"], "c": 1, "d": 2}
+    )
+    df = from_pandas(pdf, npartitions=2)
+    df = df[df.b.isin(["a", "b"])]
+    avg = df["a"].mean()
+
+    result = df[df["a"] > avg]["a"]
+    pdf = pdf[pdf.b.isin(["a", "b"])]
+    avg = pdf["a"].mean()
+    expected = pdf[pdf["a"] > avg]["a"]
+    assert_eq(result, expected)
+    q = result.simplify()
+    assert isinstance(q.expr, Filter)  # Projection was pushed through
+    assert isinstance(q.expr.frame, Filter)  # Filters not squashed
+    assert isinstance(q.expr.frame.frame.frame, FromPandas)
+    assert q.expr.frame.frame.frame.columns == ["a", "b"]
 
 
 def test_index_divisions():
@@ -368,6 +391,22 @@ def test_ffill_and_bfill(limit, axis, how):
     assert_eq(actual, expected)
 
 
+def test_reset_index_projections(pdf):
+    pdf = pdf.set_index("x").y
+    df = from_pandas(pdf, npartitions=10)
+    assert_eq(df.reset_index().y, pdf.reset_index().y, check_index=False)
+    assert_eq(df.reset_index().x, pdf.reset_index().x, check_index=False)
+    q = df.reset_index()
+    q = q + q.x.sum()
+    expected = pdf.reset_index()
+    expected = expected + expected.x.sum()
+    assert_eq(q, expected, check_index=False)
+
+    pdf = pdf.to_frame()
+    df = from_pandas(pdf, npartitions=10)
+    assert_eq(df.y.reset_index()[["y"]], pdf.y.reset_index()[["y"]], check_index=False)
+
+
 def test_series_map_meta():
     ser = pd.Series(
         ["".join(np.random.choice(["a", "b", "c"], size=3)) for x in range(100)]
@@ -377,7 +416,8 @@ def test_series_map_meta():
     expected = ser.map(mapper)
     dask_base = from_pandas(ser, npartitions=5)
     dask_map = from_pandas(mapper, npartitions=5)
-    result = dask_base.map(dask_map)
+    with pytest.warns(UserWarning):
+        result = dask_base.map(dask_map)
     assert_eq(expected, result)
 
 
@@ -613,7 +653,6 @@ def test_to_timestamp(pdf, how):
         lambda df: df.x.clip(lower=10, upper=50),
         lambda df: df.clip(lower=3, upper=7, axis=1),
         lambda df: df.x.between(left=10, right=50),
-        lambda df: df.x.map(lambda x: x + 1),
         lambda df: df[df.x > 5],
         lambda df: df.assign(a=df.x + df.y, b=df.x - df.y),
         lambda df: df.assign(a=df.x + df.y, b=lambda x: x.a + 1),
@@ -798,6 +837,18 @@ def test_drop_not_implemented(pdf, df):
 @pytest.mark.parametrize(
     "func",
     [
+        lambda df: df.combine_first(df),
+        lambda df: df.x.combine_first(df.y),
+    ],
+)
+def test_blockwise_pandas_only(func, pdf, df):
+    assert_eq(func(pdf), func(df))
+
+
+@xfail_gpu("func not supported by cudf")
+@pytest.mark.parametrize(
+    "func",
+    [
         lambda df: df.apply(lambda row, x, y=10: row * x + y, x=2, axis=1),
         lambda df: df.index.map(lambda x: x + 1),
         pytest.param(
@@ -806,12 +857,12 @@ def test_drop_not_implemented(pdf, df):
                 not PANDAS_GE_210, reason="Only available from 2.1"
             ),
         ),
-        lambda df: df.combine_first(df),
-        lambda df: df.x.combine_first(df.y),
+        lambda df: df.x.map(lambda x: x + 1),
     ],
 )
-def test_blockwise_pandas_only(func, pdf, df):
-    assert_eq(func(pdf), func(df))
+def test_blockwise_pandas_only_warning(func, pdf, df):
+    with pytest.warns(UserWarning):
+        assert_eq(func(pdf), func(df))
 
 
 def test_map_meta(pdf, df):
@@ -868,6 +919,13 @@ def test_isin(df, pdf):
     values = [1, 2]
     assert_eq(pdf.isin(values), df.isin(values))
     assert_eq(pdf.x.isin(values), df.x.isin(values))
+
+
+def test_isin_repr(df):
+    result = df.isin([1, 2])
+    # This was raising previously
+    result = result.__repr__()
+    assert "<dask_expr.expr.DataFrame: expr=Isin(frame=df, values=" in result
 
 
 def test_round(pdf):
@@ -983,14 +1041,15 @@ def test_broadcast(pdf, df):
 
 def test_persist(pdf, df):
     a = df + 2
+    a *= 2
     b = a.persist()
 
     assert_eq(a, b)
     assert len(a.__dask_graph__()) > len(b.__dask_graph__())
 
-    assert len(b.__dask_graph__()) == b.npartitions
+    assert len(b.__dask_graph__()) == 2 * b.npartitions
 
-    assert_eq(b.y.sum(), (pdf + 2).y.sum())
+    assert_eq(b.y.sum(), ((pdf + 2) * 2).y.sum())
 
 
 def test_index(pdf, df):
@@ -1035,6 +1094,7 @@ def test_head_down(df):
     assert not isinstance(optimized.expr, expr.Head)
 
 
+@pytest.mark.skipif(not PANDAS_GE_220, reason="not implemented")
 def test_case_when(pdf, df):
     result = df.x.case_when([(df.x.eq(1), 1), (df.y == 10, 2.5)])
     expected = pdf.x.case_when([(pdf.x.eq(1), 1), (pdf.y == 10, 2.5)])
@@ -1275,12 +1335,14 @@ def test_serialization(pdf, df):
 
 @xfail_gpu("Cannot apply lambda function in cudf")
 def test_size_optimized(df):
-    expr = (df.x + 1).apply(lambda x: x).size
+    with pytest.warns(UserWarning, match="metadata"):
+        expr = (df.x + 1).apply(lambda x: x).size
     out = optimize(expr)
     expected = optimize(df.x.size)
     assert out._name == expected._name
 
-    expr = (df + 1).apply(lambda x: x, axis=1).size
+    with pytest.warns(UserWarning, match="metadata"):
+        expr = (df + 1).apply(lambda x: x, axis=1).size
     out = optimize(expr)
     expected = optimize(df.size)
     assert out._name == expected._name
@@ -1326,6 +1388,20 @@ def test_columns_assignment():
     assert_eq(df, ddf)
 
 
+def test_parent_mixed_column_assignment():
+    pdf = pd.DataFrame(list(range(20)))
+    df = from_pandas(pdf, npartitions=4)
+    df["a"] = 0
+    df["a"] = df["a"].map_partitions(
+        lambda x: pd.Series(
+            np.full(len(x), 1, dtype="int"),
+            index=x.index,
+        )
+    )
+    pdf["a"] = pd.Series(np.full(len(pdf), 1, dtype="int"))
+    assert_eq(df, pdf)
+
+
 def test_setitem_triggering_realign():
     a = from_pandas(pd.DataFrame({"A": range(12)}), npartitions=3)
     b = from_pandas(pd.Series(range(12), name="B"), npartitions=4)
@@ -1360,7 +1436,8 @@ def test_apply_infer_columns():
     def return_df(x):
         return pd.Series([x.sum(), x.mean()], index=["sum", "mean"])
 
-    result = ddf.apply(return_df, axis=1)
+    with pytest.warns(UserWarning, match="metadata"):
+        result = ddf.apply(return_df, axis=1)
     assert_eq(result.columns, pd.Index(["sum", "mean"]))
     assert_eq(result, df.apply(return_df, axis=1))
 
@@ -1725,7 +1802,7 @@ def test_unknown_partitions_different_root():
     pdf2 = pd.DataFrame({"a": 1}, index=[4, 3, 2, 1])
     df2 = from_pandas(pdf2, npartitions=2, sort=False)
     with pytest.raises(ValueError, match="Not all divisions"):
-        df.align(df2)
+        df.align(df2)[0].optimize()
 
 
 @pytest.mark.parametrize("split_every", [None, 2])
@@ -1879,6 +1956,7 @@ def test_assign_different_roots():
 
     with pytest.raises(ValueError, match="Not all divisions"):
         df["new"] = df2.x
+        df.optimize()
 
 
 def test_assign_pandas_inputs(df, pdf):
@@ -1920,8 +1998,6 @@ def test_can_co_align(df, pdf):
 
 
 def test_avoid_alignment():
-    from dask_expr._align import AlignPartitions
-
     a = pd.DataFrame({"x": range(100)})
     da = from_pandas(a, npartitions=4)
 
@@ -1932,11 +2008,12 @@ def test_avoid_alignment():
     # Give correct results even when misaligned
     assert_eq(a.x + b.y, da.x + db.y)
 
-    assert not any(isinstance(ex, AlignPartitions) for ex in (db.y + db.z).walk())
-    assert not any(isinstance(ex, AlignPartitions) for ex in (da.x + db.y.sum()).walk())
+    assert not any(isinstance(ex, OpAlignPartitions) for ex in (db.y + db.z).walk())
+    assert not any(
+        isinstance(ex, OpAlignPartitions) for ex in (da.x + db.y.sum()).walk()
+    )
 
 
-@pytest.mark.xfail(reason="can't hash HLG")
 def test_mixed_array_op(df, pdf):
     assert_eq(df.x + df.y.values, pdf.x + pdf.y.values)
     assert_eq(df + df.values, pdf + pdf.values)
@@ -1976,24 +2053,33 @@ def test_contains(df):
         1 in df.x  # noqa: B015
 
 
+def test_filter_pushdown_unavailable(df):
+    df = df.rename_axis(index="hello")
+    result = df[df.x > 5] + df.x.sum()
+    assert result.simplify()._name == result._name
+
+    result = df[df.x > 5] + df.x.sum()
+    result = result[["x"]]
+    expected = df[["x"]][df.x > 5] + df.x.sum()
+    assert result.simplify()._name == expected.simplify()._name
+
+
 def test_filter_pushdown(df, pdf):
     indexer = df.x > 5
-    result = df.replace(1, 5)[indexer].optimize(fuse=False)
-    expected = df[indexer].replace(1, 5)
+    result = df.rename_axis(index="hello")[indexer].optimize(fuse=False)
+    expected = df[indexer].rename_axis(index="hello")
     assert result._name == expected._name
 
-    # Don't do anything here
-    df = df.replace(1, 5)
-    result = df[df.x > 5].optimize(fuse=False)
-    expected = df[df.x > 5]
+    df = df.rename_axis(index="hello")
+    result = df[df.x > 5].simplify()
     assert result._name == expected._name
 
     pdf["z"] = 1
     df = from_pandas(pdf, npartitions=10)
-    df2 = df.replace(1, 5)
-    result = df2[df2.x > 5][["x", "y"]].optimize(fuse=False)
-    df_opt = df[["x", "y"]].simplify().replace(1, 5)
-    expected = df_opt[df_opt.x > 5]
+    df2 = df.rename_axis(index="hello")
+    result = df2[df2.x > 5][["x", "y"]].simplify()
+    df_opt = df[["x", "y"]]
+    expected = df_opt[df_opt.x > 5].rename_axis(index="hello").simplify()
     assert result._name == expected._name
 
 
@@ -2294,6 +2380,16 @@ def test_items(df, pdf):
         assert_eq(expect_col, actual_col)
 
 
+def test_predicate_pushdown_ndim_change(df, pdf):
+    result = df.sum().to_frame()
+    result = result[result[0] > 1]
+    expected = pdf.sum().to_frame()
+    expected = expected[expected[0] > 1]
+    assert_eq(result, expected)
+    assert isinstance(result.simplify().expr.frame, Filter)
+    assert isinstance(result.simplify().expr, ToFrame)
+
+
 def test_axes(df, pdf):
     assert len(df.axes) == len(pdf.axes)
     [assert_eq(d, p) for d, p in zip(df.axes, pdf.axes)]
@@ -2312,3 +2408,38 @@ def test_filter_optimize_condition():
 def test_scalar_repr(df):
     result = repr(df.size)
     assert result == "<dask_expr.expr.Scalar: expr=df.size(), dtype=int64>"
+
+
+def test_reset_index_filter_pushdown(df):
+    q = df.reset_index()
+    result = q[q.x > 5]
+    expected = df[df.x > 5].reset_index()
+    assert result.simplify()._name == expected._name
+
+    # We are accessing the index, so don't do anything
+    result = q[q["index"] > 5]
+    expected = df[df.index > 5].reset_index()
+    assert result.simplify()._name == expected._name
+
+    q = df.x.reset_index(drop=True)
+    result = q[q > 5]
+    expected = df["x"]
+    expected = expected[expected > 5].reset_index(drop=True)
+    assert result.simplify()._name == expected.simplify()._name
+
+    q = df.x.reset_index()
+    result = q[q.x > 5]
+    expected = df["x"]
+    expected = expected[expected > 5].reset_index()
+    assert result.simplify()._name == expected.simplify()._name
+
+
+def test_astype_filter_pushdown(df, pdf):
+    result = df.astype("float64")
+    result = result[result.x > 5.0]
+    expected = df[df.x > 5.0].astype("float64")
+    assert result.simplify()._name == expected._name
+
+    expected = pdf.astype("float64")
+    expected = expected[expected.x > 5.0]
+    assert_eq(result, expected)

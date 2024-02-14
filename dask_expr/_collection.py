@@ -48,6 +48,7 @@ from dask.utils import (
     M,
     derived_from,
     get_meta_library,
+    key_split,
     maybe_pluralize,
     memory_repr,
     put_lines,
@@ -64,7 +65,6 @@ from tlz import first
 
 import dask_expr._backends  # noqa: F401
 from dask_expr import _expr as expr
-from dask_expr._align import AlignPartitions
 from dask_expr._backends import dataframe_creation_dispatch
 from dask_expr._categorical import CategoricalAccessor, Categorize, GetCategories
 from dask_expr._concat import Concat
@@ -164,18 +164,10 @@ def _wrap_expr_op(self, other, op=None):
 
     if not isinstance(other, expr.Expr):
         return new_collection(getattr(self.expr, op)(other))
-    elif (
-        expr.are_co_aligned(self.expr, other, allow_broadcast=False)
-        or other.npartitions == self.npartitions == 1
-        or min(self.ndim, other.ndim) == 0
-    ):
+    elif expr.are_co_aligned(self.expr, other):
         return new_collection(getattr(self.expr, op)(other))
     else:
-        return new_collection(
-            getattr(AlignPartitions(self.expr, other), op)(
-                AlignPartitions(other, self.expr)
-            )
-        )
+        return new_collection(expr.OpAlignPartitions(self, other, op))
 
 
 def _wrap_expr_method_operator(name, class_):
@@ -205,11 +197,17 @@ def _wrap_expr_method_operator(name, class_):
 
             frame = self
             if isinstance(other, FrameBase) and not expr.are_co_aligned(
-                self.expr, other.expr, allow_broadcast=False
+                self.expr, other.expr
             ):
-                divs = expr.calc_divisions_for_align(self.expr, other.expr)
-                frame, other = expr.maybe_align_partitions(
-                    self.expr, other.expr, divisions=divs
+                return new_collection(
+                    expr.MethodOperatorAlign(
+                        op=name,
+                        frame=frame,
+                        other=other,
+                        axis=axis,
+                        level=level,
+                        fill_value=fill_value,
+                    )
                 )
 
             return new_collection(
@@ -236,11 +234,17 @@ def _wrap_expr_method_operator(name, class_):
 
             frame = self
             if isinstance(other, FrameBase) and not expr.are_co_aligned(
-                self.expr, other.expr, allow_broadcast=False
+                self.expr, other.expr
             ):
-                divs = expr.calc_divisions_for_align(self.expr, other.expr)
-                frame, other = expr.maybe_align_partitions(
-                    self.expr, other.expr, divisions=divs
+                return new_collection(
+                    expr.MethodOperatorAlign(
+                        op=name,
+                        frame=frame,
+                        other=other,
+                        axis=axis,
+                        level=level,
+                        fill_value=fill_value,
+                    )
                 )
 
             return new_collection(
@@ -444,7 +448,12 @@ class FrameBase(DaskMethodsMixin):
 
     def __dask_postpersist__(self):
         state = new_collection(self.expr.lower_completely())
-        return from_graph, (state._meta, state.divisions, state._name)
+        return from_graph, (
+            state._meta,
+            state.divisions,
+            state.__dask_keys__(),
+            key_split(state._name),
+        )
 
     def __getattr__(self, key):
         try:
@@ -2397,9 +2406,9 @@ class DataFrame(FrameBase):
                     if not expr.are_co_aligned(
                         result.expr, v.expr, allow_broadcast=False
                     ):
-                        result = new_collection(expr.Assign(result, *args))
+                        result = expr.Assign(result, *args)
                         args = []
-                        result, v = result.expr._align_divisions(v.expr)
+                        result = new_collection(expr.AssignAlign(result, k, v.expr))
 
             elif not isinstance(v, FrameBase) and isinstance(v, Hashable):
                 pass
@@ -2450,7 +2459,7 @@ class DataFrame(FrameBase):
         Parameters
         ----------
         right: dask.dataframe.DataFrame
-        how : {'left', 'right', 'outer', 'inner'}, default: 'inner'
+        how : {'left', 'right', 'outer', 'inner', 'leftsemi'}, default: 'inner'
             How to handle the operation of the two objects:
 
             - left: use calling frame's index (or column if on is specified)
@@ -2461,6 +2470,9 @@ class DataFrame(FrameBase):
             - inner: form intersection of calling frame's index (or column if
               on is specified) with other frame's index, preserving the order
               of the calling's one
+            - leftsemi: Choose all rows in left where the join keys can be found
+              in right. Won't duplicate rows if the keys are duplicated in right.
+              Drops all columns from right.
 
         on : label or list
             Column or index level names to join on. These must be found in both
@@ -2689,9 +2701,12 @@ class DataFrame(FrameBase):
     @derived_from(pd.DataFrame)
     def combine(self, other, func, fill_value=None, overwrite=True):
         other = self._create_alignable_frame(other, "outer")
-        left, right = self.expr._align_divisions(other.expr, axis=0)
+        if not expr.are_co_aligned(self.expr, other.expr):
+            return new_collection(
+                expr.CombineFrameAlign(self, other, func, fill_value, overwrite)
+            )
         return new_collection(
-            expr.CombineFrame(left, right, func, fill_value, overwrite)
+            expr.CombineFrame(self, other, func, fill_value, overwrite)
         )
 
     @derived_from(
@@ -3736,13 +3751,11 @@ class Series(FrameBase):
     def map(self, arg, na_action=None, meta=None):
         if isinstance(arg, Series):
             if not expr.are_co_aligned(self.expr, arg.expr):
-                if not self.divisions == arg.divisions and {
-                    self.npartitions,
-                    arg.npartitions,
-                } != {1}:
-                    raise NotImplementedError(
-                        "passing a Series as arg isn't implemented yet"
-                    )
+                if meta is None:
+                    warnings.warn(meta_warning(meta))
+                return new_collection(
+                    expr.MapAlign(self, arg, op=None, na_action=na_action, meta=meta)
+                )
         if meta is None:
             meta = expr._emulate(M.map, self, arg, na_action=na_action, udf=True)
             warnings.warn(meta_warning(meta))
@@ -3956,8 +3969,11 @@ class Series(FrameBase):
     @derived_from(pd.Series)
     def combine(self, other, func, fill_value=None):
         other = self._create_alignable_frame(other, "outer")
-        left, right = self.expr._align_divisions(other.expr, axis=0)
-        return new_collection(expr.CombineSeries(left, right, func, fill_value))
+        if not expr.are_co_aligned(self.expr, other.expr):
+            return new_collection(
+                expr.CombineSeriesAlign(self, other, func, fill_value)
+            )
+        return new_collection(expr.CombineSeries(self, other, func, fill_value))
 
     @derived_from(pd.Series)
     def explode(self):
@@ -4254,10 +4270,11 @@ class Index(Series):
         """
         if isinstance(arg, Series):
             if not expr.are_co_aligned(self.expr, arg.expr):
-                if not self.divisions == arg.divisions:
-                    raise NotImplementedError(
-                        "passing a Series as arg isn't implemented yet"
-                    )
+                if meta is None:
+                    warnings.warn(meta_warning(meta))
+                return new_collection(
+                    expr.MapIndexAlign(self, arg, na_action, meta, is_monotonic)
+                )
         if meta is None:
             meta = expr._emulate(M.map, self, arg, na_action=na_action, udf=True)
             warnings.warn(meta_warning(meta))
@@ -4473,7 +4490,9 @@ def from_dask_dataframe(ddf: _Frame, optimize: bool = True) -> FrameBase:
     graph = ddf.dask
     if optimize:
         graph = ddf.__dask_optimize__(graph, ddf.__dask_keys__())
-    return from_graph(graph, ddf._meta, ddf.divisions, ddf._name)
+    return from_graph(
+        graph, ddf._meta, ddf.divisions, ddf.__dask_keys__(), key_split(ddf._name)
+    )
 
 
 def from_dask_array(x, columns=None, index=None, meta=None):
@@ -4681,12 +4700,25 @@ def merge(
     if on and not left_on and not right_on:
         left_on = right_on = on
 
-    supported_how = ("left", "right", "outer", "inner")
+    supported_how = ("left", "right", "outer", "inner", "leftsemi")
     if how not in supported_how:
         raise ValueError(
             f"dask.dataframe.merge does not support how='{how}'."
             f"Options are: {supported_how}."
         )
+
+    if how == "leftsemi":
+        if right_index or any(
+            o not in right.columns for o in _convert_to_list(right_on)
+        ):
+            raise NotImplementedError(
+                "how='leftsemi' does not support right_index=True or on columns from the index"
+            )
+        else:
+            right = right[_convert_to_list(right_on)].rename(
+                columns=dict(zip(_convert_to_list(right_on), _convert_to_list(left_on)))
+            )
+            right_on = left_on
 
     # Transform pandas objects into dask.dataframe objects
     if not is_dask_collection(left):
@@ -5143,7 +5175,7 @@ def map_overlap(
     if align_dataframes:
         dfs = [df] + args
         dfs = [df for df in dfs if isinstance(df, FrameBase)]
-        if len(dfs) > 1 and not expr.are_co_aligned(*dfs, allow_broadcast=False):
+        if len(dfs) > 1 and not expr.are_co_aligned(*dfs):
             return new_collection(
                 expr.MapOverlapAlign(
                     df,
@@ -5211,11 +5243,8 @@ def elemwise(op, *args, meta=no_default, out=None, transform_divisions=True, **k
     """
 
     args = _maybe_from_pandas(args)
-
-    # TODO: Add align partitions
-
     dfs = [df for df in args if isinstance(df, FrameBase)]
-    if len(dfs) <= 1 or expr.are_co_aligned(*dfs, allow_broadcast=False):
+    if len(dfs) <= 1 or expr.are_co_aligned(*dfs):
         result = new_collection(
             expr.UFuncElemwise(dfs[0], op, meta, transform_divisions, kwargs, *args)
         )

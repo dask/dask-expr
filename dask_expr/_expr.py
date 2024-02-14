@@ -70,6 +70,12 @@ class Expr(core.Expr):
     """
 
     _is_length_preserving = False
+    _filter_passthrough = False
+
+    def _filter_passthrough_available(self, parent, dependents):
+        return self._filter_passthrough and is_filter_pushdown_available(
+            self, parent, dependents
+        )
 
     @functools.cached_property
     def ndim(self):
@@ -310,8 +316,10 @@ class Expr(core.Expr):
         return Clip(self, lower=lower, upper=upper, axis=axis)
 
     def combine_first(self, other):
-        frame, other = self._align_divisions(other, axis=0)
-        return CombineFirst(frame, other=other)
+        if are_co_aligned(self, other):
+            return CombineFirst(self, other=other)
+        else:
+            return CombineFirstAlign(self, other)
 
     def to_timestamp(self, freq=None, how="start"):
         return ToTimestamp(self, freq=freq, how=how)
@@ -326,23 +334,15 @@ class Expr(core.Expr):
     def round(self, decimals=0):
         return Round(self, decimals=decimals)
 
-    def _mask_where_alignment(self, cond, other):
-        frame = self
-        if isinstance(cond, Expr) and isinstance(other, Expr):
-            frame, cond, other = frame._align_divisions(cond, other, axis=0)
-        elif isinstance(cond, Expr):
-            frame, cond = frame._align_divisions(cond, axis=0)
-        elif isinstance(other, Expr):
-            frame, other = frame._align_divisions(other, axis=0)
-        return frame, cond, other
-
     def where(self, cond, other=np.nan):
-        frame, cond, other = self._mask_where_alignment(cond, other)
-        return Where(frame, cond=cond, other=other)
+        if not are_co_aligned(self, *[c for c in [cond, other] if isinstance(c, Expr)]):
+            return WhereAlign(self, cond=cond, other=other)
+        return Where(self, cond=cond, other=other)
 
     def mask(self, cond, other=np.nan):
-        frame, cond, other = self._mask_where_alignment(cond, other)
-        return Mask(frame, cond=cond, other=other)
+        if not are_co_aligned(self, *[c for c in [cond, other] if isinstance(c, Expr)]):
+            return MaskAlign(self, cond=cond, other=other)
+        return Mask(self, cond=cond, other=other)
 
     def apply(self, function, *args, meta=None, **kwargs):
         return Apply(self, function, args, meta, kwargs)
@@ -351,31 +351,22 @@ class Expr(core.Expr):
         return Replace(self, to_replace=to_replace, value=value, regex=regex)
 
     def fillna(self, value=None):
-        frame = self
-        if isinstance(value, Expr):
-            frame, value = self._align_divisions(value, axis=None)
-        return Fillna(frame, value=value)
+        if isinstance(value, Expr) and not are_co_aligned(self, value):
+            return FillnaAlign(self, value=value)
+        return Fillna(self, value=value)
 
     def rename_axis(
         self, mapper=no_default, index=no_default, columns=no_default, axis=0
     ):
         return RenameAxis(self, mapper=mapper, index=index, columns=columns, axis=axis)
 
-    def _align_divisions(self, *exprs, axis=None):
-        dfs = [self] + list(exprs)
-        if are_co_aligned(self, *exprs) or axis in (1, "columns"):
-            return dfs
-        elif all(x.npartitions == 1 for x in dfs):
-            return dfs
-        else:
-            divisions = calc_divisions_for_align(*dfs)
-            return maybe_align_partitions(*dfs, divisions=divisions)
-
     def align(self, other, join="outer", axis=None, fill_value=None):
         from dask_expr._collection import new_collection
 
-        left, other = self._align_divisions(other, axis=axis)
-        aligned = _Align(left, other, join=join, axis=axis, fill_value=fill_value)
+        if not are_co_aligned(self, other):
+            aligned = AlignAlignPartitions(self, other, join, axis, fill_value)
+        else:
+            aligned = _Align(self, other, join, axis=axis, fill_value=fill_value)
 
         return new_collection(AlignGetitem(aligned, position=0)), new_collection(
             AlignGetitem(aligned, position=1)
@@ -430,6 +421,11 @@ class Expr(core.Expr):
     def dtypes(self):
         return self._meta.dtypes
 
+    def _filter_simplification(self, parent, predicate=None):
+        if predicate is None:
+            predicate = parent.predicate.substitute(self, self.frame)
+        return type(self)(self.frame[predicate], *self.operands[1:])
+
 
 class Literal(Expr):
     """Represent a literal (known) value as an `Expr`"""
@@ -462,7 +458,6 @@ class Blockwise(Expr):
     operation = None
     _keyword_only = []
     _projection_passthrough = False
-    _filter_passthrough = False
 
     @functools.cached_property
     def _meta(self):
@@ -649,36 +644,6 @@ def _get_meta_ufunc(dfs, args, func):
     ]
 
     return partial_by_order(*parts, function=func, other=other)
-
-
-class UFuncAlign(Expr):
-    _parameters = ["frame", "func", "meta", "kwargs"]
-    enforce_metadata = False
-
-    def __str__(self):
-        return f"UFunc({funcname(self.func)})"
-
-    @functools.cached_property
-    def args(self):
-        return self.operands[len(self._parameters) :]
-
-    @functools.cached_property
-    def _dfs(self):
-        return [df for df in self.args if isinstance(df, Expr)]
-
-    @functools.cached_property
-    def _meta(self):
-        if self.operand("meta") is not no_default:
-            return self.operand("meta")
-        return _get_meta_ufunc(self._dfs, self.args, self.func)
-
-    def _divisions(self):
-        return calc_divisions_for_align(*self.args)
-
-    def _lower(self):
-        args = maybe_align_partitions(*self.args, divisions=self._divisions())
-        dfs = [x for x in args if isinstance(x, Expr) and x.ndim > 0]
-        return UFuncElemwise(dfs[0], self.func, self._meta, False, self.kwargs, *args)
 
 
 class UFuncElemwise(MapPartitions):
@@ -1056,10 +1021,7 @@ class AlignGetitem(Blockwise):
         return self.frame._meta[self.position]
 
     def _divisions(self):
-        if self.position == 0:
-            return self.frame.frame._divisions()
-        else:
-            return self.frame.other._divisions()
+        return self.frame.divisions
 
 
 class ScalarToSeries(Blockwise):
@@ -1172,26 +1134,30 @@ class MemoryUsagePerPartition(Blockwise):
         return (None,) * (self.frame.npartitions + 1)
 
 
+class DropDuplicatesBlockwise(Blockwise):
+    _parameters = ["frame"]
+    operation = M.drop_duplicates
+
+
 class Elemwise(Blockwise):
     """
     This doesn't really do anything, but we anticipate that future
     optimizations, like `len` will care about which operations preserve length
     """
 
-    _filter_passthrough = True
     _is_length_preserving = True
 
     def _simplify_up(self, parent, dependents):
-        if self._filter_passthrough and isinstance(parent, Filter):
-            if self._name != parent.frame._name:
-                # We can't push the filter through the filter condition
-                return
-            parents = dependents[self._name]
-            if not all(isinstance(p, Filter) for p in parents):
-                return
-            return type(self)(
-                self.frame[parent.operand("predicate")], *self.operands[1:]
-            )
+        if isinstance(parent, Filter) and self._filter_passthrough_available(
+            parent, dependents
+        ):
+            predicate = None
+            if self.frame.ndim == 1 and self.ndim == 2:
+                name = self.frame._meta.name
+                # Avoid Projection since we are already a Series
+                subs = Projection(self, name)
+                predicate = parent.predicate.substitute(subs, self.frame)
+            return self._filter_simplification(parent, predicate)
         return super()._simplify_up(parent, dependents)
 
 
@@ -1207,8 +1173,6 @@ class RenameFrame(Elemwise):
             self.operand("columns"), Mapping
         ):
             reverse_mapping = {val: key for key, val in self.operand("columns").items()}
-            if is_series_like(parent._meta):
-                return
 
             columns = determine_column_projection(self, parent, dependents)
             columns = [
@@ -1234,13 +1198,14 @@ class ColumnsSetter(RenameFrame):
 class RenameSeries(Elemwise):
     _parameters = ["frame", "index", "sorted_index"]
     _defaults = {"sorted_index": False}
+    _filter_passthrough = True
 
     @functools.cached_property
     def _meta(self):
         args = [
             meta_nonempty(op._meta) if isinstance(op, Expr) else op for op in self._args
         ]
-        return self.operation(*args, **self._kwargs)
+        return make_meta(self.operation(*args, **self._kwargs))
 
     @staticmethod
     def operation(df, index, sorted_index):
@@ -1281,7 +1246,6 @@ class Replace(Elemwise):
 
 
 class Isin(Elemwise):
-    _filter_passthrough = False
     _projection_passthrough = True
     _parameters = ["frame", "values"]
     operation = M.isin
@@ -1314,6 +1278,7 @@ class ToTimestamp(Elemwise):
     _parameters = ["frame", "freq", "how"]
     _defaults = {"freq": None, "how": "start"}
     operation = M.to_timestamp
+    _filter_passthrough = True
 
     def _divisions(self):
         return tuple(
@@ -1383,6 +1348,7 @@ class AsType(Elemwise):
 
     _parameters = ["frame", "dtypes"]
     operation = M.astype
+    _filter_passthrough = True
 
     @functools.cached_property
     def _meta(self):
@@ -1405,6 +1371,10 @@ class AsType(Elemwise):
         return meta
 
     def _simplify_up(self, parent, dependents):
+        if isinstance(parent, Filter) and self._filter_passthrough_available(
+            parent, dependents
+        ):
+            return self._filter_simplification(parent)
         if isinstance(parent, Projection):
             dtypes = self.operand("dtypes")
             columns = determine_column_projection(self, parent, dependents)
@@ -1493,6 +1463,7 @@ class Abs(Elemwise):
 
 class RenameAxis(Elemwise):
     _projection_passthrough = True
+    _filter_passthrough = True
     _parameters = ["frame", "mapper", "index", "columns", "axis"]
     _defaults = {
         "mapper": no_default,
@@ -1515,6 +1486,7 @@ class ToFrame(Elemwise):
     _defaults = {"name": no_default}
     _keyword_only = ["name"]
     operation = M.to_frame
+    _filter_passthrough = True
 
 
 class ToFrameIndex(Elemwise):
@@ -1522,12 +1494,11 @@ class ToFrameIndex(Elemwise):
     _defaults = {"name": no_default, "index": True}
     _keyword_only = ["name", "index"]
     operation = M.to_frame
+    _filter_passthrough = True
 
 
-class ToSeriesIndex(Elemwise):
-    _parameters = ["frame", "index", "name"]
+class ToSeriesIndex(ToFrameIndex):
     _defaults = {"name": no_default, "index": None}
-    _keyword_only = ["name", "index"]
     operation = M.to_series
 
 
@@ -1736,9 +1707,7 @@ class Assign(Elemwise):
 
     @functools.cached_property
     def _meta(self):
-        args = [
-            meta_nonempty(op._meta) if isinstance(op, Expr) else op for op in self._args
-        ]
+        args = [op._meta if isinstance(op, Expr) else op for op in self._args]
         return make_meta(self.operation(*args, **self._kwargs))
 
     def _tree_repr_argument_construction(self, i, op, header):
@@ -1756,9 +1725,6 @@ class Assign(Elemwise):
 
     def _simplify_down(self):
         if isinstance(self.frame, Assign):
-            # if len(self.vals) == 1 and isinstance(self.vals[0], Callable):
-            #     # UDFs can't move around
-            #     return
             if self._check_for_previously_created_column(self.frame):
                 # don't squash if we are using a column that was previously created
                 return
@@ -1841,11 +1807,48 @@ class CaseWhen(Elemwise):
 
 class Filter(Blockwise):
     _projection_passthrough = True
+    _filter_passthrough = True
     _parameters = ["frame", "predicate"]
     operation = operator.getitem
 
     def _simplify_up(self, parent, dependents):
+        if isinstance(self.predicate, Or):
+            result = rewrite_filters(self.predicate)
+            if result._name != self.predicate._name:
+                return type(parent)(
+                    type(self)(self.frame, result), *parent.operands[1:]
+                )
+
+        if isinstance(parent, Filter) and not isinstance(self.frame, Filter):
+            if not self.frame._filter_passthrough_available(self, dependents):
+                # We want to collect filters again when we can't move them
+                # anymore. Otherwise, a chain of Filters might block Projections
+                # We start with the first Filter, e.g. if my child isn't a filter
+                # anymore. Filters above that don't know if the first Filter can
+                # still move further
+                if is_filter_pushdown_available(
+                    self, parent, dependents, allow_reduction=False
+                ):
+                    # We can only squash 2 filters together if the predicate of parent
+                    # does not directly depend on self, e.g. if
+                    # sum is in the predicate of parent, then removing self would
+                    # alter the condition of parent because the sum changes, this is
+                    # only relevant in broadcasting cases
+                    return self.frame[
+                        self.predicate & parent.predicate.substitute(self, self.frame)
+                    ]
         if isinstance(parent, Projection):
+            if self.frame._filter_passthrough_available(self, dependents):
+                # We can't push Projections through filters if the preceding operation
+                # allows us to push filters further down the graph because Projections
+                # block filter pushdown
+                if not isinstance(self.frame, Filter):
+                    return
+                elif is_filter_pushdown_available(
+                    self.frame, self, dependents, allow_reduction=False
+                ):
+                    return
+
             return plain_column_projection(self, parent, dependents)
         if isinstance(parent, Index):
             return self.frame.index[self.predicate]
@@ -1856,7 +1859,6 @@ class Projection(Elemwise):
 
     _parameters = ["frame", "columns"]
     operation = operator.getitem
-    _filter_passthrough = False
 
     @property
     def columns(self):
@@ -1922,7 +1924,6 @@ class Index(Elemwise):
 
     _parameters = ["frame"]
     operation = getattr
-    _filter_passthrough = False
 
     @functools.cached_property
     def _meta(self):
@@ -2059,6 +2060,7 @@ class ResetIndex(Elemwise):
     _defaults = {"drop": False, "name": no_default}
     _keyword_only = ["drop", "name"]
     operation = M.reset_index
+    _filter_passthrough = True
 
     @functools.cached_property
     def _kwargs(self) -> dict:
@@ -2070,10 +2072,54 @@ class ResetIndex(Elemwise):
     def _divisions(self):
         return (None,) * (self.frame.npartitions + 1)
 
+    def _simplify_up(self, parent, dependents):
+        if isinstance(parent, Filter) and self._filter_passthrough_available(
+            parent, dependents
+        ):
+            parents = [
+                p().columns
+                for p in dependents[self._name]
+                if p() is not None and not isinstance(p(), Filter)
+            ]
+            predicate = None
+            if not set(flatten(parents, list)).issubset(set(self.frame.columns)):
+                # one of the filters is the Index
+                self._filter_passthrough_available(parent, dependents)
+                name = self.operand("name")
+                if name is no_default:
+                    name = "index"
+                # replace the projection of the former index with the actual index
+                subs = Projection(self, name)
+                predicate = parent.predicate.substitute(subs, Index(self.frame))
+            elif self.frame.ndim == 1 and not self.operand("drop"):
+                name = self.frame._meta.name
+                # Avoid Projection since we are already a Series
+                subs = Projection(self, name)
+                predicate = parent.predicate.substitute(subs, self.frame)
+            return self._filter_simplification(parent, predicate)
+
+        if isinstance(parent, Projection):
+            if self.frame.ndim == 1 and not self.drop:
+                if isinstance(parent.operand("columns"), list):
+                    # Don't bother, dimensionality changes are tricky here and
+                    # potential improvement is tiny
+                    return
+                col = parent.operand("columns")
+                if col in (self.name, "index", self.frame._meta.index.name):
+                    return
+                if all(
+                    isinstance(d(), Projection) and d().operand("columns") == col
+                    for d in dependents[self._name]
+                ):
+                    return type(self)(self.frame, True, self.name)
+                return
+            return plain_column_projection(self, parent, dependents)
+
 
 class AddPrefixSeries(Elemwise):
     _parameters = ["frame", "prefix"]
     operation = M.add_prefix
+    _filter_passthrough = True
 
     def _divisions(self):
         return tuple(self.prefix + str(division) for division in self.frame.divisions)
@@ -2299,7 +2345,6 @@ class BlockwiseTailIndex(BlockwiseTail):
 
 class Binop(Elemwise):
     _parameters = ["left", "right"]
-    _filter_passthrough = False
 
     def __str__(self):
         return f"{self.left} {self._operator_repr} {self.right}"
@@ -2665,6 +2710,37 @@ class PartitionsFiltered(Expr):
         raise NotImplementedError()
 
 
+class _DelayedExpr(Expr):
+    # Wraps a Delayed object to make it an Expr for now. This is hacky and we should
+    # integrate this properly...
+    # TODO
+    _parameters = ["obj"]
+
+    def __init__(self, obj):
+        self.obj = obj
+        self.operands = [obj]
+
+    def __str__(self):
+        return f"{type(self).__name__}({str(self.obj)})"
+
+    @property
+    def _name(self):
+        return self.obj.key
+
+    def _layer(self) -> dict:
+        dc = self.obj.dask.to_dict().copy()
+        dc[(self.obj.key, 0)] = dc[self.obj.key]
+        dc.pop(self.obj.key)
+        return dc
+
+    def _divisions(self):
+        return (None, None)
+
+    @property
+    def ndim(self):
+        return 0
+
+
 @normalize_token.register(Expr)
 def normalize_expression(expr):
     return expr._name
@@ -2730,14 +2806,6 @@ def is_broadcastable(dfs, s):
     )
 
 
-def _is_broadcastable(s):
-    """
-    This Series is broadcastable against another dataframe in the sequence
-    """
-
-    return s.ndim == 1 and s.npartitions == 1 and s.known_divisions or s.ndim == 0
-
-
 def non_blockwise_ancestors(expr):
     """Traverse through tree to find ancestors that are not blockwise or are IO"""
     from dask_expr._cumulative import CumulativeAggregations
@@ -2748,34 +2816,32 @@ def non_blockwise_ancestors(expr):
         e = stack.pop()
         if isinstance(e, IO):
             yield e
+        elif e.ndim == 0:
+            # Scalars are valid ancestors that are always broadcastable,
+            # so don't walk through them
+            continue
         elif isinstance(e, (Blockwise, CumulativeAggregations, Reduction)):
             # TODO: Capture this in inheritance logic
             dependencies = e.dependencies()
-            stack.extend([expr for expr in dependencies if not _is_broadcastable(expr)])
+            stack.extend([expr for expr in dependencies])
+        elif isinstance(e, _DelayedExpr):
+            continue
         else:
             yield e
 
 
 def are_co_aligned(*exprs, allow_broadcast=True):
     """Do inputs come from the same parents, modulo blockwise?"""
+    # Scalars can always be broadcasted
+    exprs = [e for e in exprs if e.ndim > 0]
     ancestors = [set(non_blockwise_ancestors(e)) for e in exprs]
     unique_ancestors = {
         # Account for column projection within IO expressions
         _tokenize_partial(item, ["columns", "_series"])
         for item in flatten(ancestors, container=set)
     }
-    if len(unique_ancestors) <= 1:
-        return True
-    if not allow_broadcast:
-        return False
-    # We tried avoiding an `npartitions` check above, but
-    # now we need to consider "broadcastable" expressions.
-    exprs_except_broadcast = [
-        expr for expr in exprs if not is_broadcastable(exprs, expr)
-    ]
-    if len(exprs_except_broadcast) < len(exprs):
-        return are_co_aligned(*exprs_except_broadcast)
-    return False
+    # Don't check divisions or npartitions at all
+    return len(unique_ancestors) <= 1
 
 
 ## Utilites for Expr fusion
@@ -2899,7 +2965,7 @@ class Diff(MapOverlap):
 
     @functools.cached_property
     def _meta(self):
-        return meta_nonempty(self.frame._meta).diff(**self.kwargs)
+        return make_meta(meta_nonempty(self.frame._meta).diff(**self.kwargs))
 
     def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
@@ -3007,7 +3073,7 @@ class Shift(MapOverlap):
 
     @functools.cached_property
     def _meta(self):
-        return meta_nonempty(self.frame._meta).shift(**self.kwargs)
+        return make_meta(meta_nonempty(self.frame._meta).shift(**self.kwargs))
 
     @functools.cached_property
     def kwargs(self):
@@ -3044,6 +3110,211 @@ class ShiftIndex(Blockwise):
     @functools.cached_property
     def _kwargs(self) -> dict:
         return {"freq": self.freq} if self.freq is not None else {}
+
+
+class MaybeAlignPartitions(Expr):
+    _projection_passthrough = False
+    _expr_cls = None
+
+    def _divisions(self):
+        if {df.npartitions for df in self.args} == {1}:
+            divs = []
+            for df in self.args:
+                divs.extend(list(df.divisions))
+            try:
+                return min(divs), max(divs)
+            except TypeError:
+                # either unknown divisions or int-str mix
+                return None, None
+        return calc_divisions_for_align(*self.args)
+
+    def _simplify_up(self, parent, dependents):
+        if isinstance(parent, Projection) and self._projection_passthrough:
+            return plain_column_projection(self, parent, dependents)
+
+    @functools.cached_property
+    def args(self):
+        dfs = [op for op in self.operands if isinstance(op, Expr)]
+        return [op for op in dfs if not is_broadcastable(dfs, op)]
+
+    def _lower(self):
+        # This can be expensive when something that has expensive division
+        # calculation is in the Expression
+        dfs = self.args
+        if (
+            len(dfs) == 1
+            or all(
+                dfs[0].divisions == df.divisions and df.known_divisions for df in dfs
+            )
+            or len(self.divisions) == 2
+        ):
+            return self._expr_cls(*self.operands)
+        args = maybe_align_partitions(*self.operands, divisions=self.divisions)
+        return self._expr_cls(*args)
+
+    @functools.cached_property
+    def _meta(self):
+        return self._expr_cls(*self.operands)._meta
+
+
+class CombineFirstAlign(MaybeAlignPartitions):
+    _parameters = ["frame", "other"]
+    _expr_cls = CombineFirst
+
+    def _simplify_up(self, parent, dependents):
+        # TODO: de-duplicate
+        if isinstance(parent, Projection):
+            columns = determine_column_projection(self, parent, dependents)
+            frame_columns = [col for col in self.frame.columns if col in columns]
+            other_columns = [col for col in self.other.columns if col in columns]
+            if (
+                self.frame.columns == frame_columns
+                and self.other.columns == other_columns
+            ):
+                return
+
+            return type(parent)(
+                type(self)(self.frame[frame_columns], self.other[other_columns]),
+                *parent.operands[1:],
+            )
+
+
+class FillnaAlign(MaybeAlignPartitions):
+    _projection_passthrough = True
+    _parameters = ["frame", "value"]
+    _expr_cls = Fillna
+
+
+class AlignAlignPartitions(MaybeAlignPartitions):
+    _parameters = ["frame", "other", "join", "axis", "fill_value"]
+    _expr_cls = _Align
+
+
+class CombineSeriesAlign(MaybeAlignPartitions):
+    _parameters = ["frame", "other", "func", "fill_value"]
+    _expr_cls = CombineSeries
+
+
+class CombineFrameAlign(MaybeAlignPartitions):
+    _parameters = ["frame", "other", "func", "fill_value", "overwrite"]
+    _expr_cls = CombineSeries
+
+
+class AssignAlign(MaybeAlignPartitions):
+    _parameters = ["frame", "column", "value"]
+    _expr_cls = Assign
+
+    def _simplify_up(self, parent, dependents):
+        # TODO: de-duplicate
+        if isinstance(parent, Projection):
+            columns = determine_column_projection(self, parent, dependents)
+            if not isinstance(columns, list):
+                columns = [columns]
+
+            cols = set(columns) - {self.column}
+            if cols == set(self.frame.columns):
+                # Protect against pushing the same projection twice
+                return
+
+            diff = {self.column} - set(columns)
+            if len(diff) == 1:
+                return type(parent)(self.frame, *parent.operands[1:])
+            else:
+                new_args = self.operands[1:]
+
+            columns = [col for col in self.frame.columns if col in cols]
+            return type(parent)(
+                type(self)(self.frame[sorted(columns)], *new_args),
+                *parent.operands[1:],
+            )
+
+
+class MaskAlign(MaybeAlignPartitions):
+    _parameters = ["frame", "cond", "other"]
+    _expr_cls = Mask
+
+
+class WhereAlign(MaskAlign):
+    _expr_cls = Where
+
+
+class MapAlign(MaybeAlignPartitions):
+    _parameters = ["frame", "other", "op", "na_action", "meta"]
+    _projection_passthrough = False
+    _expr_cls = Map
+
+
+class MapIndexAlign(MapAlign):
+    _parameters = MaskAlign._parameters + ["is_monotonic"]
+
+
+class OpAlignPartitions(MaybeAlignPartitions):
+    _parameters = ["frame", "other", "op"]
+    _projection_passthrough = True
+
+    @functools.cached_property
+    def _meta(self):
+        return getattr(self.frame._meta, self.op)(self.other._meta)
+
+    def _lower(self):
+        # This can be expensive when something that has expensive division
+        # calculation is in the Expression
+        dfs = self.args
+        if (
+            len(dfs) == 1
+            or all(dfs[0].divisions == df.divisions for df in dfs)
+            or len(self.divisions) == 2
+        ):
+            return self._op(self.frame, self.op, self.other, *self.operands[3:])
+
+        from dask_expr._repartition import RepartitionDivisions
+
+        frame = RepartitionDivisions(
+            self.frame, new_divisions=self.divisions, force=True
+        )
+        other = RepartitionDivisions(
+            self.other, new_divisions=self.divisions, force=True
+        )
+        return self._op(frame, self.op, other, *self.operands[3:])
+
+    @staticmethod
+    def _op(frame, op, other, *args, **kwargs):
+        return getattr(frame, op)(other)
+
+
+class MethodOperatorAlign(OpAlignPartitions):
+    _parameters = ["frame", "other", "op", "axis", "level", "fill_value"]
+
+    @staticmethod
+    def _op(frame, op, other, *args, **kwargs):
+        return MethodOperator(op, frame, other, *args, **kwargs)
+
+
+class UFuncAlign(MaybeAlignPartitions):
+    _parameters = ["frame", "func", "meta", "kwargs"]
+    enforce_metadata = False
+
+    def __str__(self):
+        return f"UFunc({funcname(self.func)})"
+
+    @functools.cached_property
+    def args(self):
+        return self.operands[len(self._parameters) :]
+
+    @functools.cached_property
+    def _dfs(self):
+        return [df for df in self.args if isinstance(df, Expr)]
+
+    @functools.cached_property
+    def _meta(self):
+        if self.operand("meta") is not no_default:
+            return self.operand("meta")
+        return _get_meta_ufunc(self._dfs, self.args, self.func)
+
+    def _lower(self):
+        args = maybe_align_partitions(*self.args, divisions=self._divisions())
+        dfs = [x for x in args if isinstance(x, Expr) and x.ndim > 0]
+        return UFuncElemwise(dfs[0], self.func, self._meta, False, self.kwargs, *args)
 
 
 class Fused(Blockwise):
@@ -3173,24 +3444,25 @@ def determine_column_projection(expr, parent, dependents, additional_columns=Non
         column_union = parent.columns.copy()
     parents = dependents[expr._name]
 
+    seen = set()
     for p in parents:
-        if len(p.columns) > 0:
-            column_union.append(p._projection_columns)
+        if p._name in seen:
+            continue
+        seen.add(p._name)
+
+        column_union.extend(p._projection_columns)
 
     if additional_columns is not None:
-        column_union.append(additional_columns)
+        column_union.extend(flatten(additional_columns, container=list))
 
     # We can end up with MultiIndex columns from groupby ops, needs to be
     # accounted for in the sort
-    flattened_columns = set(flatten(column_union, container=list))
+    flattened_columns = set(column_union)
     try:
-        column_union = sorted(
-            flattened_columns,
-            key=lambda x: x[0] if isinstance(x, tuple) else x or MinType(),
-        )
+        column_union = sorted(flattened_columns)
     except TypeError:
         # mixed type columns
-        column_union = _sort_mixed(pd.Index(list(flattened_columns)))
+        column_union = _sort_mixed(pd.Index(list(flattened_columns))).tolist()
     if (
         len(column_union) == 1
         and parent.ndim == 1
@@ -3229,9 +3501,135 @@ def plain_column_projection(expr, parent, dependents, additional_columns=None):
     return type(parent)(result, parent.operand("columns"))
 
 
+def is_filter_pushdown_available(expr, parent, dependents, allow_reduction=True):
+    parents = [x() for x in dependents[expr._name] if x() is not None]
+    filters = {e._name for e in parents if isinstance(e, Filter)}
+    if len(filters) != 1:
+        # Don't push down if not exactly one Filter
+        return False
+    if len(parents) == 1:
+        return True
+
+    # We have to see if the non-filter ops are all exclusively part of the predicates
+    others = {e._name for e in parents if not isinstance(e, Filter)}
+    return _check_dependents_are_predicates(
+        expr, others, parent, dependents, allow_reduction
+    )
+
+
+def rewrite_filters(predicate):
+    """Rewriting a filter to decompose OR clauses. If a predicate part is part of
+    all OR clauses, we can move it to the front so that we can push it down.
+    """
+    or_components = _get_predicate_components(predicate, [])
+    if len(or_components) == 1:
+        return predicate
+    result = _replace_common_or_components(or_components[0], or_components[1:])
+    if result is None:
+        return predicate
+    return result
+
+
+def _get_predicate_components(predicate, components, type_=Or):
+    if not isinstance(predicate, type_):
+        components.append(predicate)
+        return components
+    if isinstance(predicate.left, type_):
+        components = _get_predicate_components(predicate.left, components, type_)
+    else:
+        components.append(predicate.left)
+    if isinstance(predicate.right, type_):
+        components = _get_predicate_components(predicate.right, components, type_)
+    else:
+        components.append(predicate.right)
+    return components
+
+
+def _convert_mapping(components):
+    return dict(zip([e._name for e in components], components))
+
+
+def _replace_common_or_components(expr, or_components):
+    and_component = _get_predicate_components(expr, [], type_=And)
+    mapping = _convert_mapping(and_component)
+    and_components = [
+        _get_predicate_components(c, [], type_=And) for c in or_components
+    ]
+    and_components = list(map(_convert_mapping, and_components))
+
+    replacements = []
+    for c in mapping.keys():
+        if all(c in comp for comp in and_components):
+            # We can pull this component out if it's part of all or components
+            replacements.append(c)
+    if len(replacements) == 0:
+        # exit if we can't replace anything
+        return
+
+    outer_component = mapping[replacements[0]]
+    for r in replacements[1:]:
+        # construct the outer component
+        outer_component = outer_component & mapping[r]
+
+    #
+    result_components = []
+    for comp in [mapping] + and_components:
+        keep_components = [c for c in comp if c not in replacements]
+        if len(keep_components) == 0:
+            # Just return outer_component if we can replace a whole OR component
+            return outer_component
+        result_component = comp[keep_components[0]]
+        for c in keep_components[1:]:
+            result_component = result_component & comp[c]
+        result_components.append(result_component)
+
+    or_component = result_components[0]
+    for c in result_components[1:]:
+        or_component = or_component | c
+    return outer_component & or_component
+
+
+def _check_dependents_are_predicates(
+    expr, other_names, parent: Expr, dependents, allow_reduction=True
+):
+    # singleton approach should make this easier
+
+    # Walk down the predicate side from the filter to see if we can arrive at
+    # other_names without hitting an expression that has other dependents that
+    # are not part of the predicate, see test_filter_pushdown_unavailable
+    allowed_expressions = {parent._name}
+    stack = parent.dependencies()
+    seen = set()
+    while stack:
+        e = stack.pop()
+        if expr._name == e._name:
+            continue
+
+        if e._name in seen:
+            continue
+        seen.add(e._name)
+
+        e_dependents = {x()._name for x in dependents[e._name] if x() is not None}
+
+        if not allow_reduction:
+            if isinstance(e, Reduction):
+                return False
+
+        if not e_dependents.issubset(allowed_expressions):
+            if isinstance(e, _DelayedExpr):
+                continue
+
+            return False
+        allowed_expressions.add(e._name)
+        stack.extend(e.dependencies())
+
+    return other_names.issubset(allowed_expressions)
+
+
 def calc_divisions_for_align(*exprs):
     dfs = [df for df in exprs if isinstance(df, Expr) and df.ndim > 0]
     if not all(df.known_divisions for df in dfs):
+        are_co_aligned(*exprs)
         raise ValueError(
             "Not all divisions are known, can't align "
             "partitions. Please use `set_index` "
@@ -3334,6 +3732,7 @@ from dask_expr._reductions import (
     NBytes,
     NuniqueApprox,
     Prod,
+    Reduction,
     Size,
     Sum,
     Var,
