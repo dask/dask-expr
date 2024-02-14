@@ -62,7 +62,7 @@ class Expr:
         self._graph_instances[name] = self
 
     def __hash__(self):
-        raise TypeError("Don't!")
+        raise TypeError("Expr objects can't be used in sets or dicts or similar, use the _name instead")
 
     def __str__(self):
         s = ", ".join(
