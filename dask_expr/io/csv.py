@@ -14,6 +14,7 @@ class ReadCSV(PartitionsFiltered, BlockwiseIO):
         "_partitions",
         "storage_options",
         "kwargs",
+        "_cwd",  # needed for tokenization
         "_series",
     ]
     _defaults = {
@@ -24,6 +25,7 @@ class ReadCSV(PartitionsFiltered, BlockwiseIO):
         "_partitions": None,
         "storage_options": None,
         "_series": False,
+        "_cwd": None,
     }
     _absorb_projections = True
 

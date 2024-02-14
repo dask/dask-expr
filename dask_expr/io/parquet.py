@@ -426,6 +426,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         "filesystem",
         "engine",
         "kwargs",
+        "_cwd",  # needed for tokenization
         "_partitions",
         "_series",
         "_dataset_info_cache",
@@ -449,6 +450,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         "_partitions": None,
         "_series": False,
         "_dataset_info_cache": None,
+        "_cwd": None,
     }
     _pq_length_stats = None
     _absorb_projections = True
