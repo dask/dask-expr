@@ -4858,8 +4858,6 @@ def from_map(
     will support column projection (via ``simplify``) if
     the ``func`` argument has "columns" in its signature.
 
-    The `columns` argument is expected to be an optional argument such that if
-    no argument is supplied, the function will produce all available columns.
     """
     from dask.dataframe.io.utils import DataFrameIOFunction
 
