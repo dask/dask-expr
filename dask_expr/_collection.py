@@ -4891,8 +4891,8 @@ def from_map(
     columns_arg_required = False
     if param := inspect.signature(func).parameters.get("columns", None):
         allow_projection = True
-        columns_arg_required = True
-        if meta is no_default and param.default is param.empty:
+        columns_arg_required = param.default is param.empty
+        if meta is no_default and columns_arg_required:
             raise TypeError(
                 "Argument `func` of `from_map` has a required `columns` "
                 " parameter and not `meta` provided."
