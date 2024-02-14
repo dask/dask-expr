@@ -62,7 +62,7 @@ jobs:
         run: pip list | grep -E 'dask|distributed'
 
       - name: Run tests
-        run: py.test -n auto --verbose --cov=dask_expr --cov-report=xml
+        run: py.test --verbose --cov=dask_expr --cov-report=xml
 
       - name: Coverage
         uses: codecov/codecov-action@v3
