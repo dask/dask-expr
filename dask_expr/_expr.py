@@ -2191,7 +2191,7 @@ class Head(Expr):
             return self.frame.divisions[0], self.frame.divisions[-1]
         return (
             self.frame.divisions[0],
-            self.frame.divisions[self.operand("npartitions") + 1],
+            self.frame.divisions[self.operand("npartitions")],
         )
 
     def _task(self, index: int):
