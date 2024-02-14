@@ -2387,6 +2387,7 @@ def test_predicate_pushdown_ndim_change(df, pdf):
     expected = expected[expected[0] > 1]
     assert_eq(result, expected)
     assert isinstance(result.simplify().expr.frame, Filter)
+    result.simplify().pprint()
     assert isinstance(result.simplify().expr, ToFrame)
 
 

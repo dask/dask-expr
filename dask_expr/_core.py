@@ -10,6 +10,7 @@ import dask
 import pandas as pd
 import toolz
 from dask.dataframe.core import is_dataframe_like, is_index_like, is_series_like
+from dask.delayed import Delayed
 from dask.utils import funcname, import_required, is_arraylike
 from toolz.dicttoolz import merge
 
@@ -19,7 +20,7 @@ from dask_expr._util import _BackendData, _tokenize_deterministic
 def _unpack_collections(o):
     if isinstance(o, Expr):
         return o, o._name
-    elif hasattr(o, "expr"):
+    elif hasattr(o, "expr") and not isinstance(o, Delayed):
         return o.expr, o.expr._name
     else:
         return o, None
@@ -369,7 +370,7 @@ class Expr:
             for operand in expr.operands:
                 if isinstance(operand, Expr):
                     # # Bandaid for now, waiting for Singleton
-                    # dependents[operand._name].append(weakref.ref(expr))
+                    dependents[operand._name].add(expr)
                     new = operand.simplify_once(
                         dependents=dependents, simplified=simplified
                     )

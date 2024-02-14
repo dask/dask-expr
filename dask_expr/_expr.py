@@ -1153,7 +1153,7 @@ class Elemwise(Blockwise):
         ):
             predicate = None
             if self.frame.ndim == 1 and self.ndim == 2:
-                name = self.frame._meta.name
+                name = self._meta.columns[0]
                 # Avoid Projection since we are already a Series
                 subs = Projection(self, name)
                 predicate = parent.predicate.substitute(subs, self.frame)
@@ -2713,10 +2713,6 @@ class _DelayedExpr(Expr):
     # integrate this properly...
     # TODO
     _parameters = ["obj"]
-
-    def __init__(self, obj):
-        self.obj = obj
-        self.operands = [obj]
 
     def __str__(self):
         return f"{type(self).__name__}({str(self.obj)})"
