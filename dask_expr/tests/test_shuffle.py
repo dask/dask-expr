@@ -1,3 +1,4 @@
+import random
 from collections import OrderedDict
 
 import dask
@@ -640,7 +641,7 @@ def test_set_index_sort_values_one_partition(pdf):
 
 def test_set_index_triggers_calc_when_accessing_divisions(pdf, df):
     divisions_lru.data = OrderedDict()
-    query = df.set_index("x")
+    query = df.fillna(random.randint(1, 100)).set_index("x")
     assert len(divisions_lru.data) == 0
     divisions = query.divisions  # noqa: F841
     assert len(divisions_lru.data) == 1
