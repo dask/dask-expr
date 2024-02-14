@@ -429,6 +429,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         "_partitions",
         "_series",
         "_dataset_info_cache",
+        "_pipeline_breaker_counter",
     ]
     _defaults = {
         "columns": None,
@@ -449,6 +450,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         "_partitions": None,
         "_series": False,
         "_dataset_info_cache": None,
+        "_pipeline_breaker_counter": None,
     }
     _pq_length_stats = None
     _absorb_projections = True

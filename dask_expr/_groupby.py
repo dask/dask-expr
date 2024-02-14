@@ -136,7 +136,7 @@ class GroupByApplyConcatApply(ApplyConcatApply, GroupByBase):
     @functools.cached_property
     def _meta_chunk(self):
         meta = meta_nonempty(self.frame._meta)
-        return self.chunk(meta, *self._by_meta, **self.chunk_kwargs)
+        return make_meta(self.chunk(meta, *self._by_meta, **self.chunk_kwargs))
 
     @property
     def _chunk_cls_args(self):
@@ -201,6 +201,7 @@ class SingleAggregation(GroupByApplyConcatApply, GroupByBase):
         "split_out",
         "sort",
         "shuffle_method",
+        "_pipeline_breaker_counter",
     ]
     _defaults = {
         "observed": None,
@@ -212,6 +213,7 @@ class SingleAggregation(GroupByApplyConcatApply, GroupByBase):
         "split_out": None,
         "sort": None,
         "shuffle_method": None,
+        "_pipeline_breaker_counter": None,
     }
 
     groupby_chunk = None
@@ -251,7 +253,11 @@ class SingleAggregation(GroupByApplyConcatApply, GroupByBase):
         }
 
     def _simplify_up(self, parent, dependents):
-        return groupby_projection(self, parent, dependents)
+        if isinstance(parent, Projection):
+            return groupby_projection(self, parent, dependents)
+
+    def _pipe_down(self):
+        return self._adjust_for_pipelinebreaker()
 
 
 class GroupbyAggregationBase(GroupByApplyConcatApply, GroupByBase):
@@ -1479,6 +1485,7 @@ class GroupBy:
                 split_out,
                 self.sort,
                 shuffle_method,
+                None,
                 *self.by,
             )
         )
@@ -2161,6 +2168,7 @@ class SeriesGroupBy(GroupBy):
                 split_out,
                 self.sort,
                 shuffle_method,
+                None,
                 *self.by,
             )
         )

@@ -320,6 +320,7 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
         "columns",
         "_partitions",
         "_series",
+        "_pipeline_breaker_counter",
     ]
     _defaults = {
         "npartitions": None,
@@ -328,6 +329,7 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
         "_partitions": None,
         "_series": False,
         "chunksize": None,
+        "_pipeline_breaker_counter": None,
     }
     _pd_length_stats = None
     _absorb_projections = True
