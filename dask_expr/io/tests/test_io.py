@@ -463,6 +463,15 @@ def test_from_map(tmpdir, meta, label, allow_projection, enforce_metadata):
     assert_eq(result, pdf["a"], check_index=False)
 
 
+def func(path, columns):
+    raise NotImplementedError("This shouldn't ever be called")
+
+
+def test_from_map_columns_required(tmpdir):
+    with pytest.raises(TypeError, match=r"columns.*optional"):
+        from_map(func, ["foo"])
+
+
 def test_from_array():
     arr = np.random.randint(1, 100, (100,))
     assert_eq(from_array(arr, chunksize=5), pd.Series(arr))
