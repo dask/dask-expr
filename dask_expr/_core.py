@@ -75,6 +75,7 @@ class Expr:
         inst._graph[_name] = children
         # Probably a bad idea to have a self ref
         inst._graph_instances[_name] = inst
+        return inst
 
     def __hash__(self):
         raise TypeError(
@@ -367,8 +368,8 @@ class Expr:
             changed = False
             for operand in expr.operands:
                 if isinstance(operand, Expr):
-                    # Bandaid for now, waiting for Singleton
-                    dependents[operand._name].append(weakref.ref(expr))
+                    # # Bandaid for now, waiting for Singleton
+                    # dependents[operand._name].append(weakref.ref(expr))
                     new = operand.simplify_once(
                         dependents=dependents, simplified=simplified
                     )
