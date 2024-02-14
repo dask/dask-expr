@@ -4890,14 +4890,15 @@ def from_map(
 
     # Check if `func` supports column projection
     allow_projection = False
+    columns_arg_required = False
     if param := inspect.signature(func).parameters.get("columns", None):
         allow_projection = True
-        if param.default is param.empty:
+        columns_arg_required = True
+        if meta is no_default and param.default is param.empty:
             raise TypeError(
-                "Argument `func` of `from_map` has a `columns` parameter, but "
-                "it is not optional. The `columns` parameter is expected to be "
-                "an optional parameter such that if no argument is supplied, "
-                "the function will produce all available columns."
+                "Argument `func` of `from_map` has a required `columns` "
+                " parameter and not `meta` provided."
+                "Either provide `meta` yourself or make `columns` an optional argument."
             )
     elif isinstance(func, DataFrameIOFunction):
         warnings.warn(
@@ -4920,6 +4921,7 @@ def from_map(
                 columns,
                 args,
                 kwargs,
+                columns_arg_required,
                 meta,
                 enforce_metadata,
                 divisions,
