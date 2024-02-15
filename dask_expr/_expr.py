@@ -1737,8 +1737,7 @@ class Assign(Elemwise):
     def _simplify_up(self, parent, dependents):
         if isinstance(parent, Projection):
             columns = determine_column_projection(self, parent, dependents)
-            if not isinstance(columns, list):
-                columns = [columns]
+            columns = _convert_to_list(columns)
 
             cols = set(columns) - set(self.keys)
             if cols == set(self.frame.columns):
