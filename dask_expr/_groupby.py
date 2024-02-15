@@ -1200,9 +1200,10 @@ def groupby_projection(expr, parent, dependents):
         columns = determine_column_projection(
             expr, parent, dependents, additional_columns=expr._by_columns
         )
-        if _convert_to_list(columns) == expr.frame.columns:
-            return
+        columns = _convert_to_list(columns)
         columns = [col for col in expr.frame.columns if col in columns]
+        if columns == expr.frame.columns:
+            return
         return type(parent)(
             type(expr)(expr.frame[columns], *expr.operands[1:]),
             *parent.operands[1:],
