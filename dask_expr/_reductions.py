@@ -98,7 +98,7 @@ class Aggregate(Chunk):
 
     @functools.cached_property
     def aggregate_args(self):
-        return self.argument_operands[len(self._parameters) - 1 :]
+        return self.argument_operands[len(self._parameters) :]
 
     @staticmethod
     def _call_with_list_arg(func, *args, **kwargs):

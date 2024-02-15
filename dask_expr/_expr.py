@@ -466,7 +466,7 @@ class Blockwise(Expr):
         if self._keyword_only:
             return {
                 p: self.operand(p)
-                for p in self._parameters[:-1]
+                for p in self._parameters
                 if p in self._keyword_only and self.operand(p) is not no_default
             }
         return {}
@@ -475,10 +475,8 @@ class Blockwise(Expr):
     def _args(self) -> list:
         if self._keyword_only:
             args = [
-                self.operand(p)
-                for p in self._parameters[:-1]
-                if p not in self._keyword_only
-            ] + self.argument_operands[len(self._parameters) - 1 :]
+                self.operand(p) for p in self._parameters if p not in self._keyword_only
+            ] + self.argument_operands[len(self._parameters) :]
             return args
         return self.argument_operands
 
@@ -564,7 +562,7 @@ class MapPartitions(Blockwise):
 
     @property
     def args(self):
-        return [self.frame] + self.argument_operands[len(self._parameters) - 1 :]
+        return [self.frame] + self.argument_operands[len(self._parameters) :]
 
     @functools.cached_property
     def _meta(self):
@@ -660,7 +658,7 @@ class UFuncElemwise(MapPartitions):
 
     @functools.cached_property
     def args(self):
-        return self.argument_operands[len(self._parameters) - 1 :]
+        return self.argument_operands[len(self._parameters) :]
 
     @functools.cached_property
     def _dfs(self):
@@ -727,7 +725,7 @@ class MapOverlapAlign(Expr):
         meta = self.operand("meta")
         args = [self.frame._meta] + [
             arg._meta if isinstance(arg, Expr) else arg
-            for arg in self.argument_operands[len(self._parameters) - 1 :]
+            for arg in self.argument_operands[len(self._parameters) :]
         ]
         return _get_meta_map_partitions(
             args,
@@ -739,11 +737,11 @@ class MapOverlapAlign(Expr):
         )
 
     def _divisions(self):
-        args = [self.frame] + self.argument_operands[len(self._parameters) - 1 :]
+        args = [self.frame] + self.argument_operands[len(self._parameters) :]
         return calc_divisions_for_align(*args)
 
     def _lower(self):
-        args = [self.frame] + self.operands[len(self._parameters) - 1 :]
+        args = [self.frame] + self.operands[len(self._parameters) :]
         args = maybe_align_partitions(*args, divisions=self._divisions())
         return MapOverlap(
             args[0],
@@ -794,7 +792,7 @@ class MapOverlap(MapPartitions):
         return (
             [self.frame]
             + [self.func, self.before, self.after]
-            + self.argument_operands[len(self._parameters) - 1 :]
+            + self.argument_operands[len(self._parameters) :]
         )
 
     @functools.cached_property
@@ -802,7 +800,7 @@ class MapOverlap(MapPartitions):
         meta = self.operand("meta")
         args = [self.frame._meta] + [
             arg._meta if isinstance(arg, Expr) else arg
-            for arg in self.argument_operands[len(self._parameters) - 1 :]
+            for arg in self.argument_operands[len(self._parameters) :]
         ]
         return _get_meta_map_partitions(
             args,
@@ -1908,7 +1906,7 @@ class Projection(Elemwise):
             and self._meta.ndim == self.frame._meta.ndim
         ):
             # TODO: we should get more precise around Expr.columns types
-            return self.frame
+            return type(self.frame)(*self.frame.argument_operands, self._branch_id)
         if isinstance(self.frame, Projection):
             # df[a][b]
             a = self.frame.operand("columns")
@@ -1922,7 +1920,7 @@ class Projection(Elemwise):
             else:
                 assert b in a
 
-            return self.frame.frame[b]
+            return type(self)(self.frame.frame, b, *self.operands[2:])
 
 
 class Index(Elemwise):
@@ -3315,7 +3313,7 @@ class UFuncAlign(MaybeAlignPartitions):
 
     @functools.cached_property
     def args(self):
-        return self.argument_operands[len(self._parameters) - 1 :]
+        return self.argument_operands[len(self._parameters) :]
 
     @functools.cached_property
     def _dfs(self):

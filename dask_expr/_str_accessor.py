@@ -128,7 +128,7 @@ class CatBlockwise(Blockwise):
 
     @property
     def _args(self) -> list:
-        return [self.frame] + self.argument_operands[len(self._parameters) - 1 :]
+        return [self.frame] + self.argument_operands[len(self._parameters) :]
 
     @staticmethod
     def operation(ser, *args, **kwargs):

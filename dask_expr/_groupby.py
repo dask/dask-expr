@@ -106,7 +106,7 @@ class GroupByBase:
 
     @functools.cached_property
     def by(self):
-        return self.argument_operands[len(self._parameters) - 1 :]
+        return self.argument_operands[len(self._parameters) :]
 
     @functools.cached_property
     def levels(self):
@@ -738,7 +738,7 @@ class Mean(SingleAggregation):
                 self.operand(param)
                 if param not in ("chunk_kwargs", "aggregate_kwargs")
                 else {}
-                for param in self._parameters[:-1]
+                for param in self._parameters
             ],
             *self.by,
             self._branch_id,

@@ -50,7 +50,6 @@ class Expr:
         assert not kwargs, kwargs
         inst = object.__new__(cls)
         inst.operands = [_unpack_collections(o) for o in operands] + [_branch_id]
-        inst._parameters = cls._parameters + ["_branch_id"]
         _name = inst._name
         if _name in Expr._instances:
             return Expr._instances[_name]
@@ -61,6 +60,10 @@ class Expr:
     @functools.cached_property
     def argument_operands(self):
         return self.operands[:-1]
+
+    @functools.cached_property
+    def _branch_id(self):
+        return self.operands[-1]
 
     def _tune_down(self):
         return None
@@ -159,7 +162,7 @@ class Expr:
     def operand(self, key):
         # Access an operand unambiguously
         # (e.g. if the key is reserved by a method/property)
-        return self.operands[self._parameters.index(key)]
+        return self.operands[type(self)._parameters.index(key)]
 
     def dependencies(self):
         # Dependencies are `Expr` operands only
@@ -440,10 +443,6 @@ class Expr:
     @property
     def _meta(self):
         raise NotImplementedError()
-
-    @functools.cached_property
-    def _branch_id(self):
-        return self.operands[-1]
 
     def __getattr__(self, key):
         try:
