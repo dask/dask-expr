@@ -45,7 +45,7 @@ class Concat(Expr):
             + ", "
             + ", ".join(
                 str(param) + "=" + str(operand)
-                for param, operand in zip(self._parameters, self.operands)
+                for param, operand in zip(self._parameters[:-1], self.operands)
                 if operand != self._defaults.get(param)
             )
         )

@@ -30,7 +30,7 @@ class FromDelayed(PartitionsFiltered, BlockwiseIO):
 
     @functools.cached_property
     def dfs(self):
-        return self.operands[len(self._parameters) :]
+        return self.argument_operands[len(self._parameters) - 1 :]
 
     @functools.cached_property
     def _meta(self):

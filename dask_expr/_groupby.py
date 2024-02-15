@@ -106,7 +106,7 @@ class GroupByBase:
 
     @functools.cached_property
     def by(self):
-        return self.operands[len(self._parameters) :]
+        return self.argument_operands[len(self._parameters) - 1 :]
 
     @functools.cached_property
     def levels(self):
@@ -738,9 +738,10 @@ class Mean(SingleAggregation):
                 self.operand(param)
                 if param not in ("chunk_kwargs", "aggregate_kwargs")
                 else {}
-                for param in self._parameters
+                for param in self._parameters[:-1]
             ],
             *self.by,
+            self._branch_id,
         )
         if is_dataframe_like(s._meta):
             c = c[s.columns]

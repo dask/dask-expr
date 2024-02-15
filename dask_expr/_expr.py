@@ -466,7 +466,7 @@ class Blockwise(Expr):
         if self._keyword_only:
             return {
                 p: self.operand(p)
-                for p in self._parameters
+                for p in self._parameters[:-1]
                 if p in self._keyword_only and self.operand(p) is not no_default
             }
         return {}
@@ -475,10 +475,12 @@ class Blockwise(Expr):
     def _args(self) -> list:
         if self._keyword_only:
             args = [
-                self.operand(p) for p in self._parameters if p not in self._keyword_only
-            ] + self.operands[len(self._parameters) :]
+                self.operand(p)
+                for p in self._parameters[:-1]
+                if p not in self._keyword_only
+            ] + self.argument_operands[len(self._parameters) - 1 :]
             return args
-        return self.operands
+        return self.argument_operands
 
     def _broadcast_dep(self, dep: Expr):
         # Checks if a dependency should be broadcasted to
@@ -562,7 +564,7 @@ class MapPartitions(Blockwise):
 
     @property
     def args(self):
-        return [self.frame] + self.operands[len(self._parameters) :]
+        return [self.frame] + self.argument_operands[len(self._parameters) - 1 :]
 
     @functools.cached_property
     def _meta(self):
@@ -658,7 +660,7 @@ class UFuncElemwise(MapPartitions):
 
     @functools.cached_property
     def args(self):
-        return self.operands[len(self._parameters) :]
+        return self.argument_operands[len(self._parameters) - 1 :]
 
     @functools.cached_property
     def _dfs(self):
@@ -725,7 +727,7 @@ class MapOverlapAlign(Expr):
         meta = self.operand("meta")
         args = [self.frame._meta] + [
             arg._meta if isinstance(arg, Expr) else arg
-            for arg in self.operands[len(self._parameters) :]
+            for arg in self.argument_operands[len(self._parameters) - 1 :]
         ]
         return _get_meta_map_partitions(
             args,
@@ -737,11 +739,11 @@ class MapOverlapAlign(Expr):
         )
 
     def _divisions(self):
-        args = [self.frame] + self.operands[len(self._parameters) :]
+        args = [self.frame] + self.argument_operands[len(self._parameters) - 1 :]
         return calc_divisions_for_align(*args)
 
     def _lower(self):
-        args = [self.frame] + self.operands[len(self._parameters) :]
+        args = [self.frame] + self.operands[len(self._parameters) - 1 :]
         args = maybe_align_partitions(*args, divisions=self._divisions())
         return MapOverlap(
             args[0],
@@ -792,7 +794,7 @@ class MapOverlap(MapPartitions):
         return (
             [self.frame]
             + [self.func, self.before, self.after]
-            + self.operands[len(self._parameters) :]
+            + self.argument_operands[len(self._parameters) - 1 :]
         )
 
     @functools.cached_property
@@ -800,7 +802,7 @@ class MapOverlap(MapPartitions):
         meta = self.operand("meta")
         args = [self.frame._meta] + [
             arg._meta if isinstance(arg, Expr) else arg
-            for arg in self.operands[len(self._parameters) :]
+            for arg in self.argument_operands[len(self._parameters) - 1 :]
         ]
         return _get_meta_map_partitions(
             args,
@@ -1094,7 +1096,11 @@ class Sample(Blockwise):
 
     @functools.cached_property
     def _meta(self):
-        args = [self.operands[0]._meta] + [self.operands[1][0]] + self.operands[2:]
+        args = (
+            [self.operands[0]._meta]
+            + [self.operands[1][0]]
+            + self.argument_operands[2:]
+        )
         return self.operation(*args)
 
     def _task(self, index: int):
@@ -1696,11 +1702,11 @@ class Assign(Elemwise):
 
     @functools.cached_property
     def keys(self):
-        return self.operands[1::2]
+        return self.argument_operands[1::2]
 
     @functools.cached_property
     def vals(self):
-        return self.operands[2::2]
+        return self.argument_operands[2::2]
 
     @functools.cached_property
     def _meta(self):
@@ -1725,7 +1731,7 @@ class Assign(Elemwise):
             if self._check_for_previously_created_column(self.frame):
                 # don't squash if we are using a column that was previously created
                 return
-            return Assign(*self.frame.operands, *self.operands[1:])
+            return Assign(*self.frame.argument_operands, *self.operands[1:])
 
     def _check_for_previously_created_column(self, child):
         input_columns = []
@@ -1753,6 +1759,7 @@ class Assign(Elemwise):
                 for k, v in zip(self.keys, self.vals):
                     if k in columns:
                         new_args.extend([k, v])
+                new_args.append(self._branch_id)
             else:
                 new_args = self.operands[1:]
 
@@ -1779,12 +1786,12 @@ class CaseWhen(Elemwise):
 
     @functools.cached_property
     def caselist(self):
-        c = self.operands[1:]
+        c = self.argument_operands[1:]
         return [(c[i], c[i + 1]) for i in range(0, len(c), 2)]
 
     @functools.cached_property
     def _meta(self):
-        c = self.operands[1:]
+        c = self.argument_operands[1:]
         caselist = [
             (
                 meta_nonempty(c[i]._meta) if isinstance(c[i], Expr) else c[i],
@@ -3308,7 +3315,7 @@ class UFuncAlign(MaybeAlignPartitions):
 
     @functools.cached_property
     def args(self):
-        return self.operands[len(self._parameters) :]
+        return self.argument_operands[len(self._parameters) - 1 :]
 
     @functools.cached_property
     def _dfs(self):
@@ -3323,7 +3330,9 @@ class UFuncAlign(MaybeAlignPartitions):
     def _lower(self):
         args = maybe_align_partitions(*self.args, divisions=self._divisions())
         dfs = [x for x in args if isinstance(x, Expr) and x.ndim > 0]
-        return UFuncElemwise(dfs[0], self.func, self._meta, False, self.kwargs, *args)
+        return UFuncElemwise(
+            dfs[0], self.func, self._meta, False, self.kwargs, *args, self._branch_id
+        )
 
 
 class Fused(Blockwise):

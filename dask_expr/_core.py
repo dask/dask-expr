@@ -5,6 +5,7 @@ import os
 import weakref
 from collections import defaultdict
 from collections.abc import Generator
+from typing import NamedTuple
 
 import dask
 import pandas as pd
@@ -13,6 +14,10 @@ from dask.dataframe.core import is_dataframe_like, is_index_like, is_series_like
 from dask.utils import funcname, import_required, is_arraylike
 
 from dask_expr._util import _BackendData, _tokenize_deterministic
+
+
+class BranchId(NamedTuple):
+    branch_id: int | None
 
 
 def _unpack_collections(o):
@@ -30,8 +35,13 @@ class Expr:
     _defaults = {}
     _instances = weakref.WeakValueDictionary()
 
-    def __new__(cls, *args, **kwargs):
+    def __new__(cls, *args, _branch_id=None, **kwargs):
         operands = list(args)
+        if _branch_id is None and len(operands) and isinstance(operands[-1], BranchId):
+            _branch_id = operands.pop(-1)
+        elif _branch_id is None:
+            _branch_id = BranchId(None)
+
         for parameter in cls._parameters[len(operands) :]:
             try:
                 operands.append(kwargs.pop(parameter))
@@ -39,13 +49,18 @@ class Expr:
                 operands.append(cls._defaults[parameter])
         assert not kwargs, kwargs
         inst = object.__new__(cls)
-        inst.operands = [_unpack_collections(o) for o in operands]
+        inst.operands = [_unpack_collections(o) for o in operands] + [_branch_id]
+        inst._parameters = cls._parameters + ["_branch_id"]
         _name = inst._name
         if _name in Expr._instances:
             return Expr._instances[_name]
 
         Expr._instances[_name] = inst
         return inst
+
+    @functools.cached_property
+    def argument_operands(self):
+        return self.operands[:-1]
 
     def _tune_down(self):
         return None
@@ -144,7 +159,7 @@ class Expr:
     def operand(self, key):
         # Access an operand unambiguously
         # (e.g. if the key is reserved by a method/property)
-        return self.operands[type(self)._parameters.index(key)]
+        return self.operands[self._parameters.index(key)]
 
     def dependencies(self):
         # Dependencies are `Expr` operands only
@@ -267,6 +282,11 @@ class Expr:
 
         return expr
 
+    def _push_branch_id(self, parent):
+        if self._branch_id.branch_id != parent._branch_id.branch_id:
+            result = type(self)(*self.operands[:-1], parent._branch_id)
+            return parent.substitute(self, result)
+
     def simplify_once(self, dependents: defaultdict, simplified: dict):
         """Simplify an expression
 
@@ -303,7 +323,9 @@ class Expr:
 
             # Allow children to simplify their parents
             for child in expr.dependencies():
-                out = child._simplify_up(expr, dependents)
+                out = child._push_branch_id(expr)
+                if out is None:
+                    out = child._simplify_up(expr, dependents)
                 if out is None:
                     out = expr
 
@@ -418,6 +440,10 @@ class Expr:
     @property
     def _meta(self):
         raise NotImplementedError()
+
+    @functools.cached_property
+    def _branch_id(self):
+        return self.operands[-1]
 
     def __getattr__(self, key):
         try:

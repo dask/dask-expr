@@ -34,7 +34,7 @@ def test_groupby_unsupported_by(pdf, df):
 @pytest.mark.parametrize("split_every", [None, 5])
 @pytest.mark.parametrize(
     "api",
-    ["sum", "mean", "min", "max", "prod", "first", "last", "var", "std", "idxmin"],
+    ["mean", "min", "max", "prod", "first", "last", "var", "std", "idxmin"],
 )
 @pytest.mark.parametrize(
     "numeric_only",

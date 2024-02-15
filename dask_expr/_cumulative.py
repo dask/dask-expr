@@ -47,7 +47,7 @@ class CumulativeBlockwise(Blockwise):
 
     @functools.cached_property
     def _args(self) -> list:
-        return self.operands[:-1]
+        return self.argument_operands[:-1]
 
 
 class TakeLast(Blockwise):

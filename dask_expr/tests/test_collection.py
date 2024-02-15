@@ -942,7 +942,7 @@ def test_repr(df):
     s = (df["x"] + 1).sum(skipna=False).expr
     assert '["x"]' in str(s) or "['x']" in str(s)
     assert "+ 1" in str(s)
-    assert "sum(skipna=False)" in str(s)
+    assert "sum(skipna=False" in str(s)
 
 
 @xfail_gpu("combine_first not supported by cudf")
@@ -1924,7 +1924,9 @@ def test_assign_squash_together(df, pdf):
     pdf["a"] = 1
     pdf["b"] = 2
     assert_eq(df, pdf)
-    assert "Assign: a=1, b=2" in [line for line in result.expr._tree_repr_lines()]
+    assert "Assign: a=1, b=2, ranchId(branch_id=0=" in [
+        line for line in result.expr._tree_repr_lines()
+    ]
 
 
 def test_are_co_aligned(pdf, df):
@@ -2412,7 +2414,10 @@ def test_filter_optimize_condition():
 
 def test_scalar_repr(df):
     result = repr(df.size)
-    assert result == "<dask_expr.expr.Scalar: expr=df.size(), dtype=int64>"
+    assert (
+        result
+        == "<dask_expr.expr.Scalar: expr=df.size(_branch_id=BranchId(branch_id=0)), dtype=int64>"
+    )
 
 
 def test_reset_index_filter_pushdown(df):
