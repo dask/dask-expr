@@ -1150,7 +1150,7 @@ class Elemwise(Blockwise):
         ):
             predicate = None
             if self.frame.ndim == 1 and self.ndim == 2:
-                name = self.frame._meta.name
+                name = self._meta.columns[0]
                 # Avoid Projection since we are already a Series
                 subs = Projection(self, name)
                 predicate = parent.predicate.substitute(subs, self.frame)
@@ -2075,9 +2075,7 @@ class ResetIndex(Elemwise):
             parent, dependents
         ):
             parents = [
-                p().columns
-                for p in dependents[self._name]
-                if p() is not None and not isinstance(p(), Filter)
+                p.columns for p in dependents[self._name] if not isinstance(p, Filter)
             ]
             predicate = None
             if not set(flatten(parents, list)).issubset(set(self.frame.columns)):
@@ -2106,7 +2104,7 @@ class ResetIndex(Elemwise):
                 if col in (self.name, "index", self.frame._meta.index.name):
                     return
                 if all(
-                    isinstance(d(), Projection) and d().operand("columns") == col
+                    isinstance(d, Projection) and d.operand("columns") == col
                     for d in dependents[self._name]
                 ):
                     return type(self)(self.frame, True, self.name)
@@ -2713,10 +2711,6 @@ class _DelayedExpr(Expr):
     # integrate this properly...
     # TODO
     _parameters = ["obj"]
-
-    def __init__(self, obj):
-        self.obj = obj
-        self.operands = [obj]
 
     def __str__(self):
         return f"{type(self).__name__}({str(self.obj)})"
@@ -3450,7 +3444,7 @@ def determine_column_projection(expr, parent, dependents, additional_columns=Non
         column_union = []
     else:
         column_union = parent.columns.copy()
-    parents = [x() for x in dependents[expr._name] if x() is not None]
+    parents = dependents[expr._name]
 
     seen = set()
     for p in parents:
@@ -3510,7 +3504,7 @@ def plain_column_projection(expr, parent, dependents, additional_columns=None):
 
 
 def is_filter_pushdown_available(expr, parent, dependents, allow_reduction=True):
-    parents = [x() for x in dependents[expr._name] if x() is not None]
+    parents = dependents[expr._name]
     filters = {e._name for e in parents if isinstance(e, Filter)}
     if len(filters) != 1:
         # Don't push down if not exactly one Filter
@@ -3617,7 +3611,7 @@ def _check_dependents_are_predicates(
             continue
         seen.add(e._name)
 
-        e_dependents = {x()._name for x in dependents[e._name] if x() is not None}
+        e_dependents = {x._name for x in dependents[e._name]}
 
         if not allow_reduction:
             if isinstance(e, Reduction):

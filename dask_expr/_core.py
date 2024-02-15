@@ -10,25 +10,28 @@ import dask
 import pandas as pd
 import toolz
 from dask.dataframe.core import is_dataframe_like, is_index_like, is_series_like
+from dask.delayed import Delayed
 from dask.utils import funcname, import_required, is_arraylike
+from toolz.dicttoolz import merge
 
 from dask_expr._util import _BackendData, _tokenize_deterministic
 
 
 def _unpack_collections(o):
     if isinstance(o, Expr):
-        return o
-
-    if hasattr(o, "expr"):
-        return o.expr
+        return o, o._name
+    elif hasattr(o, "expr") and not isinstance(o, Delayed):
+        return o.expr, o.expr._name
     else:
-        return o
+        return o, None
 
 
 class Expr:
     _parameters = []
     _defaults = {}
     _instances = weakref.WeakValueDictionary()
+    _dependents = defaultdict(list)
+    _seen = set()
 
     def __new__(cls, *args, **kwargs):
         operands = list(args)
@@ -38,14 +41,74 @@ class Expr:
             except KeyError:
                 operands.append(cls._defaults[parameter])
         assert not kwargs, kwargs
-        inst = object.__new__(cls)
-        inst.operands = [_unpack_collections(o) for o in operands]
-        _name = inst._name
-        if _name in Expr._instances:
-            return Expr._instances[_name]
 
-        Expr._instances[_name] = inst
+        parsed_operands = []
+        children = set()
+        _subgraphs = []
+        _subgraph_instances = []
+        _graph_instances = {}
+        for o in operands:
+            expr, name = _unpack_collections(o)
+            parsed_operands.append(expr)
+            if name is not None:
+                children.add(name)
+                _subgraphs.append(expr._graph)
+                _subgraph_instances.append(expr._graph_instances)
+                _graph_instances[name] = expr
+
+        inst = object.__new__(cls)
+        inst.operands = parsed_operands
+        _name = inst._name
+
+        # Graph instances is a mapping name -> Expr instance
+        # Graph itself is a mapping of dependencies mapping names to a set of names
+
+        if _name in Expr._instances:
+            inst = Expr._instances[_name]
+            inst._graph_instances.update(merge(_graph_instances, *_subgraph_instances))
+            inst._graph.update(merge(*_subgraphs))
+            inst._graph[_name].update(children)
+            # Probably a bad idea to have a self ref
+            inst._graph_instances[_name] = inst
+
+        else:
+            Expr._instances[_name] = inst
+            inst._graph_instances = merge(_graph_instances, *_subgraph_instances)
+            inst._graph = merge(*_subgraphs)
+            inst._graph[_name] = children
+            # Probably a bad idea to have a self ref
+            inst._graph_instances[_name] = inst
+
+        if inst._name in Expr._seen:
+            # We already registered inst as a dependent of all it's
+            # dependencies, so we don't need to do it again
+            return inst
+
+        Expr._seen.add(inst._name)
+        for dep in inst.dependencies():
+            Expr._dependents[dep._name].append(inst)
+
         return inst
+
+    @functools.cached_property
+    def _dependent_graph(self):
+        # Reset to clear tracking
+        Expr._dependents = defaultdict(list)
+        Expr._seen = set()
+        rv = Expr._dependents
+        # This should be O(E)
+        tmp = defaultdict(set)
+        for expr, dependencies in self._graph.items():
+            for dep in dependencies:
+                tmp[dep].add(expr)
+        for name, exprs in tmp.items():
+            rv[name] = [self._graph_instances[e] for e in exprs]
+        return rv
+
+    def __hash__(self):
+        raise TypeError(
+            "Expr objects can't be used in sets or dicts or similar, use the _name instead"
+        )
 
     def _tune_down(self):
         return None
@@ -149,6 +212,9 @@ class Expr:
     def dependencies(self):
         # Dependencies are `Expr` operands only
         return [operand for operand in self.operands if isinstance(operand, Expr)]
+
+    def dependents(self):
+        return self._dependent_graph
 
     def _task(self, index: int):
         """The task for the i'th partition
@@ -318,8 +384,6 @@ class Expr:
             changed = False
             for operand in expr.operands:
                 if isinstance(operand, Expr):
-                    # Bandaid for now, waiting for Singleton
-                    dependents[operand._name].append(weakref.ref(expr))
                     new = operand.simplify_once(
                         dependents=dependents, simplified=simplified
                     )
@@ -340,7 +404,7 @@ class Expr:
     def simplify(self) -> Expr:
         expr = self
         while True:
-            dependents = collect_dependents(expr)
+            dependents = expr.dependents()
             new = expr.simplify_once(dependents=dependents, simplified={})
             if new._name == expr._name:
                 break
@@ -712,19 +776,3 @@ class Expr:
             or issubclass(operation, Expr)
         ), "`operation` must be`Expr` subclass)"
         return (expr for expr in self.walk() if isinstance(expr, operation))
-
-
-def collect_dependents(expr) -> defaultdict:
-    dependents = defaultdict(list)
-    stack = [expr]
-    seen = set()
-    while stack:
-        node = stack.pop()
-        if node._name in seen:
-            continue
-        seen.add(node._name)
-
-        for dep in node.dependencies():
-            stack.append(dep)
-            dependents[dep._name].append(weakref.ref(node))
-    return dependents
