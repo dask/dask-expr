@@ -4606,7 +4606,11 @@ def read_parquet(
     engine=None,
     **kwargs,
 ):
-    from dask_expr.io.parquet import ReadParquet, _set_parquet_engine
+    from dask_expr.io.parquet import (
+        ReadParquetFSSpec,
+        ReadParquetPyarrowFS,
+        _set_parquet_engine,
+    )
 
     if not isinstance(path, str):
         path = stringify_path(path)
@@ -4618,9 +4622,59 @@ def read_parquet(
             col, op, val = filter
             if op == "in" and not isinstance(val, (set, list, tuple)):
                 raise TypeError("Value of 'in' filter must be a list, set or tuple.")
+    from pyarrow import fs as pa_fs
+
+    if (
+        isinstance(filesystem, pa_fs.FileSystem)
+        or isinstance(filesystem, str)
+        and filesystem.lower() in ("arrow", "pyarrow")
+    ):
+        if calculate_divisions:
+            raise NotImplementedError(
+                "calculate_divisions is not supported when using the pyarrow filesystem."
+            )
+        if metadata_task_size is not None:
+            raise NotImplementedError(
+                "metadata_task_size is not supported when using the pyarrow filesystem."
+            )
+        if split_row_groups != "infer":
+            raise NotImplementedError(
+                "split_row_groups is not supported when using the pyarrow filesystem."
+            )
+        if blocksize != "default":
+            raise NotImplementedError(
+                "blocksize is not supported when using the pyarrow filesystem."
+            )
+        if aggregate_files is not None:
+            raise NotImplementedError(
+                "aggregate_files is not supported when using the pyarrow filesystem."
+            )
+        if parquet_file_extension != (".parq", ".parquet", ".pq"):
+            raise NotImplementedError(
+                "parquet_file_extension is not supported when using the pyarrow filesystem."
+            )
+        if engine is not None:
+            raise NotImplementedError(
+                "engine is not supported when using the pyarrow filesystem."
+            )
+
+        return new_collection(
+            ReadParquetPyarrowFS(
+                path,
+                columns=_convert_to_list(columns),
+                filters=filters,
+                categories=categories,
+                index=index,
+                storage_options=storage_options,
+                filesystem=filesystem,
+                ignore_metadata_file=ignore_metadata_file,
+                kwargs=kwargs,
+                _series=isinstance(columns, str),
+            )
+        )
 
     return new_collection(
-        ReadParquet(
+        ReadParquetFSSpec(
             path,
             columns=_convert_to_list(columns),
             filters=filters,
