@@ -347,7 +347,7 @@ class TreeReduce(Expr):
 
     @property
     def _meta(self):
-        return self.operand("_meta")
+        return make_meta(self.operand("_meta"))
 
     def _divisions(self):
         return (None, None)
