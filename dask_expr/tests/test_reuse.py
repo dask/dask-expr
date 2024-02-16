@@ -48,6 +48,7 @@ def test_dont_reuse_reducer(df, pdf):
 
     result = df + df.sum()
     expected = pdf + pdf.sum()
+    result.optimize().pprint()
     assert_eq(result, expected)
     _check_io_nodes(result.optimize(fuse=False), 2)
 
