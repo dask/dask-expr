@@ -60,7 +60,6 @@ def test_dont_reuse_reducer(df, pdf):
     expected["new"] = expected.x + expected.y.sum()
     expected["new2"] = expected.b + expected.a.sum()
     assert_eq(result, expected)
-    result.optimize(fuse=False).pprint()
     _check_io_nodes(result.optimize(fuse=False), 2)
 
     result = df.replace(1, 5)
@@ -70,7 +69,6 @@ def test_dont_reuse_reducer(df, pdf):
     expected["new"] = expected.x + expected.y.sum()
     expected["new2"] = expected.b + expected.a.sum()
     assert_eq(result, expected)
-    result.optimize(fuse=False).pprint()
     _check_io_nodes(result.optimize(fuse=False), 3)
 
     result = df.replace(1, 5)
@@ -78,5 +76,4 @@ def test_dont_reuse_reducer(df, pdf):
     expected = pdf.replace(1, 5)
     expected["new"] = expected.x + expected.sum().dropna().prod()
     assert_eq(result, expected)
-    result.optimize(fuse=False).pprint()
     _check_io_nodes(result.optimize(fuse=False), 2)

@@ -1905,7 +1905,7 @@ class Projection(Elemwise):
             and self._meta.ndim == self.frame._meta.ndim
         ):
             # TODO: we should get more precise around Expr.columns types
-            return type(self.frame)(*self.frame.argument_operands, self._branch_id)
+            return self.frame
         if isinstance(self.frame, Projection):
             # df[a][b]
             a = self.frame.operand("columns")
@@ -1919,7 +1919,7 @@ class Projection(Elemwise):
             else:
                 assert b in a
 
-            return type(self)(self.frame.frame, b, *self.operands[2:])
+            return self.frame.frame[b]
 
 
 class Index(Elemwise):
@@ -3344,9 +3344,7 @@ class UFuncAlign(MaybeAlignPartitions):
     def _lower(self):
         args = maybe_align_partitions(*self.args, divisions=self._divisions())
         dfs = [x for x in args if isinstance(x, Expr) and x.ndim > 0]
-        return UFuncElemwise(
-            dfs[0], self.func, self._meta, False, self.kwargs, *args, self._branch_id
-        )
+        return UFuncElemwise(dfs[0], self.func, self._meta, False, self.kwargs, *args)
 
 
 class Fused(Blockwise):
