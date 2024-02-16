@@ -1,6 +1,7 @@
 import os
 
 import pandas as pd
+import pyarrow as pa
 import pytest
 from dask.dataframe.utils import assert_eq
 
@@ -11,10 +12,16 @@ from dask_expr.io import ReadParquet
 
 
 def _make_file(dir, df=None):
-    fn = os.path.join(str(dir), f"myfile.{format}")
+    fn = os.path.join(str(dir), f"myfile.parquet")
     if df is None:
         df = pd.DataFrame({c: range(10) for c in "abcde"})
     df.to_parquet(fn)
+    return fn
+
+
+@pytest.fixture
+def parquet_file(tmpdir):
+    return _make_file(tmpdir)
 
 
 def test_parquet_len(tmpdir):
@@ -78,7 +85,7 @@ def test_predicate_pushdown(tmpdir):
             "e": [8, 9] * 25,
         }
     )
-    fn = _make_file(tmpdir, format="parquet", df=original)
+    fn = _make_file(tmpdir, df=original)
     df = read_parquet(fn)
     assert_eq(df, original)
     x = df[df.a == 5][df.c > 20]["b"]
@@ -106,7 +113,7 @@ def test_predicate_pushdown_compound(tmpdir):
             "e": [8, 9] * 25,
         }
     )
-    fn = _make_file(tmpdir, format="parquet", df=pdf)
+    fn = _make_file(tmpdir, df=pdf)
     df = read_parquet(fn)
 
     # Test AND
@@ -144,3 +151,13 @@ def test_predicate_pushdown_compound(tmpdir):
     assert {("c", ">", 20), ("b", "!=", 0)} in filters
     assert {("a", "==", 5), ("b", "!=", 0)} in filters
     assert_eq(y, z)
+
+
+def test_pyarrow_filesystem(parquet_file):
+    from pyarrow import fs
+
+    fs = fs.LocalFileSystem()
+
+    df_pa = read_parquet(parquet_file, filesystem=fs)
+    df = read_parquet(parquet_file)
+    assert assert_eq(df, df_pa)
