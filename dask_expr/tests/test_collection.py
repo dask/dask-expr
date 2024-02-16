@@ -2412,10 +2412,7 @@ def test_filter_optimize_condition():
 
 def test_scalar_repr(df):
     result = repr(df.size)
-    assert (
-        result
-        == "<dask_expr.expr.Scalar: expr=df.size(_branch_id=BranchId(branch_id=0)), dtype=int64>"
-    )
+    assert result == "<dask_expr.expr.Scalar: expr=df.size(), dtype=int64>"
 
 
 def test_reset_index_filter_pushdown(df):

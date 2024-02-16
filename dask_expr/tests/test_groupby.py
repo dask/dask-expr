@@ -95,12 +95,12 @@ def test_groupby_numeric(pdf, df, api, numeric_only, split_every):
 
 def test_groupby_reduction_optimize(pdf, df):
     df = df.replace(1, 5)
-    # agg = df.groupby(df.x).y.sum()
-    # expected_query = df[["x", "y"]]
-    # expected_query = expected_query.groupby(expected_query.x).y.sum()
-    # assert agg.optimize()._name == expected_query.optimize()._name
-    # expect = pdf.replace(1, 5).groupby(["x"]).y.sum()
-    # assert_eq(agg, expect)
+    agg = df.groupby(df.x).y.sum()
+    expected_query = df[["x", "y"]]
+    expected_query = expected_query.groupby(expected_query.x).y.sum()
+    assert agg.optimize()._name == expected_query.optimize()._name
+    expect = pdf.replace(1, 5).groupby(["x"]).y.sum()
+    assert_eq(agg, expect)
 
     df2 = df[["y"]]
     agg = df2.groupby(df.x).y.sum()
