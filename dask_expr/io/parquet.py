@@ -482,6 +482,22 @@ class ReadParquetPyarrowFS(PartitionsFiltered, BlockwiseIO):
     _pq_length_stats = None
     _absorb_projections = True
 
+    def _tree_repr_argument_construction(self, i, op, header):
+        try:
+            param = self._parameters[i]
+            default = self._defaults[param]
+        except (IndexError, KeyError):
+            param = self._parameters[i] if i < len(self._parameters) else ""
+            default = "--no-default--"
+        if param in ("_dataset_info_cache",):
+            return header
+        if repr(op) != repr(default):
+            if param:
+                header += f" {param}={repr(op)}"
+            else:
+                header += repr(op)
+        return header
+
     @cached_property
     def fs(self):
         fs_input = self.operand("filesystem")
@@ -566,61 +582,61 @@ class ReadParquetPyarrowFS(PartitionsFiltered, BlockwiseIO):
     def fragments(self):
         return self._dataset_info["fragments"]
 
-    def _filtered_task(self, index: int):
-        def _fragment_to_pandas(fragment, columns):
-            from dask.utils import parse_bytes
+    @staticmethod
+    def _fragment_to_pandas(fragment, columns):
+        from dask.utils import parse_bytes
 
-            # TODO: There should be a way for users to define the type mapper
-            print(f"Reading partition {index}")
-            table = fragment.to_table(
-                # schema=None,
-                columns=columns,
-                # filter=None,
-                # batch_size=131072,
-                # batch_readahead=16,
-                # fragment_readahead=4,
-                fragment_scan_options=pa.dataset.ParquetFragmentScanOptions(
-                    # use_buffered_stream=False,
-                    # buffer_size=8192,
-                    pre_buffer=True,
-                    cache_options=pa.CacheOptions(
-                        # hole_size_limit=parse_bytes("8 KiB"),
-                        # range_size_limit=parse_bytes("32.00 MiB"),
-                        hole_size_limit=parse_bytes("4 MiB"),
-                        range_size_limit=parse_bytes("32.00 MiB"),
-                        lazy=True,
-                        prefetch_limit=500,
-                    ),
-                    # thrift_string_size_limit=None,
-                    # thrift_container_size_limit=None,
-                    # decryption_config=None,
-                    # page_checksum_verification=False,
+        # TODO: There should be a way for users to define the type mapper
+        table = fragment.to_table(
+            # schema=None,
+            columns=columns,
+            # filter=None,
+            # batch_size=131072,
+            # batch_readahead=16,
+            # fragment_readahead=4,
+            fragment_scan_options=pa.dataset.ParquetFragmentScanOptions(
+                # use_buffered_stream=False,
+                # buffer_size=8192,
+                pre_buffer=True,
+                cache_options=pa.CacheOptions(
+                    # hole_size_limit=parse_bytes("8 KiB"),
+                    # range_size_limit=parse_bytes("32.00 MiB"),
+                    hole_size_limit=parse_bytes("4 MiB"),
+                    range_size_limit=parse_bytes("32.00 MiB"),
+                    # I've seen this actually slowing us down, e.g. on TPCHQ14
+                    lazy=False,
+                    prefetch_limit=500,
                 ),
-                use_threads=True,
-            )
-            print(table.schema)
-            df = table.to_pandas(
-                types_mapper=_determine_type_mapper(),
-                # categories=None,
-                # strings_to_categorical=False,
-                # zero_copy_only=False,
-                # integer_object_nulls=False,
-                # date_as_object=True,
-                # timestamp_as_object=False,
-                use_threads=False,
-                # deduplicate_objects=True,
-                # ignore_metadata=False,
-                # safe=True,
-                # split_blocks=False,
-                self_destruct=True,
-                # maps_as_pydicts=None,
-                # coerce_temporal_nanoseconds=False,
-            )
-            print(df.dtypes)
-            return df
+                # thrift_string_size_limit=None,
+                # thrift_container_size_limit=None,
+                # decryption_config=None,
+                # page_checksum_verification=False,
+            ),
+            # TODO: Reconsider this. The OMP_NUM_THREAD variable makes it harmful to enable this
+            use_threads=False,
+        )
+        df = table.to_pandas(
+            types_mapper=_determine_type_mapper(),
+            # categories=None,
+            # strings_to_categorical=False,
+            # zero_copy_only=False,
+            # integer_object_nulls=False,
+            # date_as_object=True,
+            # timestamp_as_object=False,
+            use_threads=False,
+            # deduplicate_objects=True,
+            # ignore_metadata=False,
+            # safe=True,
+            # split_blocks=False,
+            self_destruct=True,
+            # maps_as_pydicts=None,
+            # coerce_temporal_nanoseconds=False,
+        )
+        return df
 
+    def _filtered_task(self, index: int):
         return (
-            _fragment_to_pandas,
+            ReadParquetPyarrowFS._fragment_to_pandas,
             self.fragments[index],
             self.columns,
         )
