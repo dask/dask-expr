@@ -53,6 +53,7 @@ from pandas.errors import PerformanceWarning
 from tlz import merge_sorted, partition, unique
 
 from dask_expr import _core as core
+from dask_expr._core import BranchId
 from dask_expr._util import (
     _calc_maybe_new_divisions,
     _convert_to_list,
@@ -2719,9 +2720,11 @@ class _DelayedExpr(Expr):
     # TODO
     _parameters = ["obj"]
 
-    def __init__(self, obj):
+    def __init__(self, obj, _branch_id=None):
         self.obj = obj
-        self.operands = [obj]
+        if _branch_id is None:
+            _branch_id = BranchId(None)
+        self.operands = [obj, _branch_id]
 
     def __str__(self):
         return f"{type(self).__name__}({str(self.obj)})"
