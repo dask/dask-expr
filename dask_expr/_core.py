@@ -40,7 +40,7 @@ class Expr:
         if _branch_id is None and len(operands) and isinstance(operands[-1], BranchId):
             _branch_id = operands.pop(-1)
         elif _branch_id is None:
-            _branch_id = BranchId(None)
+            _branch_id = BranchId(0)
 
         for parameter in cls._parameters[len(operands) :]:
             try:
@@ -125,6 +125,10 @@ class Expr:
                     op = "<series>"
                 elif is_arraylike(op):
                     op = "<array>"
+                elif isinstance(op, BranchId):
+                    if op.branch_id == 0:
+                        continue
+                    op = f" branch_id={op.branch_id}"
                 header = self._tree_repr_argument_construction(i, op, header)
 
         lines = [header] + lines
@@ -285,10 +289,27 @@ class Expr:
 
         return expr
 
-    def _push_branch_id(self, parent):
-        if self._branch_id.branch_id != parent._branch_id.branch_id:
-            result = type(self)(*self.operands[:-1], parent._branch_id)
-            return parent.substitute(self, result)
+    def _reuse_up(self, parent):
+        return
+
+    def _reuse_down(self):
+        if not self.dependencies():
+            return
+        return self._bubble_branch_id_down()
+
+    def _bubble_branch_id_down(self):
+        b_id = self._branch_id
+        if any(b_id.branch_id != d._branch_id.branch_id for d in self.dependencies()):
+            ops = [
+                op._substitute_branch_id(b_id) if isinstance(op, Expr) else op
+                for op in self.argument_operands
+            ]
+            return type(self)(*ops)
+
+    def _substitute_branch_id(self, branch_id):
+        if self._branch_id.branch_id != 0:
+            return self
+        return type(self)(*self.argument_operands, branch_id)
 
     def simplify_once(self, dependents: defaultdict, simplified: dict):
         """Simplify an expression
@@ -326,9 +347,7 @@ class Expr:
 
             # Allow children to simplify their parents
             for child in expr.dependencies():
-                out = child._push_branch_id(expr)
-                if out is None:
-                    out = child._simplify_up(expr, dependents)
+                out = child._simplify_up(expr, dependents)
                 if out is None:
                     out = expr
 

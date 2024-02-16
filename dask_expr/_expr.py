@@ -1757,9 +1757,8 @@ class Assign(Elemwise):
                 for k, v in zip(self.keys, self.vals):
                     if k in columns:
                         new_args.extend([k, v])
-                new_args.append(self._branch_id)
             else:
-                new_args = self.operands[1:]
+                new_args = self.argument_operands[1:]
 
             columns = [col for col in self.frame.columns if col in cols]
             return type(parent)(
@@ -2723,7 +2722,7 @@ class _DelayedExpr(Expr):
     def __init__(self, obj, _branch_id=None):
         self.obj = obj
         if _branch_id is None:
-            _branch_id = BranchId(None)
+            _branch_id = BranchId(0)
         self.operands = [obj, _branch_id]
 
     def __str__(self):
@@ -2752,7 +2751,9 @@ def normalize_expression(expr):
     return expr._name
 
 
-def optimize(expr: Expr, fuse: bool = True) -> Expr:
+def optimize(
+    expr: Expr, fuse: bool = True, common_subplan_elimination: bool = True
+) -> Expr:
     """High level query optimization
 
     This leverages three optimization passes:
@@ -2766,15 +2767,28 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
         Input expression to optimize
     fuse:
         whether or not to turn on blockwise fusion
+    common_subplan_elimination : bool
+        whether we want to reuse common subplans that are found in the graph and
+        are used in self-joins or similar which require all data be held in memory
+        at some point. Only set this to false if your dataset fits into memory.
 
     See Also
     --------
     simplify
     optimize_blockwise_fusion
     """
+    result = expr
+    while True:
+        if common_subplan_elimination:
+            out = result.rewrite("reuse")
+        else:
+            out = result
+        out = out.simplify()
+        if out._name == result._name or not common_subplan_elimination:
+            break
+        result = out
 
-    # Simplify
-    result = expr.simplify()
+    result = out
 
     # Manipulate Expression to make it more efficient
     result = result.rewrite(kind="tune")

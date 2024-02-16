@@ -508,11 +508,14 @@ class ApplyConcatApply(Expr):
             ignore_index=getattr(self, "ignore_index", True),
         )
 
-    def _push_branch_id(self, parent):
+    def _reuse_up(self, parent):
         return
 
-    def _simplify_down(self):
-        if self._branch_id.branch_id is not None:
+    def _substitute_branch_id(self, branch_id):
+        return self
+
+    def _reuse_down(self):
+        if self._branch_id.branch_id != 0:
             return
 
         seen = set()
@@ -535,7 +538,12 @@ class ApplyConcatApply(Expr):
             stack.extend(deps)
         if not found_io:
             return
-        return type(self)(*self.operands[:-1], BranchId(counter))
+        b_id = BranchId(counter)
+        result = type(self)(*self.argument_operands, b_id)
+        out = result._bubble_branch_id_down()
+        if out is None:
+            return result
+        return type(out)(*out.argument_operands, b_id)
 
 
 class Unique(ApplyConcatApply):

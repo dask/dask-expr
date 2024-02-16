@@ -137,7 +137,7 @@ def test_shuffle_column_projection(df):
 
 
 def test_shuffle_reductions(df):
-    assert df.shuffle("x").sum().simplify()._name == df.sum()._name
+    assert df.shuffle("x").sum().simplify()._name == df.sum().simplify()._name
 
 
 @pytest.mark.xfail(reason="Shuffle can't see the reduction through the Projection")
@@ -716,7 +716,7 @@ def test_sort_values_avoid_overeager_filter_pushdown(meth):
     pdf1 = pd.DataFrame({"a": [4, 2, 3], "b": [1, 2, 3]})
     df = from_pandas(pdf1, npartitions=2)
     df = getattr(df, meth)("a")
-    df = df[df.b > 2] + df.b.sum()
+    df = df[df.b > 2] + df[df.b > 1]
     result = df.simplify()
     assert isinstance(result.expr.left, Filter)
     assert isinstance(result.expr.left.frame, BaseSetIndexSortValues)
