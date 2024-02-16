@@ -2780,7 +2780,7 @@ def optimize(
     result = expr
     while True:
         if common_subplan_elimination:
-            out = result.rewrite("reuse")
+            out = result.rewrite("reuse", cache={})
         else:
             out = result
         out = out.simplify()
@@ -2791,13 +2791,13 @@ def optimize(
     result = out
 
     # Manipulate Expression to make it more efficient
-    result = result.rewrite(kind="tune")
+    result = result.rewrite(kind="tune", cache={})
 
     # Lower
     result = result.lower_completely()
 
     # Cull
-    result = result.rewrite(kind="cull")
+    result = result.rewrite(kind="cull", cache={})
 
     # Final graph-specific optimizations
     if fuse:

@@ -225,7 +225,7 @@ class Expr:
 
         return {(self._name, i): self._task(i) for i in range(self.npartitions)}
 
-    def rewrite(self, kind: str):
+    def rewrite(self, kind: str, cache):
         """Rewrite an expression
 
         This leverages the ``._{kind}_down`` and ``._{kind}_up``
@@ -238,6 +238,9 @@ class Expr:
         changed:
             whether or not any change occured
         """
+        if self._name in cache:
+            return cache[self._name]
+
         expr = self
         down_name = f"_{kind}_down"
         up_name = f"_{kind}_up"
@@ -274,7 +277,8 @@ class Expr:
             changed = False
             for operand in expr.operands:
                 if isinstance(operand, Expr):
-                    new = operand.rewrite(kind=kind)
+                    new = operand.rewrite(kind=kind, cache=cache)
+                    cache[operand._name] = new
                     if new._name != operand._name:
                         changed = True
                 else:
