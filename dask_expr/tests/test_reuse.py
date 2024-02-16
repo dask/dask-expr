@@ -48,7 +48,7 @@ def test_dont_reuse_reducer(df, pdf):
 
     result = df + df.sum()
     expected = pdf + pdf.sum()
-    assert_eq(result, expected)
+    assert_eq(result, expected, check_names=False)  # pandas 2.2 bug
     _check_io_nodes(result.optimize(fuse=False), 2)
 
     result = df.replace(1, 5)
