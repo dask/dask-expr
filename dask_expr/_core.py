@@ -17,7 +17,7 @@ from dask_expr._util import _BackendData, _tokenize_deterministic
 
 
 class BranchId(NamedTuple):
-    branch_id: int | None
+    branch_id: int
 
 
 def _unpack_collections(o):
