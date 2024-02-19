@@ -12,6 +12,7 @@ import toolz
 from dask.dataframe.core import is_dataframe_like, is_index_like, is_series_like
 from dask.utils import funcname, import_required, is_arraylike
 
+from dask_expr._diagnostics import explain
 from dask_expr._util import _BackendData, _tokenize_deterministic
 
 
@@ -110,6 +111,21 @@ class Expr:
 
     def tree_repr(self):
         return os.linesep.join(self._tree_repr_lines())
+
+    def _explain_label(self):
+        return "".join(
+            [
+                "<{<b>",
+                funcname(type(self)),
+                "</b> | ",
+                "npartitions: ",
+                str(self.npartitions),
+                "}>",
+            ]
+        )
+
+    def explain(self, fuse: bool = True) -> None:
+        explain(self, fuse)
 
     def pprint(self):
         for line in self._tree_repr_lines():
