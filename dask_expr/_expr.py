@@ -3485,7 +3485,7 @@ def determine_column_projection(expr, parent, dependents, additional_columns=Non
 
 def _sort_mixed(values):
     """order ints before strings before nulls in 1d arrays"""
-    str_pos = np.array([isinstance(x, str) for x in values], dtype=bool)
+    str_pos = np.array([isinstance(x, (str, tuple)) for x in values], dtype=bool)
     null_pos = np.array([pd.isna(x) for x in values], dtype=bool)
     num_pos = ~str_pos & ~null_pos
     str_argsort = np.argsort(values[str_pos])
