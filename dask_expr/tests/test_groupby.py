@@ -107,7 +107,6 @@ def test_groupby_reduction_optimize(pdf, df):
     ops = [
         op for op in agg.expr.optimize(fuse=False).walk() if isinstance(op, FromPandas)
     ]
-    agg.simplify().pprint()
     assert len(ops) == 1
     assert ops[0].columns == ["x", "y"]
 
