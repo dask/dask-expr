@@ -2752,7 +2752,7 @@ def normalize_expression(expr):
 
 
 def optimize(
-    expr: Expr, fuse: bool = True, common_subplan_elimination: bool = True
+    expr: Expr, fuse: bool = True, common_subplan_elimination: bool = False
 ) -> Expr:
     """High level query optimization
 
@@ -2767,7 +2767,7 @@ def optimize(
         Input expression to optimize
     fuse:
         whether or not to turn on blockwise fusion
-    common_subplan_elimination : bool
+    common_subplan_elimination : bool, default False
         whether we want to reuse common subplans that are found in the graph and
         are used in self-joins or similar which require all data be held in memory
         at some point. Only set this to false if your dataset fits into memory.
@@ -2779,12 +2779,12 @@ def optimize(
     """
     result = expr
     while True:
-        if common_subplan_elimination:
+        if not common_subplan_elimination:
             out = result.rewrite("reuse", cache={})
         else:
             out = result
         out = out.simplify()
-        if out._name == result._name or not common_subplan_elimination:
+        if out._name == result._name or common_subplan_elimination:
             break
         result = out
 
