@@ -413,6 +413,12 @@ class FrameBase(DaskMethodsMixin):
         out = out.optimize(fuse=fuse)
         return DaskMethodsMixin.compute(out, **kwargs)
 
+    def explain(self, fuse: bool = True, analyze: bool = False, **kwargs):
+        out = self
+        if not isinstance(out, Scalar):
+            out = out.repartition(npartitions=1)
+        return out.expr.explain(fuse=fuse)
+
     @property
     def dask(self):
         return self.__dask_graph__()
