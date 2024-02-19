@@ -2770,7 +2770,7 @@ def optimize(
     common_subplan_elimination : bool, default False
         whether we want to reuse common subplans that are found in the graph and
         are used in self-joins or similar which require all data be held in memory
-        at some point. Only set this to false if your dataset fits into memory.
+        at some point. Only set this to true if your dataset fits into memory.
 
     See Also
     --------
