@@ -2722,7 +2722,8 @@ class _DelayedExpr(Expr):
         self.obj = obj
         if _branch_id is None:
             _branch_id = BranchId(0)
-        self.operands = [obj, _branch_id]
+        self._branch_id = _branch_id
+        self.operands = [obj]
 
     def __str__(self):
         return f"{type(self).__name__}({str(self.obj)})"

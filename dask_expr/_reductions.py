@@ -543,7 +543,7 @@ class ApplyConcatApply(Expr):
         out = result._bubble_branch_id_down()
         if out is None:
             return result
-        return type(out)(*out.operands, b_id)
+        return type(out)(*out.operands, _branch_id=b_id)
 
 
 class Unique(ApplyConcatApply):

@@ -273,7 +273,7 @@ class Expr:
                 new_operands.append(new)
 
             if changed:
-                expr = type(expr)(*new_operands)
+                expr = type(expr)(*new_operands, _branch_id=expr._branch_id)
                 continue
             else:
                 break
@@ -290,6 +290,8 @@ class Expr:
 
     def _bubble_branch_id_down(self):
         b_id = self._branch_id
+        if b_id.branch_id <= 0:
+            return
         if any(b_id.branch_id != d._branch_id.branch_id for d in self.dependencies()):
             ops = [
                 op._substitute_branch_id(b_id) if isinstance(op, Expr) else op
@@ -366,7 +368,7 @@ class Expr:
                 new_operands.append(new)
 
             if changed:
-                expr = type(expr)(*new_operands)
+                expr = type(expr)(*new_operands, _branch_id=expr._branch_id)
 
             break
 
@@ -411,7 +413,7 @@ class Expr:
             new_operands.append(new)
 
         if changed:
-            out = type(out)(*new_operands)
+            out = type(out)(*new_operands, _branch_id=out._branch_id)
 
         return out
 
