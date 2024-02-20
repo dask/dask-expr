@@ -15,10 +15,15 @@ STAGE_LABELS: dict[OptimizerStage, str] = {
 }
 
 
-def explain(expr: Expr, stage: OptimizerStage = "fused"):
+def explain(expr: Expr, stage: OptimizerStage = "fused", format: str | None = None):
     import graphviz
 
-    g = graphviz.Digraph(STAGE_LABELS[stage], filename=f"explain-{stage}-{expr._name}")
+    if format is None:
+        format = "png"
+
+    g = graphviz.Digraph(
+        STAGE_LABELS[stage], filename=f"explain-{stage}-{expr._name}", format=format
+    )
     g.node_attr.update(shape="record")
 
     expr = optimize_until(expr, stage)

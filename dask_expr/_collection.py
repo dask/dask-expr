@@ -414,11 +414,11 @@ class FrameBase(DaskMethodsMixin):
         out = out.optimize(fuse=fuse)
         return DaskMethodsMixin.compute(out, **kwargs)
 
-    def explain(self, stage: OptimizerStage = "fused"):
+    def explain(self, stage: OptimizerStage = "fused", format: str | None = None):
         out = self
         if not isinstance(out, Scalar):
             out = out.repartition(npartitions=1)
-        return out.expr.explain(stage)
+        return out.expr.explain(stage, format)
 
     @property
     def dask(self):

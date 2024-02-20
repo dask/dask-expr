@@ -121,10 +121,12 @@ class Expr:
     def tree_repr(self):
         return os.linesep.join(self._tree_repr_lines())
 
-    def explain(self, stage: OptimizerStage = "fused") -> None:
+    def explain(
+        self, stage: OptimizerStage = "fused", format: str | None = None
+    ) -> None:
         from dask_expr.diagnostics import explain
 
-        return explain(self, stage)
+        return explain(self, stage, format)
 
     def pprint(self):
         for line in self._tree_repr_lines():
