@@ -565,7 +565,7 @@ class ReadParquetPyarrowFS(PartitionsFiltered, BlockwiseIO):
         # rowgroups, filtering and reading
         # dataset_info["dataset"] = dataset
         dataset_info["schema"] = dataset.schema
-        dataset_info["meta"] = dataset.schema.empty_table().to_pandas()
+        dataset_info["base_meta"] = dataset.schema.empty_table().to_pandas()
         self.operands[
             type(self)._parameters.index("_dataset_info_cache")
         ] = dataset_info
@@ -576,7 +576,14 @@ class ReadParquetPyarrowFS(PartitionsFiltered, BlockwiseIO):
 
     @property
     def _meta(self):
-        return self._dataset_info["meta"]
+        meta = self._dataset_info["base_meta"]
+        columns = _convert_to_list(self.operand("columns"))
+        if self._series:
+            assert len(columns) > 0
+            return meta[columns[0]]
+        elif columns is not None:
+            return meta[columns]
+        return meta
 
     @property
     def fragments(self):
