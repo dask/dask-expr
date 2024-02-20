@@ -118,3 +118,10 @@ def test_assign_unknown_partitions(pdf):
     expected["new"] = pdf2.x
     assert_eq(df1, expected)
     assert len(list(df1.optimize(fuse=False).expr.find_operations(Shuffle))) == 2
+
+    pdf["c"] = "a"
+    pdf = pdf.set_index("c")
+    df = from_pandas(pdf, npartitions=3)
+    df["new"] = df2.x
+    with pytest.raises(TypeError, match="have differing dtypes"):
+        df.optimize()
