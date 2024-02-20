@@ -48,7 +48,9 @@ class FromGraph(IO):
     @functools.cached_property
     def _name(self):
         return (
-            self.operand("name_prefix") + "-" + _tokenize_deterministic(*self.operands)
+            self.operand("name_prefix")
+            + "-"
+            + _tokenize_deterministic(*self.operands, self._branch_id)
         )
 
     def _layer(self):
@@ -103,7 +105,7 @@ class FusedIO(BlockwiseIO):
         return (
             funcname(type(self.operand("_expr"))).lower()
             + "-fused-"
-            + _tokenize_deterministic(*self.operands)
+            + _tokenize_deterministic(*self.operands, self._branch_id)
         )
 
     @functools.cached_property
@@ -173,10 +175,14 @@ class FromMap(PartitionsFiltered, BlockwiseIO):
             return (
                 funcname(self.func).lower()
                 + "-"
-                + _tokenize_deterministic(*self.operands)
+                + _tokenize_deterministic(*self.operands, self._branch_id)
             )
         else:
-            return self.label + "-" + _tokenize_deterministic(*self.operands)
+            return (
+                self.label
+                + "-"
+                + _tokenize_deterministic(*self.operands, self._branch_id)
+            )
 
     @functools.cached_property
     def _meta(self):
@@ -448,7 +454,11 @@ class FromPandasDivisions(FromPandas):
 
     @functools.cached_property
     def _name(self):
-        return "from_pd_divs" + "-" + _tokenize_deterministic(*self.operands)
+        return (
+            "from_pd_divs"
+            + "-"
+            + _tokenize_deterministic(*self.operands, self._branch_id)
+        )
 
     @property
     def _divisions_and_locations(self):

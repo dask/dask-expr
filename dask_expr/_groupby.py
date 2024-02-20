@@ -106,7 +106,7 @@ class GroupByBase:
 
     @functools.cached_property
     def by(self):
-        return self.argument_operands[len(self._parameters) :]
+        return self.operands[len(self._parameters) :]
 
     @functools.cached_property
     def levels(self):

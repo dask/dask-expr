@@ -49,21 +49,14 @@ class Expr:
                 operands.append(cls._defaults[parameter])
         assert not kwargs, kwargs
         inst = object.__new__(cls)
-        inst.operands = [_unpack_collections(o) for o in operands] + [_branch_id]
+        inst.operands = [_unpack_collections(o) for o in operands]
+        inst._branch_id = _branch_id
         _name = inst._name
         if _name in Expr._instances:
             return Expr._instances[_name]
 
         Expr._instances[_name] = inst
         return inst
-
-    @functools.cached_property
-    def argument_operands(self):
-        return self.operands[:-1]
-
-    @functools.cached_property
-    def _branch_id(self):
-        return self.operands[-1]
 
     def _tune_down(self):
         return None
@@ -300,14 +293,14 @@ class Expr:
         if any(b_id.branch_id != d._branch_id.branch_id for d in self.dependencies()):
             ops = [
                 op._substitute_branch_id(b_id) if isinstance(op, Expr) else op
-                for op in self.argument_operands
+                for op in self.operands
             ]
             return type(self)(*ops)
 
     def _substitute_branch_id(self, branch_id):
         if self._branch_id.branch_id != 0:
             return self
-        return type(self)(*self.argument_operands, branch_id)
+        return type(self)(*self.operands, branch_id)
 
     def simplify_once(self, dependents: defaultdict, simplified: dict):
         """Simplify an expression
@@ -454,7 +447,9 @@ class Expr:
     @functools.cached_property
     def _name(self):
         return (
-            funcname(type(self)).lower() + "-" + _tokenize_deterministic(*self.operands)
+            funcname(type(self)).lower()
+            + "-"
+            + _tokenize_deterministic(*self.operands, self._branch_id)
         )
 
     @property
