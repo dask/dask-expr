@@ -105,7 +105,7 @@ class FusedIO(BlockwiseIO):
         return (
             funcname(type(self.operand("_expr"))).lower()
             + "-fused-"
-            + _tokenize_deterministic(*self.operands, self._branch_id)
+            + _tokenize_deterministic(*self.operands, self._expr._branch_id)
         )
 
     @functools.cached_property
@@ -416,7 +416,8 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
                 return Literal(sum(_lengths))
 
         if isinstance(parent, Projection):
-            return super()._simplify_up(parent, dependents)
+            x = super()._simplify_up(parent, dependents)
+            return x
 
     def _divisions(self):
         return self._divisions_and_locations[0]

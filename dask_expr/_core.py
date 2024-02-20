@@ -117,7 +117,10 @@ class Expr:
                         continue
                     op = f" branch_id={op.branch_id}"
                 header = self._tree_repr_argument_construction(i, op, header)
-
+        if self._branch_id.branch_id != 0:
+            header = self._tree_repr_argument_construction(
+                i + 1, f" branch_id={self._branch_id.branch_id}", header
+            )
         lines = [header] + lines
         lines = [" " * indent + line for line in lines]
 
@@ -604,7 +607,7 @@ class Expr:
             else:
                 new_operands.append(operand)
         if changed:
-            return type(self)(*new_operands)
+            return type(self)(*new_operands, _branch_id=self._branch_id)
         return self
 
     def _node_label_args(self):
