@@ -64,7 +64,7 @@ def _add_graphviz_node(explain_info, graph):
 
 def _add_graphviz_edges(explain_info, graph):
     name = explain_info["name"]
-    for _, dep in explain_info["dependencies"].items():
+    for _, dep in explain_info["dependencies"]:
         graph.edge(dep, name)
 
 
@@ -73,11 +73,7 @@ def _explain_info(expr: Expr):
         "name": expr._name,
         "label": funcname(type(expr)),
         "details": _explain_details(expr),
-        "dependencies": {
-            str(param): operand._name
-            for param, operand in zip(expr._parameters, expr.operands)
-            if isinstance(operand, Expr)
-        },
+        "dependencies": _explain_dependencies(expr),
     }
 
 
@@ -90,3 +86,13 @@ def _explain_details(expr: Expr):
         details["path"] = expr.path
 
     return details
+
+
+def _explain_dependencies(expr: Expr) -> list[tuple[str, str]]:
+    dependencies = []
+    for i, operand in enumerate(expr.operands):
+        if not isinstance(operand, Expr):
+            continue
+        param = expr._parameters[i] if i < len(expr._parameters) else ""
+        dependencies.append((str(param), operand._name))
+    return dependencies
