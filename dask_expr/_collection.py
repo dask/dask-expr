@@ -68,6 +68,7 @@ from dask_expr import _expr as expr
 from dask_expr._backends import dataframe_creation_dispatch
 from dask_expr._categorical import CategoricalAccessor, Categorize, GetCategories
 from dask_expr._concat import Concat
+from dask_expr._core import OptimizerStage
 from dask_expr._datetime import DatetimeAccessor
 from dask_expr._describe import DescribeNonNumeric, DescribeNumeric
 from dask_expr._dispatch import get_collection_type
@@ -413,11 +414,11 @@ class FrameBase(DaskMethodsMixin):
         out = out.optimize(fuse=fuse)
         return DaskMethodsMixin.compute(out, **kwargs)
 
-    def explain(self, fuse: bool = True, analyze: bool = False, **kwargs):
+    def explain(self, stage: OptimizerStage = "fused"):
         out = self
         if not isinstance(out, Scalar):
             out = out.repartition(npartitions=1)
-        return out.expr.explain(fuse=fuse)
+        return out.expr.explain(stage)
 
     @property
     def dask(self):

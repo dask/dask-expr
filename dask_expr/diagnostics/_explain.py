@@ -1,51 +1,87 @@
-from dask_expr._expr import Expr, optimize_blockwise_fusion
+from dask.utils import funcname
+
+from dask_expr._core import OptimizerStage
+from dask_expr._expr import Expr, optimize_until
+from dask_expr._merge import Merge
+from dask_expr.io.parquet import ReadParquet
+
+STAGE_LABELS: dict[OptimizerStage, str] = {
+    "logical": "Logical Plan",
+    "simplified-logical": "Simplified Logical Plan",
+    "tuned-logical": "Tuned Logical Plan",
+    "physical": "Physical Plan",
+    "simplified-physical": "Simplified Physical Plan",
+    "fused": "Fused Physical Plan",
+}
 
 
-def explain(expr, fuse: bool = True):
+def explain(expr: Expr, stage: OptimizerStage = "fused"):
     import graphviz
 
-    g = graphviz.Digraph("g", filename=f"explain-{expr._name}")
+    g = graphviz.Digraph(STAGE_LABELS[stage], filename=f"explain-{stage}-{expr._name}")
     g.node_attr.update(shape="record")
 
-    def generate_stage(expr: Expr, name: str, graph: graphviz.Digraph) -> str:
-        seen = set(expr._name)
-        stack = [expr]
+    expr = optimize_until(expr, stage)
 
-        subgraph_id = f"cluster-{name}"
-        with graph.subgraph(name=subgraph_id) as c:
-            c.attr(label=name)
-            while stack:
-                node = stack.pop()
-                c.node(f"{subgraph_id}-{node._name}", label=node._explain_label())
+    seen = set(expr._name)
+    stack = [expr]
 
-                for dep in node.dependencies():
-                    c.edge(f"{subgraph_id}-{dep._name}", f"{subgraph_id}-{node._name}")
-                    if dep._name not in seen:
-                        seen.add(dep._name)
-                        stack.append(dep)
-        return subgraph_id
+    while stack:
+        node = stack.pop()
+        explain_info = _explain_info(node)
+        _add_graphviz_node(explain_info, g)
+        _add_graphviz_edges(explain_info, g)
 
-    result = expr
-    generate_stage(result, "Logical Plan", g)
-    # Simplify
-    result = result.simplify()
-    generate_stage(result, "Simplified Logical Plan", g)
-
-    # Manipulate Expression to make it more efficient
-    result = result.rewrite(kind="tune")
-    generate_stage(result, "Tuned Logical Plan", g)
-
-    # Lower
-    result = result.lower_completely()
-    generate_stage(result, "Physical Plan", g)
-
-    # Simplify again
-    result = result.simplify()
-    generate_stage(result, "Simplified Physical Plan", g)
-
-    # Final graph-specific optimizations
-    if fuse:
-        result = optimize_blockwise_fusion(result)
-        generate_stage(result, "Fused Physical Plan", g)
+        for dep in node.operands:
+            if not isinstance(dep, Expr) or dep._name in seen:
+                continue
+            seen.add(dep._name)
+            stack.append(dep)
 
     g.view()
+
+
+def _add_graphviz_node(explain_info, graph):
+    label = "".join(
+        [
+            "<{<b>",
+            explain_info["label"],
+            "</b> | ",
+            "<br />".join(
+                [f"{key}: {value}" for key, value in explain_info["details"].items()]
+            ),
+            "}>",
+        ]
+    )
+
+    graph.node(explain_info["name"], label)
+
+
+def _add_graphviz_edges(explain_info, graph):
+    name = explain_info["name"]
+    for _, dep in explain_info["dependencies"].items():
+        graph.edge(dep, name)
+
+
+def _explain_info(expr: Expr):
+    return {
+        "name": expr._name,
+        "label": funcname(type(expr)),
+        "details": _explain_details(expr),
+        "dependencies": {
+            str(param): operand._name
+            for param, operand in zip(expr._parameters, expr.operands)
+            if isinstance(operand, Expr)
+        },
+    }
+
+
+def _explain_details(expr: Expr):
+    details = {"npartitions": expr.npartitions}
+
+    if isinstance(expr, Merge):
+        details["how"] = expr.how
+    elif isinstance(expr, ReadParquet):
+        details["path"] = expr.path
+
+    return details
