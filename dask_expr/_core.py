@@ -5,7 +5,7 @@ import os
 import weakref
 from collections import defaultdict
 from collections.abc import Generator
-from typing import Literal, TypeAlias
+from typing import TYPE_CHECKING, Literal
 
 import dask
 import pandas as pd
@@ -14,6 +14,10 @@ from dask.dataframe.core import is_dataframe_like, is_index_like, is_series_like
 from dask.utils import funcname, import_required, is_arraylike
 
 from dask_expr._util import _BackendData, _tokenize_deterministic
+
+if TYPE_CHECKING:
+    # TODO import from typing (requires Python >=3.10)
+    from typing_extensions import TypeAlias
 
 OptimizerStage: TypeAlias = Literal[
     "logical",
