@@ -124,7 +124,9 @@ class LocIndexer(Indexer):
             frame, iindexer = maybe_align_partitions(
                 frame.expr,
                 iindexer.expr,
-                divisions=calc_divisions_for_align(frame.expr, iindexer.expr),
+                divisions=calc_divisions_for_align(
+                    frame.expr, iindexer.expr, allow_shuffle=False
+                ),
             )
         if cindexer is None or isinstance(cindexer, Callable):
             return new_collection(Loc(frame, iindexer))

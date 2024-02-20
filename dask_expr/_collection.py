@@ -683,6 +683,7 @@ class FrameBase(DaskMethodsMixin):
         ignore_index: bool = False,
         npartitions: int | None = None,
         shuffle_method: str | None = None,
+        index_shuffle: bool = False,
         **options,
     ):
         """Rearrange DataFrame into new partitions
@@ -735,6 +736,7 @@ class FrameBase(DaskMethodsMixin):
                 ignore_index,
                 shuffle_method,
                 options,
+                index_shuffle=index_shuffle,
             )
         )
 
@@ -2406,9 +2408,11 @@ class DataFrame(FrameBase):
                     if not expr.are_co_aligned(
                         result.expr, v.expr, allow_broadcast=False
                     ):
-                        result = expr.Assign(result, *args)
-                        args = []
+                        if len(args) > 0:
+                            result = expr.Assign(result, *args)
+                            args = []
                         result = new_collection(expr.AssignAlign(result, k, v.expr))
+                        continue
 
             elif not isinstance(v, FrameBase) and isinstance(v, Hashable):
                 pass
@@ -2427,7 +2431,10 @@ class DataFrame(FrameBase):
                 raise TypeError(f"Column assignment doesn't support type {type(v)}")
             args.extend([k, v])
 
-        return new_collection(expr.Assign(result, *args))
+        if len(args) > 0:
+            result = expr.Assign(result, *args)
+
+        return new_collection(result)
 
     @derived_from(pd.DataFrame)
     def clip(self, lower=None, upper=None, axis=None, **kwargs):
