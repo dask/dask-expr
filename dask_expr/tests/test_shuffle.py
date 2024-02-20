@@ -741,3 +741,10 @@ def test_set_index_filter_pushdown():
     expected = df[["x", "y"]]
     expected = expected[expected.y == 1].set_index("x")
     assert result.simplify()._name == expected.simplify()._name
+
+
+def test_shuffle_index_shuffle(df):
+    with pytest.raises(TypeError, match="Have to pass on or set"):
+        df.shuffle()
+    with pytest.raises(TypeError, match="Can't pass on and set"):
+        df.shuffle("x", index_shuffle=True)

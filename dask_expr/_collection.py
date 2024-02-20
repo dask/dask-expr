@@ -679,7 +679,7 @@ class FrameBase(DaskMethodsMixin):
 
     def shuffle(
         self,
-        on: str | list,
+        on: str | list | no_default = no_default,
         ignore_index: bool = False,
         npartitions: int | None = None,
         shuffle_method: str | None = None,
@@ -703,6 +703,9 @@ class FrameBase(DaskMethodsMixin):
             be preserved by default.
         shuffle_method : optional
             Desired shuffle method. Default chosen at optimization time.
+        index_shuffle : bool, default False
+            Whether to shuffle the index. Needs to be set to True with no
+            on given to shuffle the index.
         **options : optional
             Algorithm-specific options.
 
@@ -715,6 +718,10 @@ class FrameBase(DaskMethodsMixin):
         --------
         >>> df = df.shuffle(df.columns[0])  # doctest: +SKIP
         """
+        if on is no_default and not index_shuffle:
+            raise TypeError("Have to pass on or set index_shuffle to True")
+        elif on is not no_default and index_shuffle:
+            raise TypeError("Can't pass on and set index_shuffle to True")
 
         # Preserve partition count by default
         npartitions = npartitions or self.npartitions
