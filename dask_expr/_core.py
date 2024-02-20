@@ -123,11 +123,6 @@ class Expr:
             ]
         )
 
-    def analyze(self, fuse: bool = True) -> None:
-        from dask_expr.diagnostics import analyze
-
-        return analyze(self, fuse)
-
     def explain(self, fuse: bool = True) -> None:
         from dask_expr.diagnostics import explain
 
