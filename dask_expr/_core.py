@@ -12,7 +12,6 @@ import toolz
 from dask.dataframe.core import is_dataframe_like, is_index_like, is_series_like
 from dask.utils import funcname, import_required, is_arraylike
 
-from dask_expr._diagnostics import explain
 from dask_expr._util import _BackendData, _tokenize_deterministic
 
 
@@ -124,8 +123,15 @@ class Expr:
             ]
         )
 
+    def analyze(self, fuse: bool = True) -> None:
+        from dask_expr.diagnostics import analyze
+
+        return analyze(self, fuse)
+
     def explain(self, fuse: bool = True) -> None:
-        explain(self, fuse)
+        from dask_expr.diagnostics import explain
+
+        return explain(self, fuse)
 
     def pprint(self):
         for line in self._tree_repr_lines():

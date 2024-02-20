@@ -1,7 +1,8 @@
+from dask_expr._expr import Expr, optimize_blockwise_fusion
+
+
 def explain(expr, fuse: bool = True):
     import graphviz
-
-    from dask_expr._expr import Expr, optimize_blockwise_fusion
 
     g = graphviz.Digraph("g", filename=f"explain-{expr._name}")
     g.node_attr.update(shape="record")
