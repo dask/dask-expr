@@ -508,15 +508,15 @@ class ApplyConcatApply(Expr):
             ignore_index=getattr(self, "ignore_index", True),
         )
 
-    def _reuse_up(self, parent):
-        return
-
     def _substitute_branch_id(self, branch_id):
         return self
 
     def _reuse_down(self):
         if self._branch_id.branch_id != 0:
             return
+
+        from dask_expr._shuffle import Shuffle
+        from dask_expr.io import IO
 
         seen = set()
         stack = self.dependencies()
@@ -532,10 +532,12 @@ class ApplyConcatApply(Expr):
             if isinstance(node, ApplyConcatApply):
                 counter += 1
                 continue
-            deps = node.dependencies()
-            if not deps:
+
+            if isinstance(node, (IO, Shuffle)):
                 found_io = True
-            stack.extend(deps)
+                continue
+            stack.extend(node.dependencies())
+
         if not found_io:
             return
         b_id = BranchId(counter)

@@ -22,6 +22,7 @@ from dask.dataframe.shuffle import (
 from dask.utils import (
     M,
     digit,
+    funcname,
     get_default_shuffle_method,
     insert,
     is_index_like,
@@ -63,7 +64,7 @@ from dask_expr._reductions import (
     ValueCounts,
 )
 from dask_expr._repartition import Repartition, RepartitionToFewer
-from dask_expr._util import LRU, _convert_to_list
+from dask_expr._util import LRU, _convert_to_list, _tokenize_deterministic
 
 
 class ShuffleBase(Expr):
@@ -157,6 +158,17 @@ class ShuffleBase(Expr):
     def _divisions(self):
         return (None,) * (self.npartitions_out + 1)
 
+    def _reuse_down(self):
+        return
+
+    @functools.cached_property
+    def _dep_name(self):
+        return (
+            funcname(type(self)).lower()
+            + "-"
+            + _tokenize_deterministic(*self.argument_operands)
+        )
+
 
 class Shuffle(ShuffleBase):
     """Abstract shuffle class
@@ -196,6 +208,7 @@ class Shuffle(ShuffleBase):
             self.npartitions_out,
             self.ignore_index,
             self.options,
+            self._branch_id,
         ]
         if method == "p2p":
             return P2PShuffle(frame, *ops)
@@ -290,6 +303,7 @@ class RearrangeByColumn(ShuffleBase):
             ignore_index,
             self.method,
             options,
+            self._branch_id,
         )
 
         # Drop "_partitions" column and return
@@ -549,7 +563,7 @@ class P2PShuffle(SimpleShuffle):
         )
 
         dsk = {}
-        token = self._name.split("-")[-1]
+        token = self._dep_name.split("-")[-1]
         _barrier_key = barrier_key(ShuffleId(token))
         name = "shuffle-transfer-" + token
         transfer_keys = list()

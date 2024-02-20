@@ -3472,7 +3472,7 @@ def determine_column_projection(expr, parent, dependents, additional_columns=Non
         column_union = []
     else:
         column_union = parent.columns.copy()
-    parents = [x() for x in dependents[expr._name] if x() is not None]
+    parents = [x() for x in dependents[expr._dep_name] if x() is not None]
 
     seen = set()
     for p in parents:

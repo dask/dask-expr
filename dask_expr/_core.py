@@ -463,6 +463,10 @@ class Expr:
             funcname(type(self)).lower() + "-" + _tokenize_deterministic(*self.operands)
         )
 
+    @functools.cached_property
+    def _dep_name(self):
+        return self._name
+
     @property
     def _meta(self):
         raise NotImplementedError()
@@ -774,5 +778,5 @@ def collect_dependents(expr) -> defaultdict:
 
         for dep in node.dependencies():
             stack.append(dep)
-            dependents[dep._name].append(weakref.ref(node))
+            dependents[dep._dep_name].append(weakref.ref(node))
     return dependents
