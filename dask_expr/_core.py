@@ -125,10 +125,10 @@ class Expr:
     def tree_repr(self):
         return os.linesep.join(self._tree_repr_lines())
 
-    def analyze(self, format: str | None = None) -> None:
+    def analyze(self, filename: str | None = None, format: str | None = None) -> None:
         from dask_expr.diagnostics import analyze
 
-        return analyze(self, format=format)
+        return analyze(self, filename=filename, format=format)
 
     def explain(
         self, stage: OptimizerStage = "fused", format: str | None = None

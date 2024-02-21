@@ -26,7 +26,9 @@ def inject_analyze(expr: Expr, id: str, injected: dict) -> Expr:
 from dask_expr.diagnostics._explain import _add_graphviz_edges, _explain_info
 
 
-def analyze(expr: Expr, format: str | None, **kwargs: Any):
+def analyze(
+    expr: Expr, filename: str | None = None, format: str | None = None, **kwargs: Any
+):
     import graphviz
     from distributed import get_client, wait
 
@@ -55,10 +57,13 @@ def analyze(expr: Expr, format: str | None, **kwargs: Any):
     seen = set(expr._name)
     stack = [expr]
 
+    if filename is None:
+        filename = f"analyze-{expr._name}"
+
     if format is None:
         format = "png"
 
-    g = graphviz.Digraph("g", filename=f"analyze-{expr._name}", format="png")
+    g = graphviz.Digraph(expr._name, filename=filename, format=format)
     g.node_attr.update(shape="record")
     while stack:
         node = stack.pop()

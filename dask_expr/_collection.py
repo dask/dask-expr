@@ -452,11 +452,11 @@ Expr={expr}"""
         out = out.optimize(fuse=fuse)
         return DaskMethodsMixin.compute(out, **kwargs)
 
-    def analyze(self, format: str | None = None) -> None:
+    def analyze(self, filename: str | None = None, format: str | None = None) -> None:
         out = self
         if not isinstance(out, Scalar):
             out = out.repartition(npartitions=1)
-        return out.expr.analyze(format=format)
+        return out.expr.analyze(filename=filename, format=format)
 
     def explain(self, stage: OptimizerStage = "fused", format: str | None = None):
         out = self
