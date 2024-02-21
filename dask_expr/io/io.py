@@ -416,8 +416,7 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
                 return Literal(sum(_lengths))
 
         if isinstance(parent, Projection):
-            x = super()._simplify_up(parent, dependents)
-            return x
+            return super()._simplify_up(parent, dependents)
 
     def _divisions(self):
         return self._divisions_and_locations[0]
