@@ -112,22 +112,22 @@ class Merge(Expr):
 
     def _predicate_columns(self, predicate):
         if isinstance(predicate, (Projection, Unaryop, Isin)):
-            return self._walk_predicates(predicate)
+            return self._get_original_predicate_columns(predicate)
         elif isinstance(predicate, Binop):
             if isinstance(predicate, And):
                 return None
 
             if not isinstance(predicate.right, Expr):
-                return self._walk_predicates(predicate.left)
+                return self._get_original_predicate_columns(predicate.left)
             elif isinstance(predicate.right, Elemwise):
-                return self._walk_predicates(predicate)
+                return self._get_original_predicate_columns(predicate)
             else:
                 return None
         else:
             # Unsupported predicate type
             return None
 
-    def _walk_predicates(self, predicate):
+    def _get_original_predicate_columns(self, predicate):
         predicate_columns = set()
         stack = [predicate]
         seen = set()
