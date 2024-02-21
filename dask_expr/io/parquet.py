@@ -50,7 +50,6 @@ from dask_expr._expr import (
     Projection,
     are_co_aligned,
     determine_column_projection,
-    is_filter_pushdown_available,
 )
 from dask_expr._reductions import Len
 from dask_expr._util import _convert_to_list, _tokenize_deterministic
@@ -518,6 +517,13 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
     _absorb_projections = True
     _filter_passthrough = True
 
+    def _filter_passthrough_available(self, parent, dependents):
+        return (
+            super()._filter_passthrough_available(parent, dependents)
+            and (isinstance(parent.predicate, (LE, GE, LT, GT, EQ, NE, And, Or)))
+            and _DNF.extract_pq_filters(self, parent.predicate)._filters is not None
+        )
+
     def _simplify_up(self, parent, dependents):
         if isinstance(parent, Index):
             # Column projection
@@ -530,10 +536,8 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         if isinstance(parent, Projection):
             return super()._simplify_up(parent, dependents)
 
-        if (
-            isinstance(parent, Filter)
-            and isinstance(parent.predicate, (LE, GE, LT, GT, EQ, NE, And, Or))
-            and is_filter_pushdown_available(self, parent, dependents)
+        if isinstance(parent, Filter) and self._filter_passthrough_available(
+            parent, dependents
         ):
             # Predicate pushdown
             filters = _DNF.extract_pq_filters(self, parent.predicate)
