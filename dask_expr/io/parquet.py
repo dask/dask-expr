@@ -454,7 +454,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
     _absorb_projections = True
 
     def _tree_repr_argument_construction(self, i, op, header):
-        if i < len(self._parameters) and self._parameters[i] == "_dataset_info_cache":
+        if self._parameters[i] == "_dataset_info_cache":
             # Don't print this, very ugly
             return header
         return super()._tree_repr_argument_construction(i, op, header)

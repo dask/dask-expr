@@ -112,10 +112,6 @@ class Expr:
                     op = "<series>"
                 elif is_arraylike(op):
                     op = "<array>"
-                elif isinstance(op, BranchId):
-                    if op.branch_id == 0:
-                        continue
-                    op = f" branch_id={op.branch_id}"
                 header = self._tree_repr_argument_construction(i, op, header)
         if self._branch_id.branch_id != 0:
             header = self._tree_repr_argument_construction(
