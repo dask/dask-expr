@@ -2751,6 +2751,50 @@ def normalize_expression(expr):
     return expr._name
 
 
+def optimize_until(
+    expr: Expr, stage: core.OptimizerStage, common_subplan_elimination: bool = False
+) -> Expr:
+    result = expr
+    if stage == "logical":
+        return result
+
+    while True:
+        if not common_subplan_elimination:
+            out = result.rewrite("reuse", cache={})
+        else:
+            out = result
+        out = out.simplify()
+        if out._name == result._name or common_subplan_elimination:
+            break
+        result = out
+
+    expr = out
+    if stage == "simplified-logical":
+        return expr
+
+    # Manipulate Expression to make it more efficient
+    expr = expr.rewrite(kind="tune", cache={})
+    if stage == "tuned-logical":
+        return expr
+
+    # Lower
+    expr = expr.lower_completely()
+    if stage == "physical":
+        return expr
+
+    # Simplify again
+    expr = expr.simplify()
+    if stage == "simplified-physical":
+        return expr
+
+    # Final graph-specific optimizations
+    expr = optimize_blockwise_fusion(expr)
+    if stage == "fused":
+        return expr
+
+    raise ValueError(f"Stage {stage!r} not supported.")
+
+
 def optimize(
     expr: Expr, fuse: bool = True, common_subplan_elimination: bool = False
 ) -> Expr:
@@ -2777,33 +2821,9 @@ def optimize(
     simplify
     optimize_blockwise_fusion
     """
-    result = expr
-    while True:
-        if not common_subplan_elimination:
-            out = result.rewrite("reuse", cache={})
-        else:
-            out = result
-        out = out.simplify()
-        if out._name == result._name or common_subplan_elimination:
-            break
-        result = out
+    stage: core.OptimizerStage = "fused" if fuse else "simplified-physical"
 
-    result = out
-
-    # Manipulate Expression to make it more efficient
-    result = result.rewrite(kind="tune", cache={})
-
-    # Lower
-    result = result.lower_completely()
-
-    # Simplify again
-    result = result.simplify()
-
-    # Final graph-specific optimizations
-    if fuse:
-        result = optimize_blockwise_fusion(result)
-
-    return result
+    return optimize_until(expr, stage, common_subplan_elimination)
 
 
 def is_broadcastable(dfs, s):
