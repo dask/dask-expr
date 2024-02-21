@@ -741,7 +741,6 @@ class Mean(SingleAggregation):
                 for param in self._parameters
             ],
             *self.by,
-            self._branch_id,
         )
         if is_dataframe_like(s._meta):
             c = c[s.columns]
