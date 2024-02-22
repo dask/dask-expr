@@ -560,7 +560,7 @@ class MapPartitions(Blockwise):
         # Always broadcast single-partition dependencies in MapPartitions
         return dep.npartitions == 1
 
-    @property
+    @functools.cached_property
     def args(self):
         return [self.frame] + self.operands[len(self._parameters) :]
 
@@ -568,7 +568,12 @@ class MapPartitions(Blockwise):
     def _meta(self):
         meta = self.operand("meta")
         return _get_meta_map_partitions(
-            self.args, [self.frame], self.func, self.kwargs, meta, self.parent_meta
+            self.args,
+            [e for e in self.args if isinstance(e, Expr)],
+            self.func,
+            self.kwargs,
+            meta,
+            self.parent_meta,
         )
 
     def _divisions(self):
@@ -729,7 +734,7 @@ class MapOverlapAlign(Expr):
         ]
         return _get_meta_map_partitions(
             args,
-            [self.frame],
+            [self.dependencies()[0]],
             self.func,
             self.kwargs,
             meta,
@@ -804,7 +809,7 @@ class MapOverlap(MapPartitions):
         ]
         return _get_meta_map_partitions(
             args,
-            [self.frame],
+            [self.dependencies()[0]],
             self.func,
             self.kwargs,
             meta,
@@ -1172,6 +1177,7 @@ class RenameFrame(Elemwise):
             reverse_mapping = {val: key for key, val in self.operand("columns").items()}
 
             columns = determine_column_projection(self, parent, dependents)
+            columns = _convert_to_list(columns)
             columns = [
                 reverse_mapping[col] if col in reverse_mapping else col
                 for col in columns
@@ -2747,6 +2753,39 @@ def normalize_expression(expr):
     return expr._name
 
 
+def optimize_until(expr: Expr, stage: core.OptimizerStage) -> Expr:
+    result = expr
+    if stage == "logical":
+        return result
+
+    # Simplify
+    expr = result.simplify()
+    if stage == "simplified-logical":
+        return expr
+
+    # Manipulate Expression to make it more efficient
+    expr = expr.rewrite(kind="tune")
+    if stage == "tuned-logical":
+        return expr
+
+    # Lower
+    expr = expr.lower_completely()
+    if stage == "physical":
+        return expr
+
+    # Simplify again
+    expr = expr.simplify()
+    if stage == "simplified-physical":
+        return expr
+
+    # Final graph-specific optimizations
+    expr = optimize_blockwise_fusion(expr)
+    if stage == "fused":
+        return expr
+
+    raise ValueError(f"Stage {stage!r} not supported.")
+
+
 def optimize(expr: Expr, fuse: bool = True) -> Expr:
     """High level query optimization
 
@@ -2767,24 +2806,9 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     simplify
     optimize_blockwise_fusion
     """
+    stage: core.OptimizerStage = "fused" if fuse else "simplified-physical"
 
-    # Simplify
-    result = expr.simplify()
-
-    # Manipulate Expression to make it more efficient
-    result = result.rewrite(kind="tune")
-
-    # Lower
-    result = result.lower_completely()
-
-    # Simplify again
-    result = result.simplify()
-
-    # Final graph-specific optimizations
-    if fuse:
-        result = optimize_blockwise_fusion(result)
-
-    return result
+    return optimize_until(expr, stage)
 
 
 def is_broadcastable(dfs, s):
