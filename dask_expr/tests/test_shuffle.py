@@ -747,4 +747,4 @@ def test_shuffle_index_shuffle(df):
     with pytest.raises(TypeError, match="Have to pass on or set"):
         df.shuffle()
     with pytest.raises(TypeError, match="Can't pass on and set"):
-        df.shuffle("x", index_shuffle=True)
+        df.shuffle("x", on_index=True)

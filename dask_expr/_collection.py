@@ -690,7 +690,7 @@ class FrameBase(DaskMethodsMixin):
         ignore_index: bool = False,
         npartitions: int | None = None,
         shuffle_method: str | None = None,
-        index_shuffle: bool = False,
+        on_index: bool = False,
         **options,
     ):
         """Rearrange DataFrame into new partitions
@@ -710,7 +710,7 @@ class FrameBase(DaskMethodsMixin):
             be preserved by default.
         shuffle_method : optional
             Desired shuffle method. Default chosen at optimization time.
-        index_shuffle : bool, default False
+        on_index : bool, default False
             Whether to shuffle the index. Needs to be set to True with no
             on given to shuffle the index.
         **options : optional
@@ -725,9 +725,9 @@ class FrameBase(DaskMethodsMixin):
         --------
         >>> df = df.shuffle(df.columns[0])  # doctest: +SKIP
         """
-        if on is no_default and not index_shuffle:
+        if on is no_default and not on_index:
             raise TypeError("Have to pass on or set index_shuffle to True")
-        elif on is not no_default and index_shuffle:
+        elif on is not no_default and on_index:
             raise TypeError("Can't pass on and set index_shuffle to True")
 
         # Preserve partition count by default
@@ -750,7 +750,7 @@ class FrameBase(DaskMethodsMixin):
                 ignore_index,
                 shuffle_method,
                 options,
-                index_shuffle=index_shuffle,
+                index_shuffle=on_index,
             )
         )
 
