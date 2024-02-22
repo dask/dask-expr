@@ -3183,8 +3183,8 @@ class MaybeAlignPartitions(Expr):
                     "DataFrames are not aligned. We need to shuffle to align partitions "
                     "with each other. This is not possible because the indexes of the "
                     f"DataFrames have differing dtypes={dtypes}. Please ensure that "
-                    f"all Indexes have the same dtype or align manually for this to "
-                    f"work."
+                    "all Indexes have the same dtype or align manually for this to "
+                    "work."
                 )
 
             from dask_expr._shuffle import RearrangeByColumn
