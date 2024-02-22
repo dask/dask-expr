@@ -711,7 +711,7 @@ class FrameBase(DaskMethodsMixin):
         shuffle_method : optional
             Desired shuffle method. Default chosen at optimization time.
         on_index : bool, default False
-            Whether to shuffle on the index. Mutually exclusive with 'on'. 
+            Whether to shuffle on the index. Mutually exclusive with 'on'.
             Set this to ``True`` if 'on' is not provided.
         **options : optional
             Algorithm-specific options.
