@@ -1,10 +1,20 @@
 import functools
 from typing import Any
 
+import pandas as pd
 from dask.base import DaskMethodsMixin
+from dask.sizeof import sizeof
 from dask.utils import format_bytes
 
 from dask_expr._expr import Blockwise, Expr
+from dask_expr._util import _tokenize_deterministic
+from dask_expr.diagnostics._analyze_plugin import (
+    AnalyzePlugin,
+    ExpressionStatistics,
+    Statistics,
+    get_worker_plugin,
+)
+from dask_expr.diagnostics._explain import _explain_info
 from dask_expr.io.io import FusedIO
 
 
@@ -33,7 +43,6 @@ def analyze(
     from distributed import get_client, wait
 
     from dask_expr import new_collection
-    from dask_expr.diagnostics._analyze_plugin import AnalyzePlugin
 
     client = get_client()
 
@@ -51,7 +60,9 @@ def analyze(
     wait(_)
 
     # Collect data
-    statistics = client.sync(client.scheduler.analyze_get_statistics, id=analysis_id)
+    statistics: Statistics = client.sync(
+        client.scheduler.analyze_get_statistics, id=analysis_id
+    )  # type: noqa
 
     # Plot statistics in graph
     seen = set(expr._name)
@@ -68,7 +79,7 @@ def analyze(
     while stack:
         node = stack.pop()
         info = _explain_info(node)
-        info = _analyze_info(node, statistics[node._name])
+        info = _analyze_info(node, statistics._expr_statistics[node._name])
         _add_graphviz_node(info, g)
         _add_graphviz_edges(info, g)
 
@@ -84,7 +95,6 @@ def analyze(
 
 
 def _add_graphviz_node(info, graph):
-    nbytes = info["cost"]["nbytes"]
     label = "".join(
         [
             "<{<b>",
@@ -94,10 +104,7 @@ def _add_graphviz_node(info, graph):
                 [f"{key}: {value}" for key, value in info["details"].items()]
             ),
             " | ",
-            "nbytes:<br />",
-            ", ".join(
-                [f"{key}: {format_bytes(value)}" for key, value in nbytes.items()]
-            ),
+            _statistics_to_graphviz(info["statistics"]),
             "}>",
         ]
     )
@@ -105,36 +112,74 @@ def _add_graphviz_node(info, graph):
     graph.node(info["name"], label)
 
 
-from dask_expr.diagnostics._explain import _explain_info
+def _statistics_to_graphviz(statistics: dict[str, dict[str, Any]]) -> str:
+    return "<BR /><BR />".join(
+        [
+            _metric_to_graphviz(metric, statistics)
+            for metric, statistics in statistics.items()
+        ]
+    )
 
 
-def _analyze_info(expr: Expr, digest):
+def _metric_to_graphviz(metric: str, statistics: dict[str, Any]):
+    quantiles = (
+        "[" + ", ".join([format_bytes(pctl) for pctl in statistics["quantiles"]]) + "]"
+    )
+    return "<BR />".join(
+        [
+            f"<B>{metric}:</B>",
+            *(
+                f"{label}: {format_bytes(value)}"
+                for label, value in statistics.items()
+                if label != "quantiles"
+            ),
+            f"quantiles: {quantiles}",
+        ]
+    )
+
+
+def _analyze_info(expr: Expr, statistics: ExpressionStatistics):
     info = _explain_info(expr)
-    info["cost"] = {
-        "nbytes": {
-            "min": digest.min(),
-            "median": digest.quantile(0.5),
-            "max": digest.max(),
-        }
-    }
+    info["statistics"] = _statistics_info(statistics)
     return info
 
 
-def analyze_operation(frame, analysis_id, expr_name):
-    from dask.sizeof import sizeof
+def _statistics_info(statistics: ExpressionStatistics):
+    info = {}
+    for metric, digest in statistics._metric_digests.items():
+        info[metric] = {
+            "total": digest.total,
+            "mean": digest.mean,
+            "min": digest.sketch.min(),
+            "max": digest.sketch.max(),
+            "quantiles": [digest.sketch.quantile(q) for q in (0, 0.25, 0.5, 0.75, 1)],
+        }
+    return info
 
-    from dask_expr.diagnostics._analyze_plugin import get_worker_plugin
 
+def collect_statistics(frame, analysis_id, expr_name):
     worker_plugin = get_worker_plugin()
-    worker_plugin.add(analysis_id, expr_name, sizeof(frame))
+    if isinstance(frame, pd.DataFrame):
+        size = frame.memory_usage(deep=True).sum()
+    elif isinstance(frame, pd.Series):
+        size = frame.memory_usage(deep=True)
+    else:
+        size = sizeof(frame)
+
+    worker_plugin.add(analysis_id, expr_name, "nrows", len(frame))
+    worker_plugin.add(analysis_id, expr_name, "nbytes", size)
     return frame
 
 
 class Analyze(Blockwise):
     _parameters = ["frame", "analysis_id", "expr_name"]
 
-    operation = staticmethod(analyze_operation)
+    operation = staticmethod(collect_statistics)
 
     @functools.cached_property
     def _meta(self):
         return self.frame._meta
+
+    @functools.cached_property
+    def _name(self):
+        return "analyze-" + _tokenize_deterministic(*self.operands)

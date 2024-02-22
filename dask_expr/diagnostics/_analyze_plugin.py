@@ -6,6 +6,31 @@ from distributed import Scheduler, SchedulerPlugin, Worker, WorkerPlugin
 from distributed.protocol.pickle import dumps
 
 
+class Digest:
+    count: int
+    total: float
+    sketch: TDigest
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.total = 0.0
+        self.sketch = TDigest()
+
+    def add(self, sample: float) -> None:
+        self.count = self.count + 1
+        self.total = self.total + sample
+        self.sketch.add(sample)
+
+    def merge(self, other: "Digest") -> None:
+        self.count = self.count + other.count
+        self.total = self.total + other.total
+        self.sketch.merge(other.sketch)
+
+    @property
+    def mean(self):
+        return self.total / self.count
+
+
 class AnalyzePlugin(SchedulerPlugin):
     idempotent: ClassVar[bool] = True
     name: ClassVar[str] = "analyze"
@@ -29,32 +54,60 @@ class AnalyzePlugin(SchedulerPlugin):
         worker_statistics = await self._scheduler.broadcast(
             msg={"op": "analyze_get_statistics", "id": id}
         )
-        cluster_statistics = defaultdict(TDigest)
+        cluster_statistics = Statistics()
         for statistics in worker_statistics.values():
-            for group_key, digest in statistics.items():
-                cluster_statistics[group_key].merge(digest)
-        return dict(cluster_statistics)
+            cluster_statistics.merge(statistics)
+        return cluster_statistics
+
+
+class ExpressionStatistics:
+    _metric_digests: defaultdict[str, Digest]
+
+    def __init__(self) -> None:
+        self._metric_digests = defaultdict(Digest)
+
+    def add(self, metric: str, value: float) -> None:
+        self._metric_digests[metric].add(value)
+
+    def merge(self, other: "ExpressionStatistics") -> None:
+        for metric, digest in other._metric_digests.items():
+            self._metric_digests[metric].merge(digest)
+
+
+class Statistics:
+    _expr_statistics: defaultdict[str, ExpressionStatistics]
+
+    def __init__(self) -> None:
+        self._expr_statistics = defaultdict(ExpressionStatistics)
+
+    def add(self, expr: str, metric: str, value: float):
+        self._expr_statistics[expr].add(metric, value)
+
+    def merge(self, other: "Statistics"):
+        for expr, statistics in other._expr_statistics.items():
+            self._expr_statistics[expr].merge(statistics)
 
 
 class _AnalyzeWorkerPlugin(WorkerPlugin):
     idempotent: ClassVar[bool] = True
     name: ClassVar[str] = "analyze"
-    _digests: defaultdict[str, defaultdict[str, TDigest]]
+    _statistics: defaultdict[str, Statistics]
     _worker: Worker | None
 
     def __init__(self) -> None:
         self._worker = None
+        self._statistics = defaultdict(Statistics)
 
     def setup(self, worker: Worker) -> None:
-        self._digests = defaultdict(lambda: defaultdict(TDigest))
+        self._digests = defaultdict(lambda: defaultdict(lambda: defaultdict(Digest)))
         self._worker = worker
         self._worker.handlers["analyze_get_statistics"] = self.get_statistics
 
-    def add(self, id: str, expr_name: str, nbytes: int):
-        self._digests[id][expr_name].add(nbytes)
+    def add(self, id: str, expr: str, metric: str, value: float):
+        self._statistics[id].add(expr, metric, value)
 
-    def get_statistics(self, id: str) -> dict[str, TDigest]:
-        return dict(self._digests[id])
+    def get_statistics(self, id: str) -> Statistics:
+        return self._statistics.pop(id)
 
 
 def get_worker_plugin() -> _AnalyzeWorkerPlugin:
