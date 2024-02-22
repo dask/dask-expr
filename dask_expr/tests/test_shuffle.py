@@ -744,7 +744,7 @@ def test_set_index_filter_pushdown():
 
 
 def test_shuffle_index_shuffle(df):
-    with pytest.raises(TypeError, match="Have to pass on or set"):
+    with pytest.raises(TypeError, match="Must shuffle on either "):
         df.shuffle()
-    with pytest.raises(TypeError, match="Can't pass on and set"):
+    with pytest.raises(TypeError, match="Cannot shuffle on both"):
         df.shuffle("x", on_index=True)
