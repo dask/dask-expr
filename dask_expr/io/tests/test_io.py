@@ -124,7 +124,8 @@ def test_read_csv_keywords(tmpdir):
 def test_io_fusion_blockwise(tmpdir):
     pdf = pd.DataFrame({c: range(10) for c in "abcdefghijklmn"})
     dd.from_pandas(pdf, 3).to_parquet(tmpdir)
-    df = read_parquet(tmpdir)["a"].fillna(10).optimize()
+    read_parq = read_parquet(tmpdir)
+    df = read_parq["a"].fillna(10).optimize()
     assert df.npartitions == 2
     assert len(df.__dask_graph__()) == 2
     graph = (
@@ -133,7 +134,9 @@ def test_io_fusion_blockwise(tmpdir):
         .optimize(fuse=False)
         .__dask_graph__()
     )
-    assert any("readparquet-fused" in key[0] for key in graph.keys())
+    assert any(
+        f"{read_parq._expr._name.split('-')[0]}-fused" in key[0] for key in graph.keys()
+    )
 
 
 def test_repartition_io_fusion_blockwise(tmpdir):
