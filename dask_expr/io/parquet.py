@@ -4,7 +4,6 @@ import contextlib
 import itertools
 import operator
 import warnings
-from abc import abstractmethod
 from collections import defaultdict
 from functools import cached_property
 
@@ -437,13 +436,6 @@ def to_parquet(
     return out
 
 
-# class ReadParquetPyarrowFSNoMeta(ReadParquetPyarrowFS):
-
-#     def _lower(self):
-#         return ReadParquetPyarrowFS(
-
-
-#         )
 def _determine_type_mapper(
     *, user_types_mapper=None, dtype_backend=None, convert_string=True
 ):
@@ -515,7 +507,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
     }
     _pq_length_stats = None
     _absorb_projections = True
-    _filter_passthrough = True
+    _filter_passthrough = False
 
     def _filter_passthrough_available(self, parent, dependents):
         return (
@@ -598,45 +590,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         return meta
 
     def _divisions(self):
-        return self._plan["divisions"]
-
-    @abstractmethod
-    @cached_property
-    def _plan(self):
         raise NotImplementedError
-
-    @property
-    @abstractmethod
-    def _dataset_info(self):
-        raise NotImplementedError
-
-    def _get_lengths(self) -> tuple | None:
-        """Return known partition lengths using parquet statistics"""
-        if not self.filters:
-            self._update_length_statistics()
-            return tuple(
-                length
-                for i, length in enumerate(self._pq_length_stats)
-                if not self._filtered or i in self._partitions
-            )
-        return None
-
-    def _update_length_statistics(self):
-        """Ensure that partition-length statistics are up to date"""
-
-        if not self._pq_length_stats:
-            if self._plan["statistics"]:
-                # Already have statistics from original API call
-                self._pq_length_stats = tuple(
-                    stat["num-rows"]
-                    for i, stat in enumerate(self._plan["statistics"])
-                    if not self._filtered or i in self._partitions
-                )
-            else:
-                # Need to go back and collect statistics
-                self._pq_length_stats = tuple(
-                    stat["num-rows"] for stat in _collect_pq_statistics(self)
-                )
 
     @property
     def _fusion_compression_factor(self):
@@ -678,6 +632,7 @@ class ReadParquetPyarrowFS(ReadParquet):
     }
     _pq_length_stats = None
     _absorb_projections = True
+    _filter_passthrough = True
 
     @cached_property
     def fs(self):
@@ -685,19 +640,22 @@ class ReadParquetPyarrowFS(ReadParquet):
         if isinstance(fs_input, pa.fs.FileSystem):
             return fs_input
         else:
-            # TODO: Instantiate from storage_options
-            raise NotImplementedError("Must provide instantiated pyarrow FileSystem")
+            fs = pa_fs.FileSystem.from_uri(self.path)[0]
+            if storage_options := self.storage_options:
+                # Use inferred region as the default
+                region = {} if "region" in storage_options else {"region": fs.region}
+                fs = type(fs)(**region, **storage_options)
+            return fs
 
     @cached_property
     def _dataset_info(self):
-        # TODO: Consider breaking up this monolithic thing
         if rv := self.operand("_dataset_info_cache"):
             return rv
         dataset_info = {}
 
         path_normalized = _normalize_and_strip_protocol(self.path, self.fs)
-        # At this point we will post a couple of HEAD request to the store which
-        # gives us some metadata about the files but no the parquet metadata
+        # At this point we will post a couple of listbucket operations which
+        # includes the same data as a HEAD request.
         # The information included here (see pyarrow FileInfo) are size, type,
         # path and modified since timestamps
         # This isn't free but realtively cheap (200-300ms or less for ~1k files)
@@ -738,19 +696,16 @@ class ReadParquetPyarrowFS(ReadParquet):
             import pyarrow.parquet as pq
 
             dataset = pq.ParquetDataset(
-                # TODO: This is a different API than above because the
-                # pa_ds.parquet_dataset only accepts the metadata file. Are
-                # these APIs here the correct choice?
-                # Just pass all_files once https://github.com/apache/arrow/pull/40143 is available to reduce latency
+                # TODO Just pass all_files once
+                # https://github.com/apache/arrow/pull/40143 is available to
+                # reduce latency
                 [fi.path for fi in all_files],
                 filesystem=self.fs,
                 filters=self.filters,
             )
             dataset_info["using_metadata_file"] = False
             dataset_info["fragments"] = dataset.fragments
-        # Note: We only use the dataset once to generate fragments. The
-        # fragments themselves can do everything we care about like splitting by
-        # rowgroups, filtering and reading
+
         dataset_info["dataset"] = dataset
         dataset_info["schema"] = dataset.schema
         dataset_info["base_meta"] = dataset.schema.empty_table().to_pandas()
@@ -898,6 +853,9 @@ class ReadParquetFSSpec(ReadParquet):
         if isinstance(_engine, str):
             return get_engine(_engine)
         return _engine
+
+    def _divisions(self):
+        return self._plan["divisions"]
 
     @property
     def _dataset_info(self):
@@ -1063,6 +1021,34 @@ class ReadParquetFSSpec(ReadParquet):
                 "common_kwargs": common_kwargs,
             }
         return _cached_plan[dataset_token]
+
+    def _get_lengths(self) -> tuple | None:
+        """Return known partition lengths using parquet statistics"""
+        if not self.filters:
+            self._update_length_statistics()
+            return tuple(
+                length
+                for i, length in enumerate(self._pq_length_stats)
+                if not self._filtered or i in self._partitions
+            )
+        return None
+
+    def _update_length_statistics(self):
+        """Ensure that partition-length statistics are up to date"""
+
+        if not self._pq_length_stats:
+            if self._plan["statistics"]:
+                # Already have statistics from original API call
+                self._pq_length_stats = tuple(
+                    stat["num-rows"]
+                    for i, stat in enumerate(self._plan["statistics"])
+                    if not self._filtered or i in self._partitions
+                )
+            else:
+                # Need to go back and collect statistics
+                self._pq_length_stats = tuple(
+                    stat["num-rows"] for stat in _collect_pq_statistics(self)
+                )
 
 
 #
