@@ -728,7 +728,7 @@ class FrameBase(DaskMethodsMixin):
         if on is no_default and not on_index:
             raise TypeError(
                 "Must shuffle on either columns or the index; currently shuffling on "
-                "neither. Pass column(s) to 'onn' or set 'on_index' to True."
+                "neither. Pass column(s) to 'on' or set 'on_index' to True."
             )
         elif on is not no_default and on_index:
             raise TypeError(
