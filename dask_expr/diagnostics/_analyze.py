@@ -123,15 +123,23 @@ def _statistics_to_graphviz(statistics: dict[str, dict[str, Any]]) -> str:
 
 def _metric_to_graphviz(metric: str, statistics: dict[str, Any]):
     quantiles = (
-        "[" + ", ".join([format_bytes(pctl) for pctl in statistics["quantiles"]]) + "]"
+        "["
+        + ", ".join(
+            [
+                format_bytes(pctl) if metric == "nbytes" else str(int(pctl))
+                for pctl in statistics.pop("quantiles")
+            ]
+        )
+        + "]"
     )
     return "<BR />".join(
         [
             f"<B>{metric}:</B>",
             *(
                 f"{label}: {format_bytes(value)}"
+                if metric == "nbytes"
+                else f"{label}: {int(value)}"
                 for label, value in statistics.items()
-                if label != "quantiles"
             ),
             f"quantiles: {quantiles}",
         ]
