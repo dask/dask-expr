@@ -726,9 +726,15 @@ class FrameBase(DaskMethodsMixin):
         >>> df = df.shuffle(df.columns[0])  # doctest: +SKIP
         """
         if on is no_default and not on_index:
-            raise TypeError("Have to pass on or set index_shuffle to True")
+            raise TypeError(
+                "Must shuffle on either columns or the index; currently shuffling on "
+                "neither. Pass column(s) to 'onn' or set 'on_index' to True."
+            )
         elif on is not no_default and on_index:
-            raise TypeError("Can't pass on and set index_shuffle to True")
+            raise TypeError(
+                "Cannot shuffle on both columns and the index. Do not pass column(s) "
+                "to 'on' or set 'on_index' to False."
+            )
 
         # Preserve partition count by default
         npartitions = npartitions or self.npartitions
