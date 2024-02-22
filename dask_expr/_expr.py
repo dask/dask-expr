@@ -3181,7 +3181,7 @@ class MaybeAlignPartitions(Expr):
             if not _are_dtypes_shuffle_compatible(dtypes):
                 raise TypeError(
                     "DataFrames are not aligned. We need to shuffle to align partitions "
-                    "with each ohter. This is not possible because the indexes of the "
+                    "with each other. This is not possible because the indexes of the "
                     f"DataFrames have differing dtypes={dtypes}. Please ensure that "
                     f"all Indexes have the same dtype or align manually for this to "
                     f"work."
