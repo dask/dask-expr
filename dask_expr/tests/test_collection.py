@@ -1502,6 +1502,11 @@ def test_random_partitions(df, pdf):
     with pytest.raises(ValueError):
         df.random_split([0.4, 0.5], 42)
 
+    a, b = df.x.random_split([0.5, 0.5], 42, True)
+    a2, b2 = df.x.random_split([0.5, 0.5], 42, True)
+    assert_eq(a, a2)
+    assert_eq(b, b2)
+
 
 def test_simple_graphs(df):
     expr = (df + 1).expr
