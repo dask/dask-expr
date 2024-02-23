@@ -1506,6 +1506,8 @@ def test_random_partitions(df, pdf):
     a2, b2 = df.x.random_split([0.5, 0.5], 42, True)
     assert_eq(a, a2)
     assert_eq(b, b2)
+    assert a.ndim == 1
+    assert b.ndim == 1
 
 
 def test_simple_graphs(df):
