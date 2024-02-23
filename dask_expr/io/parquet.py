@@ -749,7 +749,14 @@ class ReadParquetPyarrowFS(ReadParquet):
             schema=schema,
             columns=columns,
             filter=filters,
-            # batch_size=131072,
+            # Batch size determines how many rows are read at once and will
+            # cause the underlying array to be split into chunks of this size
+            # (max). We'd like to avoid fragmentation as much as possible and
+            # and to set this to something like inf but we have to set a finite,
+            # positive number.
+            # In the presence of row groups, the underlying array will still be
+            # chunked per rowgroup
+            batch_size=10_000_000,
             # batch_readahead=16,
             # fragment_readahead=4,
             fragment_scan_options=pa.dataset.ParquetFragmentScanOptions(
@@ -763,6 +770,7 @@ class ReadParquetPyarrowFS(ReadParquet):
                     range_size_limit=parse_bytes("32.00 MiB"),
                     # I've seen this actually slowing us down, e.g. on TPCHQ14
                     lazy=False,
+                    # If we disable lazy we can remove this as well.
                     prefetch_limit=500,
                 ),
                 # thrift_string_size_limit=None,
