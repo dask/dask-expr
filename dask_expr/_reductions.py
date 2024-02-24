@@ -532,9 +532,6 @@ class ApplyConcatApply(Expr):
             # We are lowering into a Shuffle, so we are a consumer ourselves
             return
 
-        from dask_expr._groupby import GroupByApply
-        from dask_expr._merge import Merge
-        from dask_expr._shuffle import ShuffleBase
         from dask_expr.io import IO
 
         seen = set()
@@ -548,16 +545,14 @@ class ApplyConcatApply(Expr):
                 continue
             seen.add(node._dep_name)
 
-            if isinstance(node, ApplyConcatApply):
-                if node.should_shuffle:
-                    found_consumer = True
-                else:
-                    counter += 1
-                continue
-
-            if isinstance(node, (IO, ShuffleBase, GroupByApply, Merge)):
+            if isinstance(node, IO) or node._reuse_consumer:
                 found_consumer = True
                 continue
+
+            if isinstance(node, ApplyConcatApply):
+                counter += 1
+                continue
+
             stack.extend(node.dependencies())
 
         if not found_consumer:
