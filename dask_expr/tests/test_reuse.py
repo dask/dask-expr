@@ -3,8 +3,7 @@ from __future__ import annotations
 import pytest
 
 from dask_expr import from_pandas
-from dask_expr.io import IO
-from dask_expr.tests._util import _backend_library, assert_eq
+from dask_expr.tests._util import _backend_library, _check_consumer_node, assert_eq
 
 # Set DataFrame backend for this module
 pd = _backend_library()
@@ -22,13 +21,6 @@ def df(pdf):
     yield from_pandas(pdf, npartitions=10)
 
 
-def _check_io_nodes(expr, expected):
-    expr = expr.optimize(fuse=False)
-    io_nodes = list(expr.find_operations(IO))
-    assert len(io_nodes) == expected
-    assert len({node._branch_id.branch_id for node in io_nodes}) == expected
-
-
 def test_reuse_everything_scalar_and_series(df, pdf):
     df["new"] = 1
     df["new2"] = df["x"] + 1
@@ -38,7 +30,7 @@ def test_reuse_everything_scalar_and_series(df, pdf):
     pdf["new2"] = pdf["x"] + 1
     pdf["new3"] = pdf.x[pdf.x > 1] + pdf.x[pdf.x > 2]
     assert_eq(df, pdf)
-    _check_io_nodes(df, 1)
+    _check_consumer_node(df, 1)
 
 
 def test_dont_reuse_reducer(df, pdf):
@@ -47,12 +39,12 @@ def test_dont_reuse_reducer(df, pdf):
     expected = pdf.replace(1, 5)
     expected["new"] = expected.x + expected.y.sum()
     assert_eq(result, expected)
-    _check_io_nodes(result, 2)
+    _check_consumer_node(result, 2)
 
     result = df + df.sum()
     expected = pdf + pdf.sum()
     assert_eq(result, expected, check_names=False)  # pandas 2.2 bug
-    _check_io_nodes(result, 2)
+    _check_consumer_node(result, 2)
 
     result = df.replace(1, 5)
     rhs_1 = result.x + result.y.sum()
@@ -63,7 +55,7 @@ def test_dont_reuse_reducer(df, pdf):
     expected["new"] = expected.x + expected.y.sum()
     expected["new2"] = expected.b + expected.a.sum()
     assert_eq(result, expected)
-    _check_io_nodes(result, 2)
+    _check_consumer_node(result, 2)
 
     result = df.replace(1, 5)
     result["new"] = result.x + result.y.sum()
@@ -72,11 +64,11 @@ def test_dont_reuse_reducer(df, pdf):
     expected["new"] = expected.x + expected.y.sum()
     expected["new2"] = expected.b + expected.a.sum()
     assert_eq(result, expected)
-    _check_io_nodes(result, 3)
+    _check_consumer_node(result, 3)
 
     result = df.replace(1, 5)
     result["new"] = result.x + result.sum().dropna().prod()
     expected = pdf.replace(1, 5)
     expected["new"] = expected.x + expected.sum().dropna().prod()
     assert_eq(result, expected)
-    _check_io_nodes(result, 2)
+    _check_consumer_node(result, 2)
