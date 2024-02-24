@@ -422,7 +422,9 @@ class Expr(core.Expr):
     def _filter_simplification(self, parent, predicate=None):
         if predicate is None:
             predicate = parent.predicate.substitute(self, self.frame)
-        return type(self)(self.frame[predicate], *self.operands[1:])
+        return type(self)(
+            self.frame[predicate], *self.operands[1:], _branch_id=self._branch_id
+        )
 
 
 class Literal(Expr):
@@ -1822,7 +1824,7 @@ class Filter(Blockwise):
     def _simplify_up(self, parent, dependents):
         if isinstance(self.predicate, Or):
             result = rewrite_filters(self.predicate)
-            if result._name != self.predicate._name:
+            if result._dep_name != self.predicate._dep_name:
                 return type(parent)(
                     type(self)(self.frame, result), *parent.operands[1:]
                 )
@@ -2088,7 +2090,7 @@ class ResetIndex(Elemwise):
         ):
             parents = [
                 p().columns
-                for p in dependents[self._name]
+                for p in dependents[self._dep_name]
                 if p() is not None and not isinstance(p(), Filter)
             ]
             predicate = None
@@ -2119,7 +2121,7 @@ class ResetIndex(Elemwise):
                     return
                 if all(
                     isinstance(d(), Projection) and d().operand("columns") == col
-                    for d in dependents[self._name]
+                    for d in dependents[self._dep_name]
                 ):
                     return type(self)(self.frame, True, self.name)
                 return
@@ -3216,7 +3218,13 @@ class MaybeAlignPartitions(Expr):
             from dask_expr._shuffle import RearrangeByColumn
 
             args = [
-                RearrangeByColumn(df, None, npartitions, index_shuffle=True)
+                RearrangeByColumn(
+                    df,
+                    None,
+                    npartitions,
+                    index_shuffle=True,
+                    _branch_id=self._branch_id,
+                )
                 if isinstance(df, Expr)
                 else df
                 for df in self.operands
@@ -3538,9 +3546,9 @@ def determine_column_projection(expr, parent, dependents, additional_columns=Non
 
     seen = set()
     for p in parents:
-        if p._name in seen:
+        if p._dep_name in seen:
             continue
-        seen.add(p._name)
+        seen.add(p._dep_name)
 
         column_union.extend(p._projection_columns)
 
@@ -3597,8 +3605,8 @@ def plain_column_projection(expr, parent, dependents, additional_columns=None):
 
 
 def is_filter_pushdown_available(expr, parent, dependents, allow_reduction=True):
-    parents = [x() for x in dependents[expr._name] if x() is not None]
-    filters = {e._name for e in parents if isinstance(e, Filter)}
+    parents = [x() for x in dependents[expr._dep_name] if x() is not None]
+    filters = {e._dep_name for e in parents if isinstance(e, Filter)}
     if len(filters) != 1:
         # Don't push down if not exactly one Filter
         return False
@@ -3606,7 +3614,7 @@ def is_filter_pushdown_available(expr, parent, dependents, allow_reduction=True)
         return True
 
     # We have to see if the non-filter ops are all exclusively part of the predicates
-    others = {e._name for e in parents if not isinstance(e, Filter)}
+    others = {e._dep_name for e in parents if not isinstance(e, Filter)}
     return _check_dependents_are_predicates(
         expr, others, parent, dependents, allow_reduction
     )
@@ -3641,7 +3649,7 @@ def _get_predicate_components(predicate, components, type_=Or):
 
 
 def _convert_mapping(components):
-    return dict(zip([e._name for e in components], components))
+    return dict(zip([e._dep_name for e in components], components))
 
 
 def _replace_common_or_components(expr, or_components):
@@ -3692,19 +3700,21 @@ def _check_dependents_are_predicates(
     # Walk down the predicate side from the filter to see if we can arrive at
     # other_names without hitting an expression that has other dependents that
     # are not part of the predicate, see test_filter_pushdown_unavailable
-    allowed_expressions = {parent._name}
+    allowed_expressions = {parent._dep_name}
     stack = parent.dependencies()
     seen = set()
     while stack:
         e = stack.pop()
-        if expr._name == e._name:
+        if expr._dep_name == e._dep_name:
             continue
 
-        if e._name in seen:
+        if e._dep_name in seen:
             continue
-        seen.add(e._name)
+        seen.add(e._dep_name)
 
-        e_dependents = {x()._name for x in dependents[e._name] if x() is not None}
+        e_dependents = {
+            x()._dep_name for x in dependents[e._dep_name] if x() is not None
+        }
 
         if not allow_reduction:
             if isinstance(e, (ApplyConcatApply, TreeReduce, ShuffleReduce)):
@@ -3715,7 +3725,7 @@ def _check_dependents_are_predicates(
                 continue
 
             return False
-        allowed_expressions.add(e._name)
+        allowed_expressions.add(e._dep_name)
         stack.extend(e.dependencies())
 
     return other_names.issubset(allowed_expressions)

@@ -47,8 +47,10 @@ class Expr:
     _parameters = []
     _defaults = {}
     _instances = weakref.WeakValueDictionary()
+    _branch_id_required = False
 
     def __new__(cls, *args, _branch_id=None, **kwargs):
+        cls._check_branch_id_given(args, _branch_id)
         operands = list(args)
         if _branch_id is None and len(operands) and isinstance(operands[-1], BranchId):
             _branch_id = operands.pop(-1)
@@ -70,6 +72,15 @@ class Expr:
 
         Expr._instances[_name] = inst
         return inst
+
+    @classmethod
+    def _check_branch_id_given(cls, args, _branch_id):
+        if not cls._branch_id_required:
+            return
+        operands = list(args)
+        if _branch_id is None and len(operands) and isinstance(operands[-1], BranchId):
+            _branch_id = operands.pop(-1)
+        assert _branch_id is not None, "BranchId not found"
 
     def _tune_down(self):
         return None
@@ -601,7 +612,7 @@ class Expr:
                 new_exprs.append(operand)
 
         if update:  # Only recreate if something changed
-            return type(self)(*new_exprs)
+            return type(self)(*new_exprs, _branch_id=self._branch_id)
         else:
             _seen.add(self._name)
         return self

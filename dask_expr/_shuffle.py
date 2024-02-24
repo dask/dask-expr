@@ -85,6 +85,7 @@ class ShuffleBase(Expr):
     }
     _is_length_preserving = True
     _filter_passthrough = True
+    _branch_id_required = True
 
     def __str__(self):
         return f"Shuffle({self._name[-7:]})"
@@ -113,9 +114,11 @@ class ShuffleBase(Expr):
                 if (col in partitioning_index or col in projection)
             ]
             if set(new_projection) < set(target.columns):
-                return type(self)(target[new_projection], *self.operands[1:])[
-                    parent.operand("columns")
-                ]
+                return type(self)(
+                    target[new_projection],
+                    *self.operands[1:],
+                    _branch_id=self._branch_id,
+                )[parent.operand("columns")]
 
         if isinstance(
             parent,
@@ -140,7 +143,8 @@ class ShuffleBase(Expr):
                 MemoryUsage,
             ),
         ):
-            return type(parent)(self.frame, *parent.operands[1:])
+            branch_id = None if not parent.should_shuffle else parent._branch_id
+            return type(parent)(self.frame, *parent.operands[1:], _branch_id=branch_id)
 
     def _layer(self):
         raise NotImplementedError(
@@ -159,14 +163,13 @@ class ShuffleBase(Expr):
         return (None,) * (self.npartitions_out + 1)
 
     def _reuse_down(self):
+        # TODO: What to do with task based shuffle?
         return
 
     @functools.cached_property
     def _dep_name(self):
         return (
-            funcname(type(self)).lower()
-            + "-"
-            + _tokenize_deterministic(*self.argument_operands)
+            funcname(type(self)).lower() + "-" + _tokenize_deterministic(*self.operands)
         )
 
 
@@ -306,7 +309,7 @@ class RearrangeByColumn(ShuffleBase):
             ignore_index,
             self.method,
             options,
-            self._branch_id,
+            _branch_id=self._branch_id,
         )
         if frame.ndim == 1:
             # Reduce back to series
@@ -517,6 +520,11 @@ class TaskShuffle(SimpleShuffle):
 class DiskShuffle(SimpleShuffle):
     """Disk-based shuffle implementation"""
 
+    @functools.cached_property
+    def _name(self):
+        # This is only used locally anyway, so don't bother with pipeline breakers
+        return self._dep_name
+
     @staticmethod
     def _shuffle_group(df, col, _filter, p):
         with ensure_cleanup_on_exception(p):
@@ -569,6 +577,7 @@ class P2PShuffle(SimpleShuffle):
         )
 
         dsk = {}
+        # Ensure that shuffles with different branch_ids have the same barrier
         token = self._dep_name.split("-")[-1]
         _barrier_key = barrier_key(ShuffleId(token))
         name = "shuffle-transfer-" + token
@@ -1040,6 +1049,7 @@ class SortValues(BaseSetIndexSortValues):
             ignore_index=self.ignore_index,
             method=self.shuffle_method,
             options=self.options,
+            _branch_id=self._branch_id,
         )
         shuffled = Projection(shuffled, self.frame.columns)
         return SortValuesBlockwise(
@@ -1127,6 +1137,7 @@ class SetPartition(SetIndex):
             ignore_index=True,
             method=self.shuffle_method,
             options=self.options,
+            _branch_id=self._branch_id,
         )
         shuffled = Projection(
             shuffled, [c for c in assigned.columns if c != "_partitions"]

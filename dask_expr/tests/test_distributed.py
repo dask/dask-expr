@@ -3,8 +3,9 @@ from __future__ import annotations
 import pytest
 
 from dask_expr import from_pandas, map_partitions, merge
-from dask_expr._merge import BroadcastJoin
-from dask_expr.tests._util import _backend_library
+from dask_expr._merge import BroadcastJoin, HashJoinP2P
+from dask_expr._shuffle import P2PShuffle
+from dask_expr.tests._util import _backend_library, _check_consumer_node
 
 distributed = pytest.importorskip("distributed")
 
@@ -354,3 +355,186 @@ async def test_future_in_map_partitions(c, s, a, b):
     result = await result
     expected = pd.DataFrame({"a": [4951, 4952, 4953, 4954]})
     pd.testing.assert_frame_equal(result, expected)
+
+
+@gen_cluster(client=True)
+async def test_p2p_shuffle_reuse(c, s, a, b):
+    pdf = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6] * 10, "b": 2, "e": 2})
+    df = from_pandas(pdf, npartitions=10)
+    q = df.shuffle("a")
+    q = q.fillna(100)
+    q = q.a + q.a.sum()
+    # Only one IO node since shuffle consumes
+    _check_consumer_node(q, 1)
+    _check_consumer_node(q, 2, consumer_node=P2PShuffle)
+    x = c.compute(q)
+    x = await x
+
+    expected = pdf.fillna(100)
+    expected = expected.a + expected.a.sum()
+    pd.testing.assert_series_equal(x.sort_index(), expected)
+
+    # Check that we have 1 shuffle barrier but 20 p2pshuffle tasks for the output
+    dsk = q.optimize(fuse=False).dask
+    keys = list(dsk.keys())
+    assert (
+        len(
+            list(
+                key for key in keys if isinstance(key, str) and "shuffle-barrier" in key
+            )
+        )
+        == 1
+    )
+    assert (
+        len(
+            list(
+                key for key in keys if isinstance(key, tuple) and "p2pshuffle" in key[0]
+            )
+        )
+        == 20
+    )
+
+
+@gen_cluster(client=True)
+async def test_groupby_apply_reuse(c, s, a, b):
+    pdf = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6] * 10, "b": 2, "e": 2})
+    df = from_pandas(pdf, npartitions=10)
+    q = df.groupby("a").apply(lambda x: x)
+    q = q.fillna(100)
+    q = q.a + q.a.sum()
+    # Only one IO node since shuffle consumes
+    _check_consumer_node(q, 1)
+    _check_consumer_node(q, 2, consumer_node=P2PShuffle)
+    x = c.compute(q)
+    x = await x
+
+    expected = pdf.groupby("a").apply(lambda x: x)
+    expected = expected.fillna(100)
+    expected = expected.a + expected.a.sum()
+    pd.testing.assert_series_equal(x.sort_index(), expected)
+
+
+@gen_cluster(client=True)
+async def test_groupby_sum_reuse_split_out(c, s, a, b):
+    pdf = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6] * 10, "b": 2, "e": 2})
+    df = from_pandas(pdf, npartitions=10)
+    q = df.groupby("a").sum(split_out=True)
+    q = df + q.b.sum()
+    # Only one IO node since groupby-shuffle consumes
+    _check_consumer_node(q, 1)
+    _check_consumer_node(q, 1, consumer_node=P2PShuffle)
+    x = c.compute(q)
+    x = await x
+
+    expected = pdf.groupby("a").sum()
+    expected = pdf + expected.b.sum()
+    pd.testing.assert_frame_equal(x.sort_index(), expected)
+
+
+@gen_cluster(client=True)
+async def test_groupby_sum_no_reuse(c, s, a, b):
+    pdf = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6] * 10, "b": 2, "e": 2})
+    df = from_pandas(pdf, npartitions=10)
+    # no split_out, so we can't reuse the groupby operation
+    q = df.groupby("a").sum()
+    q = df + q.b.sum()
+    # 2 IO Nodes, one for the groupby branch and one for the main branch
+    _check_consumer_node(q, 2)
+    x = c.compute(q)
+    x = await x
+
+    expected = pdf.groupby("a").sum()
+    expected = pdf + expected.b.sum()
+    pd.testing.assert_frame_equal(x.sort_index(), expected)
+
+
+@gen_cluster(client=True)
+async def test_drop_duplicates_reuse(c, s, a, b):
+    pdf = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6] * 10, "b": 2, "e": 2})
+    df = from_pandas(pdf, npartitions=10)
+    # no split_out, so we can't reuse the groupby operation
+    q = df.drop_duplicates(subset="a")
+    q = df + q.b.sum()
+    # Only one IO node since drop duplicates-shuffle consumes
+    _check_consumer_node(q, 1)
+    _check_consumer_node(q, 1, P2PShuffle)
+    x = c.compute(q)
+    x = await x
+
+    expected = pdf.drop_duplicates(subset="a")
+    expected = pdf + expected.b.sum()
+    pd.testing.assert_frame_equal(x.sort_index(), expected)
+
+    q = df.drop_duplicates(subset="a", split_out=1)
+    q = df + q.b.sum()
+    # 2 IO nodes since reducer can't consume
+    _check_consumer_node(q, 2)
+    x = c.compute(q)
+    x = await x
+
+    expected = pdf.drop_duplicates(subset="a")
+    expected = pdf + expected.b.sum()
+    pd.testing.assert_frame_equal(x.sort_index(), expected)
+
+
+@gen_cluster(client=True)
+async def test_groupby_ffill_reuse(c, s, a, b):
+    pdf = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6] * 10, "b": 2, "e": 2})
+    df = from_pandas(pdf, npartitions=10)
+    q = df.groupby("a").ffill()
+    q = q.fillna(100)
+    q = q.b + q.b.sum()
+    # Only one IO node since shuffle consumes
+    _check_consumer_node(q, 1)
+    _check_consumer_node(q, 2, consumer_node=P2PShuffle)
+    x = c.compute(q)
+    x = await x
+
+    expected = pdf.groupby("a").ffill()
+    expected = expected.fillna(100)
+    expected = expected.b + expected.b.sum()
+    pd.testing.assert_series_equal(x.sort_index(), expected)
+
+
+@gen_cluster(client=True)
+async def test_merge_reuse(c, s, a, b):
+    pdf1 = pd.DataFrame({"a": [1, 2, 3, 4, 1, 2, 3, 4], "b": 1, "c": 1})
+    pdf2 = pd.DataFrame({"a": [1, 2, 3, 4, 1, 2, 3, 4], "e": 1, "f": 1})
+
+    df1 = from_pandas(pdf1, npartitions=3)
+    df2 = from_pandas(pdf2, npartitions=3)
+    q = df1.merge(df2)
+    q = q.fillna(100)
+    q = q.b + q.b.sum()
+    _check_consumer_node(q, 2, HashJoinP2P)
+    # One on either side
+    _check_consumer_node(q, 2, branch_id_counter=1)
+    x = c.compute(q)
+    x = await x
+    expected = pdf1.merge(pdf2)
+    expected = expected.fillna(100)
+    expected = expected.b + expected.b.sum()
+    pd.testing.assert_series_equal(x.reset_index(drop=True), expected)
+
+    # Check that we have 2 shuffle barriers (one for either side) for both merges but 6
+    # hashjoinp2p tasks for the output
+    dsk = q.optimize(fuse=False).dask
+    keys = list(dsk.keys())
+    assert (
+        len(
+            list(
+                key for key in keys if isinstance(key, str) and "shuffle-barrier" in key
+            )
+        )
+        == 2
+    )
+    assert (
+        len(
+            list(
+                key
+                for key in keys
+                if isinstance(key, tuple) and "hashjoinp2p" in key[0]
+            )
+        )
+        == 6
+    )

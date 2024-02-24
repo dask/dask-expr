@@ -131,6 +131,8 @@ class ShuffleReduce(Expr):
     ApplyConcatApply
     """
 
+    _branch_id_required = True
+
     _parameters = [
         "frame",
         "kind",
@@ -225,6 +227,7 @@ class ShuffleReduce(Expr):
                 ignore_index=ignore_index,
                 index_shuffle=not split_by_index and self.shuffle_by_index,
                 method=self.shuffle_method,
+                _branch_id=self._branch_id,
             )
 
         # Unmap column names if necessary
@@ -506,39 +509,53 @@ class ApplyConcatApply(Expr):
             shuffle_by_index=getattr(self, "shuffle_by_index", None),
             shuffle_method=getattr(self, "shuffle_method", None),
             ignore_index=getattr(self, "ignore_index", True),
+            _branch_id=self._branch_id,
         )
 
     def _substitute_branch_id(self, branch_id):
+        if self.should_shuffle:
+            # We are lowering into a Shuffle, so we are a consumer ourselves and
+            # we have to consume the branch_id of our parents
+            return super()._substitute_branch_id(branch_id)
         return self
 
     def _reuse_down(self):
         if self._branch_id.branch_id != 0:
             return
 
-        from dask_expr._shuffle import Shuffle
+        if self.should_shuffle:
+            # We are lowering into a Shuffle, so we are a consumer ourselves
+            return
+
+        from dask_expr._groupby import GroupByApply
+        from dask_expr._merge import Merge
+        from dask_expr._shuffle import ShuffleBase
         from dask_expr.io import IO
 
         seen = set()
         stack = self.dependencies()
-        counter, found_io = 1, False
+        counter, found_consumer = 1, False
 
         while stack:
             node = stack.pop()
 
-            if node._name in seen:
+            if node._dep_name in seen:
                 continue
-            seen.add(node._name)
+            seen.add(node._dep_name)
 
             if isinstance(node, ApplyConcatApply):
-                counter += 1
+                if node.should_shuffle:
+                    found_consumer = True
+                else:
+                    counter += 1
                 continue
 
-            if isinstance(node, (IO, Shuffle)):
-                found_io = True
+            if isinstance(node, (IO, ShuffleBase, GroupByApply, Merge)):
+                found_consumer = True
                 continue
             stack.extend(node.dependencies())
 
-        if not found_io:
+        if not found_consumer:
             return
         b_id = BranchId(counter)
         result = type(self)(*self.operands, b_id)
@@ -631,7 +648,9 @@ class DropDuplicates(Unique):
 
             columns = [col for col in self.frame.columns if col in columns]
             return type(parent)(
-                type(self)(self.frame[columns], *self.operands[1:]),
+                type(self)(
+                    self.frame[columns], *self.operands[1:], _branch_id=self._branch_id
+                ),
                 *parent.operands[1:],
             )
 

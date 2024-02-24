@@ -757,6 +757,7 @@ class FrameBase(DaskMethodsMixin):
                 shuffle_method,
                 options,
                 index_shuffle=on_index,
+                _branch_id=expr.BranchId(0),
             )
         )
 
@@ -2764,6 +2765,7 @@ class DataFrame(FrameBase):
                 split_every=split_every,
                 shuffle_method=shuffle_method,
                 keep=keep,
+                _branch_id=expr.BranchId(0),
             )
         )
 
@@ -3876,7 +3878,15 @@ class Series(FrameBase):
         uniques : Series
         """
         shuffle_method = _get_shuffle_preferring_order(shuffle_method)
-        return new_collection(Unique(self, split_every, split_out, shuffle_method))
+        return new_collection(
+            Unique(
+                self,
+                split_every,
+                split_out,
+                shuffle_method,
+                _branch_id=expr.BranchId(0),
+            )
+        )
 
     @derived_from(pd.Series)
     def nunique(self, dropna=True, split_every=False, split_out=True):
@@ -3908,6 +3918,7 @@ class Series(FrameBase):
                 split_every=split_every,
                 shuffle_method=shuffle_method,
                 keep=keep,
+                _branch_id=expr.BranchId(0),
             )
         )
 
@@ -4780,6 +4791,7 @@ def merge(
             shuffle_method=shuffle_method,
             _npartitions=npartitions,
             broadcast=broadcast,
+            _branch_id=expr.BranchId(0),
         )
     )
 
@@ -4866,7 +4878,7 @@ def merge_asof(
 
     from dask_expr._merge_asof import MergeAsof
 
-    return new_collection(MergeAsof(left, right, **kwargs))
+    return new_collection(MergeAsof(left, right, **kwargs, _branch_id=expr.BranchId(0)))
 
 
 def from_map(
