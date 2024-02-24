@@ -518,9 +518,11 @@ class ApplyConcatApply(Expr):
         if self._branch_id.branch_id != 0:
             return
 
+        from dask_expr.io import IO
+
         seen = set()
         stack = self.dependencies()
-        counter, found_io = 1, False
+        counter, found_consumer = 1, False
 
         while stack:
             node = stack.pop()
@@ -529,14 +531,17 @@ class ApplyConcatApply(Expr):
                 continue
             seen.add(node._name)
 
+            if isinstance(node, IO):
+                found_consumer = True
+                continue
+
             if isinstance(node, ApplyConcatApply):
                 counter += 1
                 continue
-            deps = node.dependencies()
-            if not deps:
-                found_io = True
-            stack.extend(deps)
-        if not found_io:
+
+            stack.extend(node.dependencies())
+
+        if not found_consumer:
             return
         b_id = BranchId(counter)
         result = type(self)(*self.operands, b_id)
