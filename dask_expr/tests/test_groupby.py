@@ -107,7 +107,6 @@ def test_groupby_reduction_optimize(pdf, df):
     ops = [
         op for op in agg.expr.optimize(fuse=False).walk() if isinstance(op, FromPandas)
     ]
-    agg.simplify().pprint()
     assert len(ops) == 1
     assert ops[0].columns == ["x", "y"]
 
@@ -120,6 +119,12 @@ def test_groupby_reduction_optimize(pdf, df):
     assert len(ops) == 1
     assert ops[0].columns == ["x", "y"]
     assert_eq(agg, pdf.replace(1, 5).groupby(pdf.replace(1, 5).x).y.apply(lambda x: x))
+
+
+def test_std_columns_int():
+    df = pd.DataFrame({0: [5], 1: [5]})
+    ddf = from_pandas(df, npartitions=2)
+    assert_eq(ddf.groupby(ddf[0]).std(), df.groupby(df[0].copy()).std())
 
 
 @pytest.mark.parametrize(

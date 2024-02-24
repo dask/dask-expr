@@ -477,9 +477,9 @@ class Blockwise(Expr):
         if self._keyword_only:
             args = [
                 self.operand(p) for p in self._parameters if p not in self._keyword_only
-            ] + self.argument_operands[len(self._parameters) :]
+            ] + self.operands[len(self._parameters) :]
             return args
-        return self.argument_operands
+        return self.operands
 
     def _broadcast_dep(self, dep: Expr):
         # Checks if a dependency should be broadcasted to
@@ -503,7 +503,7 @@ class Blockwise(Expr):
             head = funcname(self.operation)
         else:
             head = funcname(type(self)).lower()
-        return head + "-" + _tokenize_deterministic(*self.operands)
+        return head + "-" + _tokenize_deterministic(*self.operands, self._branch_id)
 
     def _blockwise_arg(self, arg, i):
         """Return a Blockwise-task argument"""
@@ -563,7 +563,7 @@ class MapPartitions(Blockwise):
 
     @property
     def args(self):
-        return [self.frame] + self.argument_operands[len(self._parameters) :]
+        return [self.frame] + self.operands[len(self._parameters) :]
 
     @functools.cached_property
     def _meta(self):
@@ -659,7 +659,7 @@ class UFuncElemwise(MapPartitions):
 
     @functools.cached_property
     def args(self):
-        return self.argument_operands[len(self._parameters) :]
+        return self.operands[len(self._parameters) :]
 
     @functools.cached_property
     def _dfs(self):
@@ -726,7 +726,7 @@ class MapOverlapAlign(Expr):
         meta = self.operand("meta")
         args = [self.frame._meta] + [
             arg._meta if isinstance(arg, Expr) else arg
-            for arg in self.argument_operands[len(self._parameters) :]
+            for arg in self.operands[len(self._parameters) :]
         ]
         return _get_meta_map_partitions(
             args,
@@ -738,7 +738,7 @@ class MapOverlapAlign(Expr):
         )
 
     def _divisions(self):
-        args = [self.frame] + self.argument_operands[len(self._parameters) :]
+        args = [self.frame] + self.operands[len(self._parameters) :]
         return calc_divisions_for_align(*args)
 
     def _lower(self):
@@ -793,7 +793,7 @@ class MapOverlap(MapPartitions):
         return (
             [self.frame]
             + [self.func, self.before, self.after]
-            + self.argument_operands[len(self._parameters) :]
+            + self.operands[len(self._parameters) :]
         )
 
     @functools.cached_property
@@ -801,7 +801,7 @@ class MapOverlap(MapPartitions):
         meta = self.operand("meta")
         args = [self.frame._meta] + [
             arg._meta if isinstance(arg, Expr) else arg
-            for arg in self.argument_operands[len(self._parameters) :]
+            for arg in self.operands[len(self._parameters) :]
         ]
         return _get_meta_map_partitions(
             args,
@@ -1095,11 +1095,7 @@ class Sample(Blockwise):
 
     @functools.cached_property
     def _meta(self):
-        args = (
-            [self.operands[0]._meta]
-            + [self.operands[1][0]]
-            + self.argument_operands[2:]
-        )
+        args = [self.operands[0]._meta] + [self.operands[1][0]] + self.operands[2:]
         return self.operation(*args)
 
     def _task(self, index: int):
@@ -1701,11 +1697,11 @@ class Assign(Elemwise):
 
     @functools.cached_property
     def keys(self):
-        return self.argument_operands[1::2]
+        return self.operands[1::2]
 
     @functools.cached_property
     def vals(self):
-        return self.argument_operands[2::2]
+        return self.operands[2::2]
 
     @functools.cached_property
     def _meta(self):
@@ -1730,7 +1726,7 @@ class Assign(Elemwise):
             if self._check_for_previously_created_column(self.frame):
                 # don't squash if we are using a column that was previously created
                 return
-            return Assign(*self.frame.argument_operands, *self.operands[1:])
+            return Assign(*self.frame.operands, *self.operands[1:])
 
     def _check_for_previously_created_column(self, child):
         input_columns = []
@@ -1758,7 +1754,7 @@ class Assign(Elemwise):
                     if k in columns:
                         new_args.extend([k, v])
             else:
-                new_args = self.argument_operands[1:]
+                new_args = self.operands[1:]
 
             columns = [col for col in self.frame.columns if col in cols]
             return type(parent)(
@@ -1783,12 +1779,12 @@ class CaseWhen(Elemwise):
 
     @functools.cached_property
     def caselist(self):
-        c = self.argument_operands[1:]
+        c = self.operands[1:]
         return [(c[i], c[i + 1]) for i in range(0, len(c), 2)]
 
     @functools.cached_property
     def _meta(self):
-        c = self.argument_operands[1:]
+        c = self.operands[1:]
         caselist = [
             (
                 meta_nonempty(c[i]._meta) if isinstance(c[i], Expr) else c[i],
@@ -2263,6 +2259,12 @@ class BlockwiseHead(Head, Blockwise):
 
     _parameters = ["frame", "n", "npartitions", "safe"]
 
+    def _simplify_down(self):
+        return
+
+    def _simplify_up(self, parent, dependents):
+        return
+
     @functools.cached_property
     def npartitions(self):
         return len(self._divisions()) - 1
@@ -2652,9 +2654,6 @@ class Partitions(Expr):
             # parameter can internally capture the same logic as `Partitions`
             return self.frame.substitute_parameters({"_partitions": partitions})
 
-    def _cull_down(self):
-        return self._simplify_down()
-
     def _node_label_args(self):
         return [self.frame, self.partitions]
 
@@ -2723,7 +2722,8 @@ class _DelayedExpr(Expr):
         self.obj = obj
         if _branch_id is None:
             _branch_id = BranchId(0)
-        self.operands = [obj, _branch_id]
+        self._branch_id = _branch_id
+        self.operands = [obj]
 
     def __str__(self):
         return f"{type(self).__name__}({str(self.obj)})"
@@ -2751,8 +2751,52 @@ def normalize_expression(expr):
     return expr._name
 
 
+def optimize_until(
+    expr: Expr, stage: core.OptimizerStage, common_subplan_elimination: bool = False
+) -> Expr:
+    result = expr
+    if stage == "logical":
+        return result
+
+    while True:
+        if not common_subplan_elimination:
+            out = result.rewrite("reuse", cache={})
+        else:
+            out = result
+        out = out.simplify()
+        if out._name == result._name or common_subplan_elimination:
+            break
+        result = out
+
+    expr = out
+    if stage == "simplified-logical":
+        return expr
+
+    # Manipulate Expression to make it more efficient
+    expr = expr.rewrite(kind="tune", cache={})
+    if stage == "tuned-logical":
+        return expr
+
+    # Lower
+    expr = expr.lower_completely()
+    if stage == "physical":
+        return expr
+
+    # Simplify again
+    expr = expr.simplify()
+    if stage == "simplified-physical":
+        return expr
+
+    # Final graph-specific optimizations
+    expr = optimize_blockwise_fusion(expr)
+    if stage == "fused":
+        return expr
+
+    raise ValueError(f"Stage {stage!r} not supported.")
+
+
 def optimize(
-    expr: Expr, fuse: bool = True, common_subplan_elimination: bool = True
+    expr: Expr, fuse: bool = True, common_subplan_elimination: bool = False
 ) -> Expr:
     """High level query optimization
 
@@ -2767,43 +2811,19 @@ def optimize(
         Input expression to optimize
     fuse:
         whether or not to turn on blockwise fusion
-    common_subplan_elimination : bool
+    common_subplan_elimination : bool, default False
         whether we want to reuse common subplans that are found in the graph and
         are used in self-joins or similar which require all data be held in memory
-        at some point. Only set this to false if your dataset fits into memory.
+        at some point. Only set this to true if your dataset fits into memory.
 
     See Also
     --------
     simplify
     optimize_blockwise_fusion
     """
-    result = expr
-    while True:
-        if common_subplan_elimination:
-            out = result.rewrite("reuse", cache={})
-        else:
-            out = result
-        out = out.simplify()
-        if out._name == result._name or not common_subplan_elimination:
-            break
-        result = out
+    stage: core.OptimizerStage = "fused" if fuse else "simplified-physical"
 
-    result = out
-
-    # Manipulate Expression to make it more efficient
-    result = result.rewrite(kind="tune", cache={})
-
-    # Lower
-    result = result.lower_completely()
-
-    # Cull
-    result = result.rewrite(kind="cull", cache={})
-
-    # Final graph-specific optimizations
-    if fuse:
-        result = optimize_blockwise_fusion(result)
-
-    return result
+    return optimize_until(expr, stage, common_subplan_elimination)
 
 
 def is_broadcastable(dfs, s):
@@ -3329,7 +3349,7 @@ class UFuncAlign(MaybeAlignPartitions):
 
     @functools.cached_property
     def args(self):
-        return self.argument_operands[len(self._parameters) :]
+        return self.operands[len(self._parameters) :]
 
     @functools.cached_property
     def _dfs(self):
@@ -3421,7 +3441,7 @@ class Fused(Blockwise):
 
     @functools.cached_property
     def _name(self):
-        return f"{str(self)}-{_tokenize_deterministic(self.exprs)}"
+        return f"{str(self)}-{_tokenize_deterministic(self.exprs, self._branch_id)}"
 
     def _divisions(self):
         return self.exprs[0]._divisions()
@@ -3505,15 +3525,18 @@ def determine_column_projection(expr, parent, dependents, additional_columns=Non
 def _sort_mixed(values):
     """order ints before strings before nulls in 1d arrays"""
     str_pos = np.array([isinstance(x, str) for x in values], dtype=bool)
+    tuple_pos = np.array([isinstance(x, tuple) for x in values], dtype=bool)
     null_pos = np.array([pd.isna(x) for x in values], dtype=bool)
-    num_pos = ~str_pos & ~null_pos
+    num_pos = ~str_pos & ~null_pos & ~tuple_pos
     str_argsort = np.argsort(values[str_pos])
+    tuple_argsort = np.argsort(values[tuple_pos])
     num_argsort = np.argsort(values[num_pos])
     # convert boolean arrays to positional indices, then order by underlying values
     str_locs = str_pos.nonzero()[0].take(str_argsort)
+    tuple_locs = tuple_pos.nonzero()[0].take(tuple_argsort)
     num_locs = num_pos.nonzero()[0].take(num_argsort)
     null_locs = null_pos.nonzero()[0]
-    locs = np.concatenate([num_locs, str_locs, null_locs])
+    locs = np.concatenate([num_locs, str_locs, tuple_locs, null_locs])
     return values.take(locs)
 
 
@@ -3642,7 +3665,7 @@ def _check_dependents_are_predicates(
         e_dependents = {x()._name for x in dependents[e._name] if x() is not None}
 
         if not allow_reduction:
-            if isinstance(e, Reduction):
+            if isinstance(e, (ApplyConcatApply, TreeReduce, ShuffleReduce)):
                 return False
 
         if not e_dependents.issubset(allowed_expressions):
@@ -3752,6 +3775,7 @@ def _get_meta_map_partitions(args, dfs, func, kwargs, meta, parent_meta):
 from dask_expr._reductions import (
     All,
     Any,
+    ApplyConcatApply,
     Count,
     IdxMax,
     IdxMin,
@@ -3762,9 +3786,10 @@ from dask_expr._reductions import (
     NBytes,
     NuniqueApprox,
     Prod,
-    Reduction,
+    ShuffleReduce,
     Size,
     Sum,
+    TreeReduce,
     Var,
 )
 from dask_expr.io import IO, BlockwiseIO

@@ -5,7 +5,7 @@ import os
 import weakref
 from collections import defaultdict
 from collections.abc import Generator
-from typing import NamedTuple
+from typing import TYPE_CHECKING, Literal, NamedTuple
 
 import dask
 import pandas as pd
@@ -15,9 +15,22 @@ from dask.utils import funcname, import_required, is_arraylike
 
 from dask_expr._util import _BackendData, _tokenize_deterministic
 
+if TYPE_CHECKING:
+    # TODO import from typing (requires Python >=3.10)
+    from typing_extensions import TypeAlias
+
+OptimizerStage: TypeAlias = Literal[
+    "logical",
+    "simplified-logical",
+    "tuned-logical",
+    "physical",
+    "simplified-physical",
+    "fused",
+]
+
 
 class BranchId(NamedTuple):
-    branch_id: int | None
+    branch_id: int
 
 
 def _unpack_collections(o):
@@ -49,7 +62,8 @@ class Expr:
                 operands.append(cls._defaults[parameter])
         assert not kwargs, kwargs
         inst = object.__new__(cls)
-        inst.operands = [_unpack_collections(o) for o in operands] + [_branch_id]
+        inst.operands = [_unpack_collections(o) for o in operands]
+        inst._branch_id = _branch_id
         _name = inst._name
         if _name in Expr._instances:
             return Expr._instances[_name]
@@ -57,24 +71,10 @@ class Expr:
         Expr._instances[_name] = inst
         return inst
 
-    @functools.cached_property
-    def argument_operands(self):
-        return self.operands[:-1]
-
-    @functools.cached_property
-    def _branch_id(self):
-        return self.operands[-1]
-
     def _tune_down(self):
         return None
 
     def _tune_up(self, parent):
-        return None
-
-    def _cull_down(self):
-        return None
-
-    def _cull_up(self, parent):
         return None
 
     def __str__(self):
@@ -125,12 +125,11 @@ class Expr:
                     op = "<series>"
                 elif is_arraylike(op):
                     op = "<array>"
-                elif isinstance(op, BranchId):
-                    if op.branch_id == 0:
-                        continue
-                    op = f" branch_id={op.branch_id}"
                 header = self._tree_repr_argument_construction(i, op, header)
-
+        if self._branch_id.branch_id != 0:
+            header = self._tree_repr_argument_construction(
+                i + 1, f" branch_id={self._branch_id.branch_id}", header
+            )
         lines = [header] + lines
         lines = [" " * indent + line for line in lines]
 
@@ -138,6 +137,13 @@ class Expr:
 
     def tree_repr(self):
         return os.linesep.join(self._tree_repr_lines())
+
+    def explain(
+        self, stage: OptimizerStage = "fused", format: str | None = None
+    ) -> None:
+        from dask_expr.diagnostics import explain
+
+        return explain(self, stage, format)
 
     def pprint(self):
         for line in self._tree_repr_lines():
@@ -286,7 +292,7 @@ class Expr:
                 new_operands.append(new)
 
             if changed:
-                expr = type(expr)(*new_operands)
+                expr = type(expr)(*new_operands, _branch_id=expr._branch_id)
                 continue
             else:
                 break
@@ -303,17 +309,19 @@ class Expr:
 
     def _bubble_branch_id_down(self):
         b_id = self._branch_id
+        if b_id.branch_id <= 0:
+            return
         if any(b_id.branch_id != d._branch_id.branch_id for d in self.dependencies()):
             ops = [
                 op._substitute_branch_id(b_id) if isinstance(op, Expr) else op
-                for op in self.argument_operands
+                for op in self.operands
             ]
             return type(self)(*ops)
 
     def _substitute_branch_id(self, branch_id):
         if self._branch_id.branch_id != 0:
             return self
-        return type(self)(*self.argument_operands, branch_id)
+        return type(self)(*self.operands, branch_id)
 
     def simplify_once(self, dependents: defaultdict, simplified: dict):
         """Simplify an expression
@@ -379,7 +387,7 @@ class Expr:
                 new_operands.append(new)
 
             if changed:
-                expr = type(expr)(*new_operands)
+                expr = type(expr)(*new_operands, _branch_id=expr._branch_id)
 
             break
 
@@ -424,7 +432,7 @@ class Expr:
             new_operands.append(new)
 
         if changed:
-            out = type(out)(*new_operands)
+            out = type(out)(*new_operands, _branch_id=out._branch_id)
 
         return out
 
@@ -460,7 +468,9 @@ class Expr:
     @functools.cached_property
     def _name(self):
         return (
-            funcname(type(self)).lower() + "-" + _tokenize_deterministic(*self.operands)
+            funcname(type(self)).lower()
+            + "-"
+            + _tokenize_deterministic(*self.operands, self._branch_id)
         )
 
     @functools.cached_property
@@ -617,7 +627,7 @@ class Expr:
             else:
                 new_operands.append(operand)
         if changed:
-            return type(self)(*new_operands)
+            return type(self)(*new_operands, _branch_id=self._branch_id)
         return self
 
     def _node_label_args(self):

@@ -98,7 +98,7 @@ class Aggregate(Chunk):
 
     @functools.cached_property
     def aggregate_args(self):
-        return self.argument_operands[len(self._parameters) :]
+        return self.operands[len(self._parameters) :]
 
     @staticmethod
     def _call_with_list_arg(func, *args, **kwargs):
@@ -301,7 +301,7 @@ class TreeReduce(Expr):
             name = funcname(self.combine.__self__).lower() + "-tree"
         else:
             name = funcname(self.combine)
-        return name + "-" + _tokenize_deterministic(*self.operands)
+        return name + "-" + _tokenize_deterministic(*self.operands, self._branch_id)
 
     def __dask_postcompute__(self):
         return toolz.first, ()
@@ -541,11 +541,11 @@ class ApplyConcatApply(Expr):
         if not found_io:
             return
         b_id = BranchId(counter)
-        result = type(self)(*self.argument_operands, b_id)
+        result = type(self)(*self.operands, b_id)
         out = result._bubble_branch_id_down()
         if out is None:
             return result
-        return type(out)(*out.argument_operands, b_id)
+        return type(out)(*out.operands, _branch_id=b_id)
 
 
 class Unique(ApplyConcatApply):
