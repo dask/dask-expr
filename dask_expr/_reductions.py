@@ -518,7 +518,7 @@ class ApplyConcatApply(Expr):
         )
 
     def _substitute_branch_id(self, branch_id):
-        if self.should_shuffle:
+        if self._reuse_consumer:
             # We are lowering into a Shuffle, so we are a consumer ourselves and
             # we have to consume the branch_id of our parents
             return super()._substitute_branch_id(branch_id)
@@ -528,7 +528,7 @@ class ApplyConcatApply(Expr):
         if self._branch_id.branch_id != 0:
             return
 
-        if self.should_shuffle:
+        if self._reuse_consumer:
             # We are lowering into a Shuffle, so we are a consumer ourselves
             return
 
