@@ -549,6 +549,10 @@ class ApplyConcatApply(Expr):
                 found_consumer = True
                 continue
 
+            if isinstance(node, IO):
+                found_consumer = True
+                continue
+
             if isinstance(node, ApplyConcatApply):
                 counter += 1
                 continue
