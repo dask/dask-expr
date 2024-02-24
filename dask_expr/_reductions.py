@@ -132,6 +132,7 @@ class ShuffleReduce(Expr):
     """
 
     _branch_id_required = True
+    _reuse_consumer = True
 
     _parameters = [
         "frame",
@@ -414,6 +415,10 @@ class ApplyConcatApply(Expr):
             return split_out
         else:
             return 1
+
+    @functools.cached_property
+    def _reuse_consumer(self):
+        return self.should_shuffle
 
     def _layer(self):
         # This is an abstract expression

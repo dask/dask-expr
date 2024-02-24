@@ -869,6 +869,7 @@ class GroupByApply(Expr, GroupByBase):
         "shuffle_method": None,
     }
     _branch_id_required = True
+    _reuse_consumer = True
 
     @functools.cached_property
     def grp_func(self):

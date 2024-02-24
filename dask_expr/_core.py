@@ -48,6 +48,7 @@ class Expr:
     _defaults = {}
     _instances = weakref.WeakValueDictionary()
     _branch_id_required = False
+    _reuse_consumer = False
 
     def __new__(cls, *args, _branch_id=None, **kwargs):
         cls._check_branch_id_given(args, _branch_id)
@@ -486,7 +487,18 @@ class Expr:
 
     @functools.cached_property
     def _dep_name(self):
-        return self._name
+        # The name identifies every expression uniquely. The dependents name
+        # is used during optimization to capture the dependents of any given
+        # expression. A reuse consumer will have the same dependents independently
+        # of the branch_id parameter, since we want to reuse everything that comes
+        # before us and split branches up everything that is processed after
+        # us. So we have to ignore the branch_id from tokenization for those
+        # nodes.
+        if not self._reuse_consumer:
+            return self._name
+        return (
+            funcname(type(self)).lower() + "-" + _tokenize_deterministic(*self.operands)
+        )
 
     @property
     def _meta(self):

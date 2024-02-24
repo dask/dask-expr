@@ -22,7 +22,6 @@ from dask.dataframe.shuffle import (
 from dask.utils import (
     M,
     digit,
-    funcname,
     get_default_shuffle_method,
     insert,
     is_index_like,
@@ -64,7 +63,7 @@ from dask_expr._reductions import (
     ValueCounts,
 )
 from dask_expr._repartition import Repartition, RepartitionToFewer
-from dask_expr._util import LRU, _convert_to_list, _tokenize_deterministic
+from dask_expr._util import LRU, _convert_to_list
 
 
 class ShuffleBase(Expr):
@@ -86,6 +85,7 @@ class ShuffleBase(Expr):
     _is_length_preserving = True
     _filter_passthrough = True
     _branch_id_required = True
+    _reuse_consumer = True
 
     def __str__(self):
         return f"Shuffle({self._name[-7:]})"
@@ -165,12 +165,6 @@ class ShuffleBase(Expr):
     def _reuse_down(self):
         # TODO: What to do with task based shuffle?
         return
-
-    @functools.cached_property
-    def _dep_name(self):
-        return (
-            funcname(type(self)).lower() + "-" + _tokenize_deterministic(*self.operands)
-        )
 
 
 class Shuffle(ShuffleBase):

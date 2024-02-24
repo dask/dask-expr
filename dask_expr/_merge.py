@@ -10,7 +10,7 @@ from dask.dataframe.multi import (
     merge_chunk,
 )
 from dask.dataframe.shuffle import partitioning_index
-from dask.utils import apply, funcname, get_default_shuffle_method
+from dask.utils import apply, get_default_shuffle_method
 from toolz import merge_sorted, unique
 
 from dask_expr._expr import (  # noqa: F401
@@ -83,12 +83,7 @@ class Merge(Expr):
         "broadcast": None,
     }
     _branch_id_required = True
-
-    @functools.cached_property
-    def _dep_name(self):
-        return (
-            funcname(type(self)).lower() + "-" + _tokenize_deterministic(*self.operands)
-        )
+    _reuse_consumer = True
 
     @property
     def _filter_passthrough(self):
