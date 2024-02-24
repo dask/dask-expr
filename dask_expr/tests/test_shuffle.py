@@ -747,3 +747,10 @@ def test_set_index_filter_pushdown():
     expected = expected[expected.y == 1].set_index("x")
     assert result.simplify()._name == expected.simplify()._name
     assert result.optimize()._name == expected.optimize()._name
+
+
+def test_shuffle_index_shuffle(df):
+    with pytest.raises(TypeError, match="Must shuffle on either "):
+        df.shuffle()
+    with pytest.raises(TypeError, match="Cannot shuffle on both"):
+        df.shuffle("x", on_index=True)
