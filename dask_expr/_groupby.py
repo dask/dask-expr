@@ -298,19 +298,6 @@ class GroupbyAggregationBase(GroupByApplyConcatApply, GroupByBase):
     }
 
     @functools.cached_property
-    def _meta(self):
-        meta = meta_nonempty(self.frame._meta)
-        meta = meta.groupby(
-            self._by_meta,
-            **_as_dict("observed", self.observed),
-            **_as_dict("dropna", self.dropna),
-        )
-        if self._slice is not None:
-            meta = meta[self._slice]
-        meta = meta.aggregate(self.arg)
-        return make_meta(meta)
-
-    @functools.cached_property
     def spec(self):
         # Converts the `arg` operand into specific
         # chunk, aggregate, and finalizer functions
@@ -374,6 +361,10 @@ class GroupbyAggregation(GroupbyAggregationBase):
     """
 
     @functools.cached_property
+    def _meta(self):
+        return self._lower()._meta
+
+    @functools.cached_property
     def _is_decomposable(self):
         return not any(s[1] in ("median", np.median) for s in self.spec)
 
@@ -409,10 +400,6 @@ class HolisticGroupbyAggregation(GroupbyAggregationBase):
     @property
     def should_shuffle(self):
         return True
-
-    @classmethod
-    def chunk(cls, df, *by, **kwargs):
-        return _non_agg_chunk(df, *by, **kwargs)
 
     @classmethod
     def combine(cls, inputs, **kwargs):
@@ -492,7 +479,7 @@ class DecomposableGroupbyAggregation(GroupbyAggregationBase):
             "arg": self.arg,
             "columns": self._slice,
             "finalize_funcs": self.agg_args["finalizers"],
-            "is_series": self._meta.ndim == 1,
+            "is_series": self.frame._meta.ndim == 1,
             "level": self.levels,
             "sort": self.sort,
             **_as_dict("observed", self.observed),

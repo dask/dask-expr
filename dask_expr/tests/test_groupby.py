@@ -4,6 +4,7 @@ from collections import OrderedDict
 import dask
 import numpy as np
 import pytest
+from dask.dataframe import Aggregation
 
 from dask_expr import from_pandas
 from dask_expr._groupby import GroupByUDFBlockwise
@@ -921,6 +922,16 @@ def test_series_groupby_not_supported(df, attr):
     g = df.groupby("x")
     with pytest.raises(NotImplementedError, match="Please use `aggregate`"):
         getattr(g.x, attr)()
+
+
+def test_dataframe_groupby_agg_custom_sum():
+    pandas_spec = {"b": "sum"}
+    dask_spec = {"b": Aggregation("sum", lambda s: s.sum(), lambda s0: s0.sum())}
+    df = pd.DataFrame({"g": [0, 0, 1] * 3, "b": [1, 2, 3] * 3})
+    ddf = from_pandas(df, npartitions=2)
+    expected = df.groupby("g").aggregate(pandas_spec)
+    result = ddf.groupby("g").aggregate(dask_spec)
+    assert_eq(result, expected)
 
 
 def test_groupby_size_drop_columns(df, pdf):
