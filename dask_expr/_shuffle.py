@@ -539,6 +539,10 @@ class DiskShuffle(SimpleShuffle):
 class P2PShuffle(SimpleShuffle):
     """P2P worker-based shuffle implementation"""
 
+    @functools.cached_property
+    def _meta(self):
+        return self.frame._meta.drop(columns=self.partitioning_index)
+
     def _layer(self):
         from distributed.shuffle._shuffle import (
             ShuffleId,
@@ -567,6 +571,7 @@ class P2PShuffle(SimpleShuffle):
                 self.partitioning_index,
                 self.frame._meta,
                 set(parts_out),
+                True,
                 True,
             )
 
