@@ -388,37 +388,28 @@ class GroupbyAggregation(GroupbyAggregationBase):
         )
 
 
-class GroupbyAggregationBaseLowered(GroupbyAggregationBase):
-    @functools.cached_property
-    def _meta(self):
-        meta = meta_nonempty(self.frame._meta)
-        meta = meta.groupby(
-            self._by_meta,
-            **_as_dict("observed", self.observed),
-            **_as_dict("dropna", self.dropna),
-        )
-        if self._slice is not None:
-            meta = meta[self._slice]
-        meta = meta.aggregate(self.arg)
-        return make_meta(meta)
-
-
-class HolisticGroupbyAggregation(GroupbyAggregationBaseLowered):
+class HolisticGroupbyAggregation(GroupbyAggregationBase):
     """Groupby aggregation for both decomposable and non-decomposable aggregates
 
     This class always calculates the aggregates by first collecting all the data for
     the groups and then aggregating at once.
+
+    We are always shuffling, so we will never call combine
     """
+
+    @functools.cached_property
+    def _meta(self):
+        meta = self._meta_chunk
+        aggregate = self.aggregate or (lambda x: x)
+        aggregate_kwargs = self.aggregate_kwargs
+        meta = aggregate([meta], **aggregate_kwargs)
+        return make_meta(meta)
 
     chunk = staticmethod(_non_agg_chunk)
 
     @property
     def should_shuffle(self):
         return True
-
-    @classmethod
-    def combine(cls, inputs, **kwargs):
-        return _groupby_aggregate_spec(_concat(inputs), **kwargs)
 
     @classmethod
     def aggregate(cls, inputs, **kwargs):
@@ -434,15 +425,6 @@ class HolisticGroupbyAggregation(GroupbyAggregationBaseLowered):
         }
 
     @property
-    def combine_kwargs(self) -> dict:
-        return {
-            "spec": self.arg,
-            "levels": _determine_levels(self.by),
-            **_as_dict("observed", self.observed),
-            **_as_dict("dropna", self.dropna),
-        }
-
-    @property
     def aggregate_kwargs(self) -> dict:
         return {
             "spec": self.arg,
@@ -452,7 +434,7 @@ class HolisticGroupbyAggregation(GroupbyAggregationBaseLowered):
         }
 
 
-class DecomposableGroupbyAggregation(GroupbyAggregationBaseLowered):
+class DecomposableGroupbyAggregation(GroupbyAggregationBase):
     """Groupby aggregation for decomposable aggregates
 
     The results may be calculated via tree or shuffle reduction.
