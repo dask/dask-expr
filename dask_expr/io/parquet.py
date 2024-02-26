@@ -760,43 +760,19 @@ class ReadParquetPyarrowFS(ReadParquet):
             # batch_readahead=16,
             # fragment_readahead=4,
             fragment_scan_options=pa.dataset.ParquetFragmentScanOptions(
-                # use_buffered_stream=False,
-                # buffer_size=8192,
                 pre_buffer=True,
                 cache_options=pa.CacheOptions(
-                    # hole_size_limit=parse_bytes("8 KiB"),
-                    # range_size_limit=parse_bytes("32.00 MiB"),
                     hole_size_limit=parse_bytes("4 MiB"),
                     range_size_limit=parse_bytes("32.00 MiB"),
-                    # I've seen this actually slowing us down, e.g. on TPCHQ14
-                    lazy=False,
-                    # If we disable lazy we can remove this as well.
-                    prefetch_limit=500,
                 ),
-                # thrift_string_size_limit=None,
-                # thrift_container_size_limit=None,
-                # decryption_config=None,
-                # page_checksum_verification=False,
             ),
             # TODO: Reconsider this. The OMP_NUM_THREAD variable makes it harmful to enable this
             use_threads=True,
         )
         df = table.to_pandas(
             types_mapper=_determine_type_mapper(),
-            # categories=None,
-            # strings_to_categorical=False,
-            # zero_copy_only=False,
-            # integer_object_nulls=False,
-            # date_as_object=True,
-            # timestamp_as_object=False,
             use_threads=False,
-            # deduplicate_objects=True,
-            # ignore_metadata=False,
-            # safe=True,
-            # split_blocks=False,
             self_destruct=True,
-            # maps_as_pydicts=None,
-            # coerce_temporal_nanoseconds=False,
         )
         return df
 
