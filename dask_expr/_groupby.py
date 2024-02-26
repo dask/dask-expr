@@ -388,7 +388,22 @@ class GroupbyAggregation(GroupbyAggregationBase):
         )
 
 
-class HolisticGroupbyAggregation(GroupbyAggregationBase):
+class GroupbyAggregationBaseLowered(GroupbyAggregationBase):
+    @functools.cached_property
+    def _meta(self):
+        meta = meta_nonempty(self.frame._meta)
+        meta = meta.groupby(
+            self._by_meta,
+            **_as_dict("observed", self.observed),
+            **_as_dict("dropna", self.dropna),
+        )
+        if self._slice is not None:
+            meta = meta[self._slice]
+        meta = meta.aggregate(self.arg)
+        return make_meta(meta)
+
+
+class HolisticGroupbyAggregation(GroupbyAggregationBaseLowered):
     """Groupby aggregation for both decomposable and non-decomposable aggregates
 
     This class always calculates the aggregates by first collecting all the data for
@@ -437,7 +452,7 @@ class HolisticGroupbyAggregation(GroupbyAggregationBase):
         }
 
 
-class DecomposableGroupbyAggregation(GroupbyAggregationBase):
+class DecomposableGroupbyAggregation(GroupbyAggregationBaseLowered):
     """Groupby aggregation for decomposable aggregates
 
     The results may be calculated via tree or shuffle reduction.
