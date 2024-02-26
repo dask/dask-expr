@@ -233,8 +233,8 @@ def test_merge_combine_similar(npartitions_left, npartitions_right):
     query["new"] = query.b + query.c
     query = query.groupby(["a", "e", "x"]).new.sum()
     assert (
-        len(query.optimize().__dask_graph__()) <= 25
-    )  # 45 is the non-combined version
+        len(query.optimize().__dask_graph__()) <= 37
+    )  # the non-combined version is higher
 
     expected = pdf.merge(pdf2)
     expected["new"] = expected.b + expected.c
@@ -932,3 +932,43 @@ def test_merge_leftsemi():
     df2 = from_pandas(pdf2, npartitions=2)
     with pytest.raises(NotImplementedError, match="on columns from the index"):
         df1.merge(df2, how="leftsemi", on="aa")
+
+
+def test_merge_npartitions_adjustment():
+    pdf1 = pd.DataFrame(
+        {"a": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] * 2, "b": 1, "c": 1, "d": 1}
+    )
+    pdf2 = pd.DataFrame(
+        {"a": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] * 2, "b": 1, "x": 1, "y": 1}
+    )
+    pdf3 = pd.DataFrame(
+        {"a": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] * 2, "b": 1, "m": 1, "n": 1}
+    )
+    df1 = from_pandas(pdf1, npartitions=10)
+    df2 = from_pandas(pdf2, npartitions=10)
+    df3 = from_pandas(pdf3, npartitions=10)
+    result = df1.merge(df2, on="a")
+    assert result.optimize().npartitions == 17
+    result = df1.merge(df2)
+    assert result.optimize().npartitions == 15
+    result = df1.merge(df2, left_on=["a", "c"], right_on=["b", "x"])
+    assert result.optimize().npartitions == 20
+
+    result = df1.merge(df2)
+    assert result.optimize().npartitions == 15
+    result = result.dropna()  # block projections
+    result = result[["a", "b"]].merge(df3)
+    assert result.optimize().npartitions == 10
+
+    result = df1.merge(df2)
+    assert result.optimize().npartitions == 15
+    result = result.dropna()  # block projections
+    result = result[["a", "b", "x", "y"]].merge(df3)
+    assert result.optimize().npartitions == 15
+
+    result = df1.merge(df2)
+    assert result.optimize().npartitions == 15
+    result = result.dropna()  # block projections
+    result = result + result.a.sum()
+    result = result[["a", "b", "x", "y"]].merge(df3)
+    assert result.optimize().npartitions == 15

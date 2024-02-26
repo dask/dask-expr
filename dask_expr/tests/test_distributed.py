@@ -51,7 +51,7 @@ async def test_merge_p2p_shuffle(c, s, a, b, npartitions_left):
     right = from_pandas(df_right, npartitions=5)
 
     out = left.merge(right, shuffle_method="p2p")
-    assert out.npartitions == npartitions_left
+    assert out.npartitions == 8
     x = c.compute(out)
     x = await x
     pd.testing.assert_frame_equal(x.reset_index(drop=True), df_left.merge(df_right))
@@ -88,7 +88,7 @@ async def test_merge_index_precedence(c, s, a, b, shuffle, name):
 
     result = df.join(df2, shuffle_method=shuffle)
     x = await c.compute(result)
-    assert result.npartitions == 3
+    assert result.npartitions == 6
     pd.testing.assert_frame_equal(x.sort_index(ascending=False), pdf.join(pdf2))
 
 
@@ -222,7 +222,7 @@ async def test_index_merge_p2p_shuffle(c, s, a, b, npartitions_left):
     right = from_pandas(df_right, npartitions=5)
 
     out = left.merge(right, left_index=True, right_on="a", shuffle_method="p2p")
-    assert out.npartitions == npartitions_left
+    assert out.npartitions == 7 if npartitions_left == 5 else 18
     x = c.compute(out)
     x = await x
     pd.testing.assert_frame_equal(
@@ -239,7 +239,7 @@ async def test_merge_p2p_shuffle(c, s, a, b):
     right = from_pandas(df_right, npartitions=5)
 
     out = left.merge(right, shuffle_method="p2p")[["b", "c"]]
-    assert out.npartitions == 6
+    assert out.npartitions == 8
     x = c.compute(out)
     x = await x
     pd.testing.assert_frame_equal(
