@@ -137,7 +137,7 @@ def test_shuffle_column_projection(df):
 
 
 def test_shuffle_reductions(df):
-    assert df.shuffle("x").sum().simplify()._name == df.sum()._name
+    assert df.shuffle("x").sum().optimize()._name == df.sum().optimize()._name
 
 
 @pytest.mark.xfail(reason="Shuffle can't see the reduction through the Projection")
@@ -264,7 +264,7 @@ def test_set_index_repartition(df, pdf):
     assert_eq(result, pdf.set_index("x"))
 
 
-def test_set_index_simplify(df, pdf):
+def test_set_index_optimize(df, pdf):
     q = df.set_index("x")["y"].optimize(fuse=False)
     expected = df[["x", "y"]].set_index("x")["y"].optimize(fuse=False)
     assert q._name == expected._name
@@ -697,18 +697,21 @@ def test_shuffle_filter_pushdown(pdf, meth):
     result = result[result.x > 5.0]
     expected = getattr(df[df.x > 5.0], meth)("x")
     assert result.simplify()._name == expected._name
+    assert result.optimize()._name == expected.optimize()._name
 
     result = getattr(df, meth)("x")
     result = result[result.x > 5.0][["x", "y"]]
     expected = df[["x", "y"]]
     expected = getattr(expected[expected.x > 5.0], meth)("x")
     assert result.simplify()._name == expected.simplify()._name
+    assert result.optimize()._name == expected.optimize()._name
 
     result = getattr(df, meth)("x")[["x", "y"]]
     result = result[result.x > 5.0]
     expected = df[["x", "y"]]
     expected = getattr(expected[expected.x > 5.0], meth)("x")
     assert result.simplify()._name == expected.simplify()._name
+    assert result.optimize()._name == expected.optimize()._name
 
 
 @pytest.mark.parametrize("meth", ["set_index", "sort_values"])
@@ -716,7 +719,7 @@ def test_sort_values_avoid_overeager_filter_pushdown(meth):
     pdf1 = pd.DataFrame({"a": [4, 2, 3], "b": [1, 2, 3]})
     df = from_pandas(pdf1, npartitions=2)
     df = getattr(df, meth)("a")
-    df = df[df.b > 2] + df.b.sum()
+    df = df[df.b > 2] + df[df.b > 1]
     result = df.simplify()
     assert isinstance(result.expr.left, Filter)
     assert isinstance(result.expr.left.frame, BaseSetIndexSortValues)
@@ -729,18 +732,21 @@ def test_set_index_filter_pushdown():
     result = result[result.y == 1]
     expected = df[df.y == 1].set_index("x")
     assert result.simplify()._name == expected._name
+    assert result.optimize()._name == expected.optimize()._name
 
     result = df.set_index("x")
     result = result[result.y == 1][["y"]]
     expected = df[["x", "y"]]
     expected = expected[expected.y == 1].set_index("x")
     assert result.simplify()._name == expected.simplify()._name
+    assert result.optimize()._name == expected.optimize()._name
 
     result = df.set_index("x")[["y"]]
     result = result[result.y == 1]
     expected = df[["x", "y"]]
     expected = expected[expected.y == 1].set_index("x")
     assert result.simplify()._name == expected.simplify()._name
+    assert result.optimize()._name == expected.optimize()._name
 
 
 def test_shuffle_index_shuffle(df):

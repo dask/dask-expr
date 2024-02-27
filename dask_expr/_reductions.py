@@ -26,6 +26,7 @@ from dask.dataframe.core import (
 from dask.utils import M, apply, funcname
 
 from dask_expr._concat import Concat
+from dask_expr._core import BranchId
 from dask_expr._expr import (
     Blockwise,
     Expr,
@@ -300,7 +301,7 @@ class TreeReduce(Expr):
             name = funcname(self.combine.__self__).lower() + "-tree"
         else:
             name = funcname(self.combine)
-        return name + "-" + _tokenize_deterministic(*self.operands)
+        return name + "-" + _tokenize_deterministic(*self.operands, self._branch_id)
 
     def __dask_postcompute__(self):
         return toolz.first, ()
@@ -506,6 +507,48 @@ class ApplyConcatApply(Expr):
             shuffle_method=getattr(self, "shuffle_method", None),
             ignore_index=getattr(self, "ignore_index", True),
         )
+
+    def _reuse_up(self, parent):
+        return
+
+    def _substitute_branch_id(self, branch_id):
+        return self
+
+    def _reuse_down(self):
+        if self._branch_id.branch_id != 0:
+            return
+
+        from dask_expr.io import IO
+
+        seen = set()
+        stack = self.dependencies()
+        counter, found_consumer = 1, False
+
+        while stack:
+            node = stack.pop()
+
+            if node._name in seen:
+                continue
+            seen.add(node._name)
+
+            if isinstance(node, IO):
+                found_consumer = True
+                continue
+
+            if isinstance(node, ApplyConcatApply):
+                counter += 1
+                continue
+
+            stack.extend(node.dependencies())
+
+        if not found_consumer:
+            return
+        b_id = BranchId(counter)
+        result = type(self)(*self.operands, b_id)
+        out = result._bubble_branch_id_down()
+        if out is None:
+            return result
+        return type(out)(*out.operands, _branch_id=b_id)
 
 
 class Unique(ApplyConcatApply):

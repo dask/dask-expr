@@ -5,7 +5,7 @@ import os
 import weakref
 from collections import defaultdict
 from collections.abc import Generator
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, NamedTuple
 
 import dask
 import pandas as pd
@@ -29,6 +29,10 @@ OptimizerStage: TypeAlias = Literal[
 ]
 
 
+class BranchId(NamedTuple):
+    branch_id: int
+
+
 def _unpack_collections(o):
     if isinstance(o, Expr):
         return o
@@ -44,8 +48,13 @@ class Expr:
     _defaults = {}
     _instances = weakref.WeakValueDictionary()
 
-    def __new__(cls, *args, **kwargs):
+    def __new__(cls, *args, _branch_id=None, **kwargs):
         operands = list(args)
+        if _branch_id is None and len(operands) and isinstance(operands[-1], BranchId):
+            _branch_id = operands.pop(-1)
+        elif _branch_id is None:
+            _branch_id = BranchId(0)
+
         for parameter in cls._parameters[len(operands) :]:
             try:
                 operands.append(kwargs.pop(parameter))
@@ -54,6 +63,7 @@ class Expr:
         assert not kwargs, kwargs
         inst = object.__new__(cls)
         inst.operands = [_unpack_collections(o) for o in operands]
+        inst._branch_id = _branch_id
         _name = inst._name
         if _name in Expr._instances:
             return Expr._instances[_name]
@@ -116,7 +126,10 @@ class Expr:
                 elif is_arraylike(op):
                     op = "<array>"
                 header = self._tree_repr_argument_construction(i, op, header)
-
+        if self._branch_id.branch_id != 0:
+            header = self._tree_repr_argument_construction(
+                i + 1, f" branch_id={self._branch_id.branch_id}", header
+            )
         lines = [header] + lines
         lines = [" " * indent + line for line in lines]
 
@@ -218,7 +231,7 @@ class Expr:
 
         return {(self._name, i): self._task(i) for i in range(self.npartitions)}
 
-    def rewrite(self, kind: str):
+    def rewrite(self, kind: str, cache):
         """Rewrite an expression
 
         This leverages the ``._{kind}_down`` and ``._{kind}_up``
@@ -231,6 +244,9 @@ class Expr:
         changed:
             whether or not any change occured
         """
+        if self._name in cache:
+            return cache[self._name]
+
         expr = self
         down_name = f"_{kind}_down"
         up_name = f"_{kind}_up"
@@ -267,7 +283,8 @@ class Expr:
             changed = False
             for operand in expr.operands:
                 if isinstance(operand, Expr):
-                    new = operand.rewrite(kind=kind)
+                    new = operand.rewrite(kind=kind, cache=cache)
+                    cache[operand._name] = new
                     if new._name != operand._name:
                         changed = True
                 else:
@@ -275,12 +292,36 @@ class Expr:
                 new_operands.append(new)
 
             if changed:
-                expr = type(expr)(*new_operands)
+                expr = type(expr)(*new_operands, _branch_id=expr._branch_id)
                 continue
             else:
                 break
 
         return expr
+
+    def _reuse_up(self, parent):
+        return
+
+    def _reuse_down(self):
+        if not self.dependencies():
+            return
+        return self._bubble_branch_id_down()
+
+    def _bubble_branch_id_down(self):
+        b_id = self._branch_id
+        if b_id.branch_id <= 0:
+            return
+        if any(b_id.branch_id != d._branch_id.branch_id for d in self.dependencies()):
+            ops = [
+                op._substitute_branch_id(b_id) if isinstance(op, Expr) else op
+                for op in self.operands
+            ]
+            return type(self)(*ops)
+
+    def _substitute_branch_id(self, branch_id):
+        if self._branch_id.branch_id != 0:
+            return self
+        return type(self)(*self.operands, branch_id)
 
     def simplify_once(self, dependents: defaultdict, simplified: dict):
         """Simplify an expression
@@ -346,7 +387,7 @@ class Expr:
                 new_operands.append(new)
 
             if changed:
-                expr = type(expr)(*new_operands)
+                expr = type(expr)(*new_operands, _branch_id=expr._branch_id)
 
             break
 
@@ -391,7 +432,7 @@ class Expr:
             new_operands.append(new)
 
         if changed:
-            out = type(out)(*new_operands)
+            out = type(out)(*new_operands, _branch_id=out._branch_id)
 
         return out
 
@@ -427,7 +468,9 @@ class Expr:
     @functools.cached_property
     def _name(self):
         return (
-            funcname(type(self)).lower() + "-" + _tokenize_deterministic(*self.operands)
+            funcname(type(self)).lower()
+            + "-"
+            + _tokenize_deterministic(*self.operands, self._branch_id)
         )
 
     @property
@@ -580,7 +623,7 @@ class Expr:
             else:
                 new_operands.append(operand)
         if changed:
-            return type(self)(*new_operands)
+            return type(self)(*new_operands, _branch_id=self._branch_id)
         return self
 
     def _node_label_args(self):

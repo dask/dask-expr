@@ -53,6 +53,7 @@ from pandas.errors import PerformanceWarning
 from tlz import merge_sorted, partition, unique
 
 from dask_expr import _core as core
+from dask_expr._core import BranchId
 from dask_expr._util import (
     _calc_maybe_new_divisions,
     _convert_to_list,
@@ -502,7 +503,7 @@ class Blockwise(Expr):
             head = funcname(self.operation)
         else:
             head = funcname(type(self)).lower()
-        return head + "-" + _tokenize_deterministic(*self.operands)
+        return head + "-" + _tokenize_deterministic(*self.operands, self._branch_id)
 
     def _blockwise_arg(self, arg, i):
         """Return a Blockwise-task argument"""
@@ -2728,8 +2729,11 @@ class _DelayedExpr(Expr):
     # TODO
     _parameters = ["obj"]
 
-    def __init__(self, obj):
+    def __init__(self, obj, _branch_id=None):
         self.obj = obj
+        if _branch_id is None:
+            _branch_id = BranchId(0)
+        self._branch_id = _branch_id
         self.operands = [obj]
 
     def __str__(self):
@@ -2758,18 +2762,29 @@ def normalize_expression(expr):
     return expr._name
 
 
-def optimize_until(expr: Expr, stage: core.OptimizerStage) -> Expr:
+def optimize_until(
+    expr: Expr, stage: core.OptimizerStage, common_subplan_elimination: bool = False
+) -> Expr:
     result = expr
     if stage == "logical":
         return result
 
-    # Simplify
-    expr = result.simplify()
+    while True:
+        if not common_subplan_elimination:
+            out = result.rewrite("reuse", cache={})
+        else:
+            out = result
+        out = out.simplify()
+        if out._name == result._name or common_subplan_elimination:
+            break
+        result = out
+
+    expr = out
     if stage == "simplified-logical":
         return expr
 
     # Manipulate Expression to make it more efficient
-    expr = expr.rewrite(kind="tune")
+    expr = expr.rewrite(kind="tune", cache={})
     if stage == "tuned-logical":
         return expr
 
@@ -2791,7 +2806,9 @@ def optimize_until(expr: Expr, stage: core.OptimizerStage) -> Expr:
     raise ValueError(f"Stage {stage!r} not supported.")
 
 
-def optimize(expr: Expr, fuse: bool = True) -> Expr:
+def optimize(
+    expr: Expr, fuse: bool = True, common_subplan_elimination: bool = False
+) -> Expr:
     """High level query optimization
 
     This leverages three optimization passes:
@@ -2805,6 +2822,10 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
         Input expression to optimize
     fuse:
         whether or not to turn on blockwise fusion
+    common_subplan_elimination : bool, default False
+        whether we want to reuse common subplans that are found in the graph and
+        are used in self-joins or similar which require all data be held in memory
+        at some point. Only set this to true if your dataset fits into memory.
 
     See Also
     --------
@@ -2813,7 +2834,7 @@ def optimize(expr: Expr, fuse: bool = True) -> Expr:
     """
     stage: core.OptimizerStage = "fused" if fuse else "simplified-physical"
 
-    return optimize_until(expr, stage)
+    return optimize_until(expr, stage, common_subplan_elimination)
 
 
 def is_broadcastable(dfs, s):
@@ -3462,7 +3483,7 @@ class Fused(Blockwise):
 
     @functools.cached_property
     def _name(self):
-        return f"{str(self)}-{_tokenize_deterministic(self.exprs)}"
+        return f"{str(self)}-{_tokenize_deterministic(self.exprs, self._branch_id)}"
 
     def _divisions(self):
         return self.exprs[0]._divisions()

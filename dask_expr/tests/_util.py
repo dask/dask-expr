@@ -5,6 +5,8 @@ import pytest
 from dask import config
 from dask.dataframe.utils import assert_eq as dd_assert_eq
 
+from dask_expr.io import IO
+
 
 def _backend_name() -> str:
     return config.get("dataframe.backend", "pandas")
@@ -39,3 +41,12 @@ def assert_eq(a, b, *args, serialize_graph=True, **kwargs):
 
     # Use `dask.dataframe.assert_eq`
     return dd_assert_eq(a, b, *args, **kwargs)
+
+
+def _check_consumer_node(expr, expected, consumer_node=IO, branch_id_counter=None):
+    if branch_id_counter is None:
+        branch_id_counter = expected
+    expr = expr.optimize(fuse=False)
+    io_nodes = list(expr.find_operations(consumer_node))
+    assert len(io_nodes) == expected
+    assert len({node._branch_id.branch_id for node in io_nodes}) == branch_id_counter

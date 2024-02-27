@@ -501,7 +501,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
         return (
             funcname(type(self)).lower()
             + "-"
-            + _tokenize_deterministic(self.checksum, *self.operands)
+            + _tokenize_deterministic(self.checksum, *self.operands, self._branch_id)
         )
 
     @property
