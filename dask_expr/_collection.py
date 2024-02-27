@@ -2410,7 +2410,7 @@ class DataFrame(FrameBase):
 
     @derived_from(pd.DataFrame)
     def assign(self, **pairs):
-        result = self.expr
+        result = self
         args = []
         for k, v in pairs.items():
             v = _maybe_from_pandas([v])[0]
@@ -2452,9 +2452,9 @@ class DataFrame(FrameBase):
             args.extend([k, v])
 
         if len(args) > 0:
-            result = expr.Assign(result, *args)
+            result = new_collection(expr.Assign(result, *args))
 
-        return new_collection(result)
+        return result
 
     @derived_from(pd.DataFrame)
     def clip(self, lower=None, upper=None, axis=None, **kwargs):
