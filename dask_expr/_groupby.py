@@ -769,26 +769,57 @@ class Std(SingleAggregation):
         )
 
 
-class Mean(SingleAggregation):
-    @functools.cached_property
-    def _meta(self):
-        return self._lower()._meta
+def _mean_chunk(df, *by, numeric_only=False, ndim=None):
+    x = df.sum(numeric_only=numeric_only)
+    if x.ndim == 2:
+        n = df.count().rename(columns=lambda c: (c, "-count"))
+    else:
+        n = df.count()
+        n.name = n.name + "-count"
+    return concat([x, n], axis=1)
 
-    def _lower(self):
-        s = Sum(*self.operands)
-        # Drop chunk/aggregate_kwargs for count
-        c = Count(
-            *[
-                self.operand(param)
-                if param not in ("chunk_kwargs", "aggregate_kwargs")
-                else {}
-                for param in self._parameters
-            ],
-            *self.by,
+
+def _mean_combine(g, levels, sort=False, observed=False, dropna=True):
+    return g.groupby(level=levels, sort=sort, observed=observed, dropna=dropna).sum()
+
+
+def _mean_agg(g, ndim=2, numeric_only=False):
+    result = g.sum()
+    s = result[result.columns[: len(result.columns) // 2]]
+    c = result[result.columns[len(result.columns) // 2 :]]
+    c.columns = s.columns
+    result = s / c
+    if ndim == 1:
+        result = result[result.columns[0]]
+    return result
+
+
+class Mean(GroupByReduction):
+    _parameters = SingleAggregation._parameters
+    _defaults = SingleAggregation._defaults
+    reduction_aggregate = staticmethod(_mean_agg)
+    groupby_chunk = staticmethod(_mean_chunk)
+
+    @functools.cached_property
+    def aggregate_kwargs(self) -> dict:
+        kwargs = super().aggregate_kwargs.copy()
+        if self._slice is not None:
+            kwargs["ndim"] = self.frame[self._slice]._meta.ndim
+        else:
+            kwargs["ndim"] = self.frame._meta.ndim
+        return kwargs
+
+    @classmethod
+    def combine(cls, inputs, **kwargs):
+        return (
+            _concat(inputs)
+            .groupby(level=kwargs.get("levels"), sort=kwargs.get("sort"))
+            .sum()
         )
-        if is_dataframe_like(s._meta):
-            c = c[s.columns]
-        return s / c
+
+    @property
+    def combine_kwargs(self) -> dict:
+        return {"levels": self.levels, "sort": self.sort}
 
 
 def nunique_df_combine(dfs, *args, **kwargs):
