@@ -2410,7 +2410,7 @@ class DataFrame(FrameBase):
 
     @derived_from(pd.DataFrame)
     def assign(self, **pairs):
-        result = self
+        result = self.expr
         args = []
         for k, v in pairs.items():
             v = _maybe_from_pandas([v])[0]
