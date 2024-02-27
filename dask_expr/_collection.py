@@ -12,6 +12,7 @@ import dask.array as da
 import dask.dataframe.methods as methods
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 from dask import compute, delayed
 from dask.array import Array
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
@@ -57,10 +58,12 @@ from dask.utils import (
 )
 from dask.widgets import get_template
 from fsspec.utils import stringify_path
+from packaging.version import parse as parse_version
 from pandas import CategoricalDtype
 from pandas.api.types import is_bool_dtype, is_datetime64_any_dtype, is_numeric_dtype
 from pandas.api.types import is_scalar as pd_is_scalar
 from pandas.api.types import is_timedelta64_dtype
+from pyarrow import fs as pa_fs
 from tlz import first
 
 import dask_expr._backends  # noqa: F401
@@ -4642,13 +4645,16 @@ def read_parquet(
             col, op, val = filter
             if op == "in" and not isinstance(val, (set, list, tuple)):
                 raise TypeError("Value of 'in' filter must be a list, set or tuple.")
-    from pyarrow import fs as pa_fs
 
     if (
         isinstance(filesystem, pa_fs.FileSystem)
         or isinstance(filesystem, str)
         and filesystem.lower() in ("arrow", "pyarrow")
     ):
+        if parse_version(pa.__version__) <= parse_version("15.0.0"):
+            raise ValueError(
+                "pyarrow>=15.0.0 is required to use the pyarrow filesystem."
+            )
         if calculate_divisions:
             raise NotImplementedError(
                 "calculate_divisions is not supported when using the pyarrow filesystem."
