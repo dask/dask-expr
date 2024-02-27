@@ -507,7 +507,7 @@ def test_diff(pdf, df, axis, periods):
     if axis in ("columns", 1):
         assert actual._name == actual.simplify()._name
     else:
-        assert actual.simplify()._name == expected.simplify()._name
+        assert actual.optimize()._name == expected.optimize()._name
 
 
 @pytest.mark.parametrize(
@@ -942,7 +942,7 @@ def test_repr(df):
     s = (df["x"] + 1).sum(skipna=False).expr
     assert '["x"]' in str(s) or "['x']" in str(s)
     assert "+ 1" in str(s)
-    assert "sum(skipna=False)" in str(s)
+    assert "sum(skipna=False" in str(s)
 
 
 @xfail_gpu("combine_first not supported by cudf")
@@ -1163,8 +1163,8 @@ def test_tail_repartition(df):
 
 def test_projection_stacking(df):
     result = df[["x", "y"]]["x"]
-    optimized = result.simplify()
-    expected = df["x"].simplify()
+    optimized = result.optimize()
+    expected = df["x"].optimize()
 
     assert optimized._name == expected._name
 
@@ -1885,8 +1885,8 @@ def test_assign_simplify(pdf):
     df = from_pandas(pdf)
     df2 = from_pandas(pdf)
     df["new"] = df.x > 1
-    result = df[["x", "new"]].simplify()
-    expected = df2[["x"]].assign(new=df2.x > 1).simplify()
+    result = df[["x", "new"]].optimize()
+    expected = df2[["x"]].assign(new=df2.x > 1).optimize()
     assert result._name == expected._name
 
     pdf["new"] = pdf.x > 1
@@ -1897,8 +1897,8 @@ def test_assign_simplify_new_column_not_needed(pdf):
     df = from_pandas(pdf)
     df2 = from_pandas(pdf)
     df["new"] = df.x > 1
-    result = df[["x"]].simplify()
-    expected = df2[["x"]].simplify()
+    result = df[["x"]].optimize()
+    expected = df2[["x"]].optimize()
     assert result._name == expected._name
 
     pdf["new"] = pdf.x > 1
@@ -1909,8 +1909,8 @@ def test_assign_simplify_series(pdf):
     df = from_pandas(pdf)
     df2 = from_pandas(pdf)
     df["new"] = df.x > 1
-    result = df.new.simplify()
-    expected = df2[[]].assign(new=df2.x > 1).new.simplify()
+    result = df.new.optimize()
+    expected = df2[[]].assign(new=df2.x > 1).new.optimize()
     assert result._name == expected._name
 
 
@@ -1928,7 +1928,16 @@ def test_assign_squash_together(df, pdf):
     df["a"] = 1
     df["b"] = 2
     result = df.simplify()
-    assert len([x for x in list(result.expr.walk()) if isinstance(x, expr.Assign)]) == 1
+    assert (
+        len(
+            [
+                x
+                for x in list(df.optimize(fuse=False).expr.walk())
+                if isinstance(x, expr.Assign)
+            ]
+        )
+        == 1
+    )
     pdf["a"] = 1
     pdf["b"] = 2
     assert_eq(df, pdf)
@@ -1973,10 +1982,10 @@ def test_astype_categories(df):
     assert_eq(result.y._meta.cat.categories, pd.Index([UNKNOWN_CATEGORIES]))
 
 
-def test_drop_simplify(df):
+def test_drop_optimize(df):
     q = df.drop(columns=["x"])[["y"]]
-    result = q.simplify()
-    expected = df[["y"]].simplify()
+    result = q.optimize()
+    expected = df[["y"]].optimize()
     assert result._name == expected._name
 
 
@@ -2064,6 +2073,7 @@ def test_filter_pushdown_unavailable(df):
     result = df[df.x > 5] + df.x.sum()
     result = result[["x"]]
     expected = df[["x"]][df.x > 5] + df.x.sum()
+    assert result.optimize()._name == expected.optimize()._name
     assert result.simplify()._name == expected.simplify()._name
 
 
@@ -2076,6 +2086,7 @@ def test_filter_pushdown(df, pdf):
     df = df.rename_axis(index="hello")
     result = df[df.x > 5].simplify()
     assert result._name == expected._name
+    assert result.optimize()._name == expected.optimize()._name
 
     pdf["z"] = 1
     df = from_pandas(pdf, npartitions=10)
@@ -2084,6 +2095,7 @@ def test_filter_pushdown(df, pdf):
     df_opt = df[["x", "y"]]
     expected = df_opt[df_opt.x > 5].rename_axis(index="hello").simplify()
     assert result._name == expected._name
+    assert result.optimize()._name == expected.optimize()._name
 
 
 def test_shape(df, pdf):
@@ -2433,13 +2445,13 @@ def test_reset_index_filter_pushdown(df):
     result = q[q > 5]
     expected = df["x"]
     expected = expected[expected > 5].reset_index(drop=True)
-    assert result.simplify()._name == expected.simplify()._name
+    assert result.optimize()._name == expected.optimize()._name
 
     q = df.x.reset_index()
     result = q[q.x > 5]
     expected = df["x"]
     expected = expected[expected > 5].reset_index()
-    assert result.simplify()._name == expected.simplify()._name
+    assert result.optimize()._name == expected.optimize()._name
 
 
 def test_astype_filter_pushdown(df, pdf):

@@ -757,6 +757,7 @@ class FrameBase(DaskMethodsMixin):
                 shuffle_method,
                 options,
                 index_shuffle=on_index,
+                _branch_id=expr.BranchId(0),
             )
         )
 
@@ -4780,6 +4781,7 @@ def merge(
             shuffle_method=shuffle_method,
             _npartitions=npartitions,
             broadcast=broadcast,
+            _branch_id=expr.BranchId(0),
         )
     )
 
@@ -4866,7 +4868,7 @@ def merge_asof(
 
     from dask_expr._merge_asof import MergeAsof
 
-    return new_collection(MergeAsof(left, right, **kwargs))
+    return new_collection(MergeAsof(left, right, **kwargs, _branch_id=expr.BranchId(0)))
 
 
 def from_map(

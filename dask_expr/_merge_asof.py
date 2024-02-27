@@ -40,6 +40,7 @@ class MergeAsof(Merge):
         "allow_exact_matches": True,
         "direction": "backward",
     }
+    _branch_id_required = False
 
     @functools.cached_property
     def _kwargs(self):

@@ -52,6 +52,7 @@ from dask.dataframe.utils import insert_meta_param_description
 from dask.utils import M, apply, derived_from, is_index_like
 
 from dask_expr._collection import FrameBase, Index, Series, new_collection
+from dask_expr._core import BranchId
 from dask_expr._expr import (
     Assign,
     Blockwise,
@@ -864,6 +865,8 @@ class GroupByApply(Expr, GroupByBase):
         "group_keys": True,
         "shuffle_method": None,
     }
+    _branch_id_required = True
+    _reuse_consumer = True
 
     @functools.cached_property
     def grp_func(self):
@@ -874,6 +877,9 @@ class GroupByApply(Expr, GroupByBase):
         if self.operand("meta") is not no_default:
             return make_meta(self.operand("meta"), parent_meta=self.frame._meta)
         return _meta_apply_transform(self, self.grp_func)
+
+    def _reuse_down(self):
+        return
 
     def _divisions(self):
         if self.need_to_shuffle:
@@ -922,6 +928,7 @@ class GroupByApply(Expr, GroupByBase):
                     [map_columns.get(c, c) for c in cols],
                     df.npartitions,
                     method=self.shuffle_method,
+                    _branch_id=self._branch_id,
                 )
 
                 if unmap_columns:
@@ -948,6 +955,7 @@ class GroupByApply(Expr, GroupByBase):
                     map_columns.get(self.by[0], self.by[0]),
                     self.npartitions,
                     method=self.shuffle_method,
+                    _branch_id=self._branch_id,
                 )
 
                 if unmap_columns:
@@ -1249,7 +1257,9 @@ def groupby_projection(expr, parent, dependents):
         if columns == expr.frame.columns:
             return
         return type(parent)(
-            type(expr)(expr.frame[columns], *expr.operands[1:]),
+            type(expr)(
+                expr.frame[columns], *expr.operands[1:], _branch_id=expr._branch_id
+            ),
             *parent.operands[1:],
         )
     return
@@ -1942,6 +1952,7 @@ class GroupBy:
                 kwargs,
                 shuffle_method,
                 *self.by,
+                BranchId(0),
             )
         )
 
@@ -1961,6 +1972,7 @@ class GroupBy:
                 kwargs,
                 shuffle_method,
                 *self.by,
+                BranchId(0),
             )
         )
 
@@ -2057,6 +2069,7 @@ class GroupBy:
                 shuffle_method,
                 split_every,
                 *self.by,
+                BranchId(0),
             )
         )
         if split_out is not True:

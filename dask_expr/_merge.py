@@ -82,6 +82,8 @@ class Merge(Expr):
         "_npartitions": None,
         "broadcast": None,
     }
+    _branch_id_required = True
+    _reuse_consumer = True
 
     @property
     def _filter_passthrough(self):
@@ -133,19 +135,19 @@ class Merge(Expr):
         seen = set()
         while stack:
             e = stack.pop()
-            if self._name == e._name:
+            if self._dep_name == e._dep_name:
                 continue
 
-            if e._name in seen:
+            if e._dep_name in seen:
                 continue
-            seen.add(e._name)
+            seen.add(e._dep_name)
 
             if isinstance(e, _DelayedExpr):
                 continue
 
             dependencies = e.dependencies()
             stack.extend(dependencies)
-            if any(d._name == self._name for d in dependencies):
+            if any(d._dep_name == self._dep_name for d in dependencies):
                 predicate_columns.update(e.columns)
         return predicate_columns
 
@@ -309,6 +311,9 @@ class Merge(Expr):
             self.right_index or _contains_index_name(self.right, self.right_on)
         ) and self.right.known_divisions
 
+    def _reuse_down(self):
+        return
+
     def _lower(self):
         # Lower from an abstract expression
         left = self.left
@@ -366,12 +371,14 @@ class Merge(Expr):
                             left,
                             shuffle_left_on,
                             npartitions_out=left.npartitions,
+                            _branch_id=self._branch_id,
                         )
                     else:
                         right = RearrangeByColumn(
                             right,
                             shuffle_right_on,
                             npartitions_out=right.npartitions,
+                            _branch_id=self._branch_id,
                         )
 
                 return BroadcastJoin(
@@ -404,6 +411,7 @@ class Merge(Expr):
                 shuffle_left_on=shuffle_left_on,
                 shuffle_right_on=shuffle_right_on,
                 _npartitions=self.operand("_npartitions"),
+                _branch_id=self._branch_id,
             )
 
         if shuffle_left_on:
@@ -414,6 +422,7 @@ class Merge(Expr):
                 npartitions_out=self._npartitions,
                 method=shuffle_method,
                 index_shuffle=left_index,
+                _branch_id=self._branch_id,
             )
 
         if shuffle_right_on:
@@ -424,6 +433,7 @@ class Merge(Expr):
                 npartitions_out=self._npartitions,
                 method=shuffle_method,
                 index_shuffle=right_index,
+                _branch_id=self._branch_id,
             )
 
         # Blockwise merge
@@ -466,7 +476,9 @@ class Merge(Expr):
             if new_right is self.right and new_left is self.left:
                 # don't drop the filter
                 return
-            return type(self)(new_left, new_right, *self.operands[2:])
+            return type(self)(
+                new_left, new_right, *self.operands[2:], _branch_id=self._branch_id
+            )
         if isinstance(parent, (Projection, Index)):
             # Reorder the column projection to
             # occur before the Merge
@@ -518,7 +530,10 @@ class Merge(Expr):
                 right.columns
             ):
                 result = type(self)(
-                    left[project_left], right[project_right], *self.operands[2:]
+                    left[project_left],
+                    right[project_right],
+                    *self.operands[2:],
+                    _branch_id=self._branch_id,
                 )
                 if parent_columns is None:
                     return type(parent)(result)
@@ -569,7 +584,7 @@ class HashJoinP2P(Merge, PartitionsFiltered):
             # Include self._name to ensure that shuffle IDs are unique for individual
             # merge operations. Reusing shuffles between merges is dangerous because of
             # required coordination and complexity introduced through dynamic clusters.
-            self._name,
+            self._dep_name,
             self.left._name,
             self.shuffle_left_on,
             self.left_index,
@@ -578,7 +593,7 @@ class HashJoinP2P(Merge, PartitionsFiltered):
             # Include self._name to ensure that shuffle IDs are unique for individual
             # merge operations. Reusing shuffles between merges is dangerous because of
             # required coordination and complexity introduced through dynamic clusters.
-            self._name,
+            self._dep_name,
             self.right._name,
             self.shuffle_right_on,
             self.right_index,
@@ -672,6 +687,7 @@ class BroadcastJoin(Merge, PartitionsFiltered):
         "indicator": False,
         "_partitions": None,
     }
+    _branch_id_required = False
 
     def _divisions(self):
         if self.broadcast_side == "left":
@@ -806,6 +822,7 @@ class BlockwiseMerge(Merge, Blockwise):
     """
 
     is_broadcast_join = False
+    _branch_id_required = False
 
     def _divisions(self):
         if self.left.npartitions == self.right.npartitions:
@@ -863,6 +880,7 @@ class JoinRecursive(Expr):
                 how=self.how,
                 left_index=True,
                 right_index=True,
+                _branch_id=self._branch_id,
             )
 
         return self._recursive_join(self.frames)
@@ -878,6 +896,7 @@ class JoinRecursive(Expr):
                 how="outer",
                 left_index=True,
                 right_index=True,
+                _branch_id=self._branch_id,
             )
 
         midx = len(frames) // 2

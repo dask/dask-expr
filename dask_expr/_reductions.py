@@ -26,6 +26,7 @@ from dask.dataframe.core import (
 from dask.utils import M, apply, funcname
 
 from dask_expr._concat import Concat
+from dask_expr._core import BranchId
 from dask_expr._expr import (
     Blockwise,
     Expr,
@@ -130,6 +131,9 @@ class ShuffleReduce(Expr):
     ApplyConcatApply
     """
 
+    _branch_id_required = True
+    _reuse_consumer = True
+
     _parameters = [
         "frame",
         "kind",
@@ -224,6 +228,7 @@ class ShuffleReduce(Expr):
                 ignore_index=ignore_index,
                 index_shuffle=not split_by_index and self.shuffle_by_index,
                 method=self.shuffle_method,
+                _branch_id=self._branch_id,
             )
 
         # Unmap column names if necessary
@@ -300,7 +305,7 @@ class TreeReduce(Expr):
             name = funcname(self.combine.__self__).lower() + "-tree"
         else:
             name = funcname(self.combine)
-        return name + "-" + _tokenize_deterministic(*self.operands)
+        return name + "-" + _tokenize_deterministic(*self.operands, self._branch_id)
 
     def __dask_postcompute__(self):
         return toolz.first, ()
@@ -411,6 +416,10 @@ class ApplyConcatApply(Expr):
         else:
             return 1
 
+    @functools.cached_property
+    def _reuse_consumer(self):
+        return self.should_shuffle
+
     def _layer(self):
         # This is an abstract expression
         raise NotImplementedError()
@@ -505,7 +514,59 @@ class ApplyConcatApply(Expr):
             shuffle_by_index=getattr(self, "shuffle_by_index", None),
             shuffle_method=getattr(self, "shuffle_method", None),
             ignore_index=getattr(self, "ignore_index", True),
+            _branch_id=self._branch_id,
         )
+
+    def _substitute_branch_id(self, branch_id):
+        if self._reuse_consumer:
+            # We are lowering into a Shuffle, so we are a consumer ourselves and
+            # we have to consume the branch_id of our parents
+            return super()._substitute_branch_id(branch_id)
+        return self
+
+    def _reuse_down(self):
+        if self._branch_id.branch_id != 0:
+            return
+
+        if self._reuse_consumer:
+            # We are lowering into a Shuffle, so we are a consumer ourselves
+            return
+
+        from dask_expr.io import IO
+
+        seen = set()
+        stack = self.dependencies()
+        counter, found_consumer = 1, False
+
+        while stack:
+            node = stack.pop()
+
+            if node._dep_name in seen:
+                continue
+            seen.add(node._dep_name)
+
+            if isinstance(node, IO) or node._reuse_consumer:
+                found_consumer = True
+                continue
+
+            if isinstance(node, IO):
+                found_consumer = True
+                continue
+
+            if isinstance(node, ApplyConcatApply):
+                counter += 1
+                continue
+
+            stack.extend(node.dependencies())
+
+        if not found_consumer:
+            return
+        b_id = BranchId(counter)
+        result = type(self)(*self.operands, b_id)
+        out = result._bubble_branch_id_down()
+        if out is None:
+            return result
+        return type(out)(*out.operands, _branch_id=b_id)
 
 
 class Unique(ApplyConcatApply):
@@ -591,7 +652,9 @@ class DropDuplicates(Unique):
 
             columns = [col for col in self.frame.columns if col in columns]
             return type(parent)(
-                type(self)(self.frame[columns], *self.operands[1:]),
+                type(self)(
+                    self.frame[columns], *self.operands[1:], _branch_id=self._branch_id
+                ),
                 *parent.operands[1:],
             )
 
