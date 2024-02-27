@@ -616,6 +616,10 @@ class ReadParquetPyarrowFS(ReadParquet):
     _filter_passthrough = True
 
     @cached_property
+    def normalized_path(self):
+        return pa_fs.FileSystem.from_uri(self.path)[1]
+
+    @cached_property
     def fs(self):
         fs_input = self.operand("filesystem")
         if isinstance(fs_input, pa.fs.FileSystem):
@@ -634,7 +638,7 @@ class ReadParquetPyarrowFS(ReadParquet):
             return rv
         dataset_info = {}
 
-        path_normalized = _normalize_and_strip_protocol(self.path, self.fs)
+        path_normalized = self.normalized_path
         # At this point we will post a couple of listbucket operations which
         # includes the same data as a HEAD request.
         # The information included here (see pyarrow FileInfo) are size, type,
@@ -1317,19 +1321,3 @@ def _read_partition_stats_group(parts, fs, columns=None):
 
     # Helper function used by _extract_statistics
     return [_read_partition_stats(part, fs, columns=columns) for part in parts]
-
-
-def _normalize_and_strip_protocol(path, fs):
-    if isinstance(fs, pa.fs.LocalFileSystem):
-        protos = []
-    elif fs.type_name == "s3":
-        protos = ["s3"]
-    else:
-        raise NotImplementedError(f"FileSystem of type {fs.typ_name} unknown")
-    for protocol in protos:
-        if path.startswith(protocol + "://"):
-            path = path[len(protocol) + 3 :]
-        elif path.startswith(protocol + "::"):
-            path = path[len(protocol) + 2 :]
-    path = path.rstrip("/")
-    return path

@@ -4651,7 +4651,7 @@ def read_parquet(
         or isinstance(filesystem, str)
         and filesystem.lower() in ("arrow", "pyarrow")
     ):
-        if parse_version(pa.__version__) <= parse_version("15.0.0"):
+        if parse_version(pa.__version__) < parse_version("15.0.0"):
             raise ValueError(
                 "pyarrow>=15.0.0 is required to use the pyarrow filesystem."
             )
