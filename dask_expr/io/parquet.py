@@ -4,6 +4,7 @@ import contextlib
 import itertools
 import operator
 import warnings
+from abc import abstractmethod
 from collections import defaultdict
 from functools import cached_property
 
@@ -484,27 +485,6 @@ def _determine_type_mapper(
 
 
 class ReadParquet(PartitionsFiltered, BlockwiseIO):
-    _parameters = [
-        "path",
-        "columns",
-        "filters",
-        "categories",
-        "index",
-        "storage_options",
-        "filesystem",
-        "kwargs",
-        "_dataset_info_cache",
-    ]
-    _defaults = {
-        "columns": None,
-        "filters": None,
-        "categories": None,
-        "index": None,
-        "storage_options": None,
-        "filesystem": None,
-        "kwargs": None,
-        "_dataset_info_cache": None,
-    }
     _pq_length_stats = None
     _absorb_projections = True
     _filter_passthrough = False
@@ -589,6 +569,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             return meta[columns]
         return meta
 
+    @abstractmethod
     def _divisions(self):
         raise NotImplementedError
 
@@ -716,17 +697,6 @@ class ReadParquetPyarrowFS(ReadParquet):
 
     def _divisions(self):
         return tuple([None] * (len(self.fragments) + 1))
-
-    @property
-    def _meta(self):
-        meta = self._dataset_info["base_meta"]
-        columns = _convert_to_list(self.operand("columns"))
-        if self._series:
-            assert len(columns) > 0
-            return meta[columns[0]]
-        elif columns is not None:
-            return meta[columns]
-        return meta
 
     @property
     def fragments(self):
