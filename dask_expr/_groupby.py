@@ -776,7 +776,7 @@ def _mean_chunk(df, *by, observed=None, dropna=None):
 
     g = _groupby_raise_unaligned(df, by=by, observed=observed, dropna=dropna)
     x = g.sum()
-    n = g.count().rename(columns=lambda c: (c, "-count"))
+    n = g.count().rename(columns=lambda c: c + "-count")
     return concat([x, n], axis=1)
 
 
@@ -819,7 +819,10 @@ class Mean(GroupByReduction):
     def _divisions(self):
         if self.sort:
             return (None, None)
-        return (None,) * (self.split_out + 1)
+        split_out = self.split_out
+        if split_out is True:
+            split_out = self.frame.npartitions
+        return (None,) * (split_out + 1)
 
     def _simplify_up(self, parent, dependents):
         return groupby_projection(self, parent, dependents)
