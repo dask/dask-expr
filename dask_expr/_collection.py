@@ -4658,10 +4658,6 @@ def read_parquet(
             raise ValueError(
                 "pyarrow>=15.0.0 is required to use the pyarrow filesystem."
             )
-        if calculate_divisions:
-            raise NotImplementedError(
-                "calculate_divisions is not supported when using the pyarrow filesystem."
-            )
         if metadata_task_size is not None:
             raise NotImplementedError(
                 "metadata_task_size is not supported when using the pyarrow filesystem."
@@ -4694,6 +4690,7 @@ def read_parquet(
                 filters=filters,
                 categories=categories,
                 index=index,
+                calculate_divisions=calculate_divisions,
                 storage_options=storage_options,
                 filesystem=filesystem,
                 ignore_metadata_file=ignore_metadata_file,

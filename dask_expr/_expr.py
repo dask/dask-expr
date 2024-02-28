@@ -107,6 +107,12 @@ class Expr(core.Expr):
     def nbytes(self):
         return NBytes(self)
 
+    def compute_statistics_plan(self):
+        return None
+
+    def set_statistics(self):
+        return None
+
     def __getitem__(self, other):
         if isinstance(other, Expr):
             if not are_co_aligned(self, other):
@@ -634,11 +640,15 @@ def _get_meta_ufunc(dfs, args, func):
         raise NotImplementedError(msg)
     # For broadcastable series, use no rows.
     parts = [
-        d._meta
-        if d.ndim == 0
-        else np.empty((), dtype=d.dtype)
-        if isinstance(d, Array)
-        else meta_nonempty(d._meta)
+        (
+            d._meta
+            if d.ndim == 0
+            else (
+                np.empty((), dtype=d.dtype)
+                if isinstance(d, Array)
+                else meta_nonempty(d._meta)
+            )
+        )
         for d in dasks
     ]
 
@@ -1806,9 +1816,11 @@ class CaseWhen(Elemwise):
         caselist = [
             (
                 meta_nonempty(c[i]._meta) if isinstance(c[i], Expr) else c[i],
-                meta_nonempty(c[i + 1]._meta)
-                if isinstance(c[i + 1], Expr)
-                else c[i + 1],
+                (
+                    meta_nonempty(c[i + 1]._meta)
+                    if isinstance(c[i + 1], Expr)
+                    else c[i + 1]
+                ),
             )
             for i in range(0, len(c), 2)
         ]
@@ -2659,9 +2671,11 @@ class Partitions(Expr):
             self.frame, (BlockwiseIO, Fused, SetIndexBlockwise)
         ):
             operands = [
-                Partitions(op, self.partitions)
-                if (isinstance(op, Expr) and not self.frame._broadcast_dep(op))
-                else op
+                (
+                    Partitions(op, self.partitions)
+                    if (isinstance(op, Expr) and not self.frame._broadcast_dep(op))
+                    else op
+                )
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
@@ -3207,9 +3221,11 @@ class MaybeAlignPartitions(Expr):
             from dask_expr._shuffle import RearrangeByColumn
 
             args = [
-                RearrangeByColumn(df, None, npartitions, index_shuffle=True)
-                if isinstance(df, Expr)
-                else df
+                (
+                    RearrangeByColumn(df, None, npartitions, index_shuffle=True)
+                    if isinstance(df, Expr)
+                    else df
+                )
                 for df in self.operands
             ]
             return self._expr_cls(*args)
@@ -3726,9 +3742,11 @@ def maybe_align_partitions(*exprs, divisions):
     from dask_expr._repartition import Repartition
 
     return [
-        Repartition(df, new_divisions=divisions, force=True)
-        if isinstance(df, Expr) and df.ndim > 0
-        else df
+        (
+            Repartition(df, new_divisions=divisions, force=True)
+            if isinstance(df, Expr) and df.ndim > 0
+            else df
+        )
         for df in exprs
     ]
 
