@@ -617,7 +617,7 @@ class ReadParquetPyarrowFS(ReadParquet):
 
     @cached_property
     def normalized_path(self):
-        return pa_fs.FileSystem.from_uri(self.path)[1]
+        return _normalize_and_strip_protocol(self.path)
 
     @cached_property
     def fs(self):
@@ -644,16 +644,15 @@ class ReadParquetPyarrowFS(ReadParquet):
         # The information included here (see pyarrow FileInfo) are size, type,
         # path and modified since timestamps
         # This isn't free but realtively cheap (200-300ms or less for ~1k files)
-        finfo = self.fs.get_file_info(path_normalized)
-        if finfo.type == pa.fs.FileType.Directory:
+        try:
             dataset_selector = pa_fs.FileSelector(path_normalized, recursive=True)
             all_files = [
                 finfo
                 for finfo in self.fs.get_file_info(dataset_selector)
                 if finfo.type == pa.fs.FileType.File
             ]
-        else:
-            all_files = [finfo]
+        except NotADirectoryError:
+            all_files = [self.fs.get_file_info(path_normalized)]
         # TODO: At this point we could verify if we're dealing with a very
         # inhomogeneous datasets already without reading any further data
 
@@ -1321,3 +1320,14 @@ def _read_partition_stats_group(parts, fs, columns=None):
 
     # Helper function used by _extract_statistics
     return [_read_partition_stats(part, fs, columns=columns) for part in parts]
+
+
+def _normalize_and_strip_protocol(path):
+    protocol_separators = ["://", "::"]
+    for sep in protocol_separators:
+        split = path.split(sep, 1)
+        if len(split) > 1:
+            path = split[1]
+            break
+    path = path.rstrip("/")
+    return path
