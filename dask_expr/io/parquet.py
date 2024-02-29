@@ -655,7 +655,7 @@ class ReadParquetPyarrowFS(ReadParquet):
                 for finfo in self.fs.get_file_info(dataset_selector)
                 if finfo.type == pa.fs.FileType.File
             ]
-        except NotADirectoryError:
+        except (NotADirectoryError, FileNotFoundError):
             all_files = [self.fs.get_file_info(path_normalized)]
         # TODO: At this point we could verify if we're dealing with a very
         # inhomogeneous datasets already without reading any further data
