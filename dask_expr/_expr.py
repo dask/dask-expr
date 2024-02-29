@@ -2838,12 +2838,12 @@ def is_broadcastable(dfs, s):
 
 def are_co_aligned(*exprs):
     """Do inputs come from the same parents, modulo blockwise?"""
-    # Scalars can always be broadcasted
 
     from dask_expr._cumulative import CumulativeAggregations
     from dask_expr._reductions import Reduction
 
     seen = set()
+    # Scalars can always be broadcasted
     stack = [e for e in exprs if e.ndim > 0]
     ancestors = []
     while stack:
