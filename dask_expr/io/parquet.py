@@ -639,12 +639,16 @@ class ReadParquetPyarrowFS(ReadParquet):
         dataset_info = {}
 
         path_normalized = self.normalized_path
-        # At this point we will post a couple of listbucket operations which
-        # includes the same data as a HEAD request.
-        # The information included here (see pyarrow FileInfo) are size, type,
-        # path and modified since timestamps
-        # This isn't free but realtively cheap (200-300ms or less for ~1k files)
+        # We'll first treat the path as if it was a directory since this is the
+        # most common case. Only if this fails, we'll treat it as a file. This
+        # way, the happy path performs one remote request instead of two if we
+        # were to check the type of the path first.
         try:
+            # At this point we will post a listbucket request which includes the
+            # same data as a HEAD request. The information included here (see
+            # pyarrow FileInfo) are size, type, path and modified since
+            # timestamps This isn't free but realtively cheap (200-300ms or less
+            # for ~1k files)
             dataset_selector = pa_fs.FileSelector(path_normalized, recursive=True)
             all_files = [
                 finfo
