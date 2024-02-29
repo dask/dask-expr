@@ -3,7 +3,9 @@ from __future__ import annotations
 import contextlib
 import itertools
 import operator
+import pickle
 import warnings
+import weakref
 from abc import abstractmethod
 from collections import defaultdict
 from functools import cached_property
@@ -84,6 +86,65 @@ NONE_LABEL = "__null_dask_index__"
 
 _CACHED_PLAN_SIZE = 10
 _cached_plan = {}
+
+
+class FragmentWrapper:
+    _filesystems = weakref.WeakValueDictionary()
+
+    def __init__(
+        self, fragment=None, file_size=None, fragment_packed=None, include_meta=False
+    ) -> None:
+        """Wrap a pyarrow Fragment to only deserialize when needed."""
+        # https://github.com/apache/arrow/issues/40279
+        self._fragment = fragment
+        self._fragment_packed = fragment_packed
+        self._file_size = file_size
+        self.include_meta = include_meta
+
+    def pack(self):
+        if self._fragment_packed is None:
+            self._fragment_packed = (
+                self._fragment.format,
+                self._fragment.path,
+                pickle.dumps(self._fragment.filesystem),
+                self._fragment.partition_expression,
+                self._fragment.row_groups if self.include_meta else None,
+                self._file_size,
+            )
+        self._fragment = None
+
+    def unpack(self):
+        if self._fragment is None:
+            (
+                pqformat,
+                path,
+                fs_raw,
+                partition_expression,
+                row_groups,
+                file_size,
+            ) = self._fragment_packed
+            fs = FragmentWrapper._filesystems.get(fs_raw)
+            if fs is None:
+                fs = pickle.loads(fs_raw)
+                FragmentWrapper._filesystems[fs_raw] = fs
+
+            self._fragment = pqformat.make_fragment(
+                path,
+                filesystem=fs,
+                partition_expression=partition_expression,
+                row_groups=row_groups,
+                file_size=file_size,
+            )
+        self._fragment_packed = None
+
+    @property
+    def fragment(self):
+        self.unpack()
+        return self._fragment
+
+    def __reduce__(self):
+        self.pack()
+        return FragmentWrapper, (None, None, self._fragment_packed, self.include_meta)
 
 
 def _control_cached_plan(key):
@@ -675,9 +736,11 @@ class ReadParquetPyarrowFS(ReadParquet):
                     filesystem=self.fs,
                 )
                 dataset_info["using_metadata_file"] = True
-                dataset_info["fragments"] = dataset.get_fragments()
+                dataset_info["fragments"] = _frags = dataset.get_fragments()
+                dataset_info["file_sizes"] = [None for fi in _frags]
         if checksum is None:
             checksum = tokenize(all_files)
+            dataset_info["file_sizes"] = [fi.size for fi in all_files]
         dataset_info["checksum"] = checksum
         if dataset is None:
             import pyarrow.parquet as pq
@@ -715,8 +778,10 @@ class ReadParquetPyarrowFS(ReadParquet):
         return self._dataset_info["fragments"]
 
     @staticmethod
-    def _fragment_to_pandas(fragment, columns, filters, schema):
+    def _fragment_to_pandas(fragment_wrapper, columns, filters, schema):
         from dask.utils import parse_bytes
+
+        fragment = fragment_wrapper.fragment
 
         if isinstance(filters, list):
             filters = pq.filters_to_expression(filters)
@@ -755,7 +820,10 @@ class ReadParquetPyarrowFS(ReadParquet):
     def _filtered_task(self, index: int):
         return (
             ReadParquetPyarrowFS._fragment_to_pandas,
-            self.fragments[index],
+            FragmentWrapper(
+                self.fragments[index],
+                file_size=self._dataset_info["file_sizes"][index],
+            ),
             self.columns,
             self.filters,
             self._dataset_info["schema"],
