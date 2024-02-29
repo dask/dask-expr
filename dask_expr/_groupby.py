@@ -1683,8 +1683,8 @@ class GroupBy:
         ):
             if len(result.columns) < 1:
                 raise NotImplementedError(
-                    "Cannot call `SeriesGroupBy.var` on the key column. "
-                    "Please use `aggregate` if you really need to do this."
+                    "Cannot call `SeriesGroupBy.var` or `SeriesGroupBy.mean` on the key "
+                    "column. Please use `aggregate` if you really need to do this."
                 )
             result = result[result.columns[0]]
         return result
