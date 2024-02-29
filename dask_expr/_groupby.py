@@ -775,8 +775,8 @@ def _mean_chunk(df, *by, observed=None, dropna=None):
         df = df.to_frame()
 
     g = _groupby_raise_unaligned(df, by=by, observed=observed, dropna=dropna)
-    x = g.sum()
-    n = g.count().rename(columns=lambda c: c + "-count")
+    x = g.sum(numeric_only=True)
+    n = g[x.columns].count().rename(columns=lambda c: c + "-count")
     return concat([x, n], axis=1)
 
 
