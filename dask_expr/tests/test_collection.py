@@ -2238,7 +2238,7 @@ def test_quantile(df):
         df.x.quantile(q=[]).compute()
 
     ser = from_pandas(pd.Series(["a", "b", "c"]), npartitions=2)
-    with pytest.raises(ValueError, match="object series"):
+    with pytest.raises(ValueError, match="not supported with string series"):
         ser.quantile()
 
 

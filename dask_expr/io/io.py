@@ -5,6 +5,7 @@ import math
 import operator
 
 import numpy as np
+import pandas as pd
 from dask.dataframe import methods
 from dask.dataframe.core import apply_and_enforce, is_dataframe_like, make_meta
 from dask.dataframe.io.io import _meta_from_array, sorted_division_locations
@@ -319,6 +320,8 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
         "sort",
         "chunksize",
         "columns",
+        "convert_string",
+        "pyarrow_strings_enabled",
         "_partitions",
         "_series",
     ]
@@ -343,7 +346,17 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
 
     @functools.cached_property
     def _meta(self):
-        meta = self.frame.head(0)
+        if self.pyarrow_strings_enabled:
+            with pd.option_context("mode.string_storage", "pyarrow"):
+                meta = self.frame.head(1).convert_dtypes(
+                    convert_integer=False, convert_boolean=False, convert_floating=False
+                )
+            meta = make_meta(meta)
+            if meta.index.dtype == "object":
+                meta.index = meta.index.astype("string[pyarrow]")
+        else:
+            meta = self.frame.head(0)
+
         if self.operand("columns") is not None:
             return meta[self.columns[0]] if self._series else meta[self.columns]
         return meta
@@ -427,6 +440,13 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
     def _filtered_task(self, index: int):
         start, stop = self._locations()[index : index + 2]
         part = self.frame.iloc[start:stop]
+        if self.pyarrow_strings_enabled:
+            with pd.option_context("mode.string_storage", "pyarrow"):
+                part = part.convert_dtypes(
+                    convert_integer=False, convert_boolean=False, convert_floating=False
+                )
+            if part.index.dtype == "object":
+                part.index = part.index.astype("string[pyarrow]")
         if self.operand("columns") is not None:
             return part[self.columns[0]] if self._series else part[self.columns]
         return part
@@ -442,7 +462,15 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
 
 
 class FromPandasDivisions(FromPandas):
-    _parameters = ["frame", "divisions", "columns", "_partitions", "_series"]
+    _parameters = [
+        "frame",
+        "divisions",
+        "columns",
+        "convert_string",
+        "pyarrow_strings_enabled",
+        "_partitions",
+        "_series",
+    ]
     _defaults = {"columns": None, "_partitions": None, "_series": False}
     sort = True
 

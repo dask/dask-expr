@@ -8,12 +8,13 @@ from collections.abc import Callable, Hashable, Mapping
 from numbers import Integral, Number
 from typing import Any, ClassVar, Iterable, Literal
 
+import dask
 import dask.array as da
 import dask.dataframe.methods as methods
 import numpy as np
 import pandas as pd
 import pyarrow as pa
-from dask import compute, delayed
+from dask import compute
 from dask.array import Array
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
 from dask.core import flatten
@@ -42,6 +43,7 @@ from dask.dataframe.utils import (
     insert_meta_param_description,
     meta_frame_constructor,
     meta_series_constructor,
+    pyarrow_strings_enabled,
 )
 from dask.delayed import delayed
 from dask.utils import (
@@ -4426,6 +4428,8 @@ def from_pandas(data, npartitions=None, sort=True, chunksize=None):
             npartitions=npartitions,
             sort=sort,
             chunksize=chunksize,
+            convert_string=dask.config.get("dataframe.convert_string"),
+            pyarrow_strings_enabled=pyarrow_strings_enabled(),
         )
     )
 
@@ -5059,7 +5063,12 @@ def repartition(df, divisions, force=False):
         return df.repartition(divisions=divisions, force=force)
     elif is_dataframe_like(df) or is_series_like(df):
         return new_collection(
-            FromPandasDivisions(_BackendData(df), divisions=divisions)
+            FromPandasDivisions(
+                _BackendData(df),
+                divisions=divisions,
+                convert_string=dask.config.get("dataframe.convert-string"),
+                pyarrow_strings_enabled=pyarrow_strings_enabled(),
+            )
         )
     else:
         raise NotImplementedError(f"repartition is not implemented for {type(df)}.")
