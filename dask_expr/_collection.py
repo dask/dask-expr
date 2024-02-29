@@ -8,7 +8,6 @@ from collections.abc import Callable, Hashable, Mapping
 from numbers import Integral, Number
 from typing import Any, ClassVar, Iterable, Literal
 
-import dask
 import dask.array as da
 import dask.dataframe.methods as methods
 import numpy as np
@@ -4428,7 +4427,6 @@ def from_pandas(data, npartitions=None, sort=True, chunksize=None):
             npartitions=npartitions,
             sort=sort,
             chunksize=chunksize,
-            convert_string=dask.config.get("dataframe.convert_string"),
             pyarrow_strings_enabled=pyarrow_strings_enabled(),
         )
     )
@@ -5066,7 +5064,6 @@ def repartition(df, divisions, force=False):
             FromPandasDivisions(
                 _BackendData(df),
                 divisions=divisions,
-                convert_string=dask.config.get("dataframe.convert-string"),
                 pyarrow_strings_enabled=pyarrow_strings_enabled(),
             )
         )
