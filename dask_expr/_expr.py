@@ -2869,7 +2869,7 @@ def are_co_aligned(*exprs):
 
     unique_ancestors = {
         # Account for column projection within IO expressions
-        _tokenize_partial(item, ["columns", "_series"])
+        _tokenize_partial(item, ["columns", "_series", "_dataset_info_cache"])
         for item in ancestors
     }
     # Don't check divisions or npartitions at all
