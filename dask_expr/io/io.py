@@ -311,6 +311,25 @@ class FromMapProjectable(FromMap):
         return tsk
 
 
+def _convert_to_arrow_strings(df):
+    with pd.option_context("mode.string_storage", "pyarrow"):
+        if df.ndim == 1:
+            if df.dtype == object:
+                df = df.convert_dtypes(
+                    convert_integer=False, convert_boolean=False, convert_floating=False
+                )
+        else:
+            object_cols = [col for col, dtype in df.dtypes.items() if dtype == object]
+            # SettingWithCopyWarning
+            df = df.copy()
+            df[object_cols] = df[object_cols].convert_dtypes(
+                convert_integer=False, convert_boolean=False, convert_floating=False
+            )
+    if df.index.dtype == "object":
+        df.index = df.index.astype("string[pyarrow]")
+    return df
+
+
 class FromPandas(PartitionsFiltered, BlockwiseIO):
     """The only way today to get a real dataframe"""
 
@@ -346,13 +365,7 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
     @functools.cached_property
     def _meta(self):
         if self.pyarrow_strings_enabled:
-            with pd.option_context("mode.string_storage", "pyarrow"):
-                meta = self.frame.head(1).convert_dtypes(
-                    convert_integer=False, convert_boolean=False, convert_floating=False
-                )
-            meta = make_meta(meta)
-            if meta.index.dtype == "object":
-                meta.index = meta.index.astype("string[pyarrow]")
+            meta = make_meta(_convert_to_arrow_strings(self.frame.head(1)))
         else:
             meta = self.frame.head(0)
 
@@ -440,12 +453,7 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
         start, stop = self._locations()[index : index + 2]
         part = self.frame.iloc[start:stop]
         if self.pyarrow_strings_enabled:
-            with pd.option_context("mode.string_storage", "pyarrow"):
-                part = part.convert_dtypes(
-                    convert_integer=False, convert_boolean=False, convert_floating=False
-                )
-            if part.index.dtype == "object":
-                part.index = part.index.astype("string[pyarrow]")
+            part = _convert_to_arrow_strings(part)
         if self.operand("columns") is not None:
             return part[self.columns[0]] if self._series else part[self.columns]
         return part
