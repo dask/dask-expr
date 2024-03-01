@@ -996,6 +996,20 @@ class ReadParquetPyarrowFS(ReadParquet):
             self.index.name if self.index is not None else None,
         )
 
+    @property
+    def _fusion_compression_factor(self):
+        if self.operand("columns") is None:
+            return 1
+        approx_stats = self.approx_statistics()
+        total_uncompressed = 0
+        for col in approx_stats["columns"]:
+            total_uncompressed += col["total_uncompressed_size"]
+        after_projection = 0
+        for col in self.operands("columns"):
+            after_projection += col["total_uncompressed_size"]
+
+        return max(after_projection / total_uncompressed, 0.001)
+
 
 def _fragment_to_pandas(fragment_wrapper, columns, filters, schema):
     fragment = fragment_wrapper.fragment
