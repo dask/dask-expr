@@ -807,7 +807,7 @@ class ReadParquetPyarrowFS(ReadParquet):
 
     @cached_property
     def raw_statistics(self):
-        self.load_all_statistics()
+        self.load_statistics()
         return [
             _STATS_CACHE[tokenize(finfo)] for finfo in self._dataset_info["all_files"]
         ]
@@ -1002,11 +1002,12 @@ class ReadParquetPyarrowFS(ReadParquet):
             return 1
         approx_stats = self.approx_statistics()
         total_uncompressed = 0
+        after_projection = 0
+        col_op = self.operand("columns")
         for col in approx_stats["columns"]:
             total_uncompressed += col["total_uncompressed_size"]
-        after_projection = 0
-        for col in self.operands("columns"):
-            after_projection += col["total_uncompressed_size"]
+            if col["path_in_schema"] in col_op:
+                after_projection += col["total_uncompressed_size"]
 
         return max(after_projection / total_uncompressed, 0.001)
 
