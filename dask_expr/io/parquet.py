@@ -702,10 +702,9 @@ class ReadParquetPyarrowFS(ReadParquet):
             return fs
 
     def _collect_statistics_plan(self):
-        # if _MAYBE_DIVISIONS_USEFUL.get():
+        # TODO: Fails for metadata file path
         # TODO: Consider just sampling. I don't think we'll need the entire
         # metadat for everything
-        # TODO: I think we should cache these on a per-file basis
         @dask.delayed
         def _gather_statistics(frags):
             def _collect_statistics(token_fragment):
@@ -797,8 +796,9 @@ class ReadParquetPyarrowFS(ReadParquet):
                     filesystem=self.fs,
                 )
                 dataset_info["using_metadata_file"] = True
-                dataset_info["fragments"] = _frags = dataset.get_fragments()
                 dataset_info["file_sizes"] = [None for fi in _frags]
+                dataset_info["fragments"] = list(dataset.get_fragments())
+
         if checksum is None:
             checksum = tokenize(all_files)
             dataset_info["file_sizes"] = [fi.size for fi in all_files]
@@ -816,6 +816,7 @@ class ReadParquetPyarrowFS(ReadParquet):
             )
             dataset_info["using_metadata_file"] = False
             dataset_info["fragments"] = dataset.fragments
+            dataset_info["all_files"] = all_files
 
         dataset_info["dataset"] = dataset
         dataset_info["schema"] = dataset.schema
