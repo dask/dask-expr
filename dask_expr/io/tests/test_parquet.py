@@ -29,10 +29,6 @@ def parquet_file(tmpdir):
 @pytest.fixture(params=["arrow", "fsspec"])
 def filesystem(request):
     return request.param
-    if request.param == "arrow":
-        return fs.LocalFileSystem()
-    else:
-        return None  # fsspec.filesystem("file")
 
 
 def test_parquet_len(tmpdir, filesystem):
@@ -48,8 +44,8 @@ def test_parquet_len(tmpdir, filesystem):
     assert isinstance(Lengths(s.expr).optimize(), Literal)
 
 
-def test_parquet_len_filter(tmpdir):
-    df = read_parquet(_make_file(tmpdir))
+def test_parquet_len_filter(tmpdir, filesystem):
+    df = read_parquet(_make_file(tmpdir), filesystem=filesystem)
     expr = Len(df[df.c > 0].expr)
     result = expr.simplify()
     for rp in result.find_operations(ReadParquet):
