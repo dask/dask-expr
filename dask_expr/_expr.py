@@ -107,12 +107,6 @@ class Expr(core.Expr):
     def nbytes(self):
         return NBytes(self)
 
-    def compute_statistics_plan(self):
-        return None
-
-    def set_statistics(self):
-        return None
-
     def __getitem__(self, other):
         if isinstance(other, Expr):
             if not are_co_aligned(self, other):
