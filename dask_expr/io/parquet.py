@@ -619,7 +619,6 @@ class ReadParquetPyarrowFS(ReadParquet):
         "_series": False,
         "_dataset_info_cache": None,
     }
-    _pq_length_stats = None
     _absorb_projections = True
     _filter_passthrough = True
 
@@ -648,9 +647,7 @@ class ReadParquetPyarrowFS(ReadParquet):
         @dask.delayed
         def _gather_statistics(frags):
             def _collect_statistics(token_fragment):
-                # TODO: Consider cutting down the dict to safe memory. Very
-                # primitive files already store ~10KB
-                return token_fragment[1], _extract_stats(
+                return token_fragment[0], _extract_stats(
                     token_fragment[1].metadata.to_dict()
                 )
 
@@ -673,7 +670,7 @@ class ReadParquetPyarrowFS(ReadParquet):
 
     @cached_property
     def raw_statistics(self):
-        token_stats = dask.compute(self._collect_statistics_plan())
+        token_stats = flatten(dask.compute(self._collect_statistics_plan()))
         for token, stats in token_stats:
             _STATS_CACHE[token] = stats
         return [
@@ -687,6 +684,12 @@ class ReadParquetPyarrowFS(ReadParquet):
     def set_statistics(self, statistics):
         statistics = flatten(statistics)
         return self.substitute_parameters({"_statistics": statistics})
+
+    def _get_lengths(self):
+        # TODO: Fitlers that only filter partition_expr can be used as well
+        if not self.filters:
+            return tuple(stats["num_rows"] for stats in self.aggregated_statistics)
+        return None
 
     @cached_property
     def _dataset_info(self):
@@ -1553,7 +1556,6 @@ def _aggregate_statistics(stats):
         "num_rows": sum,
         "total_byte_size": sum,
         "columns": _aggregate_columns,
-        "num_rows": sum,
     }
     aggregated_stats = []
     for file_stat in stats:

@@ -24,8 +24,17 @@ def parquet_file(tmpdir):
     return _make_file(tmpdir)
 
 
-def test_parquet_len(tmpdir):
-    df = read_parquet(_make_file(tmpdir))
+@pytest.fixture(params=["arrow", "fsspec"])
+def filesystem(request):
+    return request.param
+    if request.param == "arrow":
+        return fs.LocalFileSystem()
+    else:
+        return None  # fsspec.filesystem("file")
+
+
+def test_parquet_len(tmpdir, filesystem):
+    df = read_parquet(_make_file(tmpdir), filesystem=filesystem)
     pdf = df.compute()
 
     assert len(df[df.a > 5]) == len(pdf[pdf.a > 5])
