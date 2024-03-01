@@ -5,7 +5,6 @@ import math
 import operator
 
 import numpy as np
-from dask.dataframe import methods
 from dask.dataframe.core import apply_and_enforce, is_dataframe_like, make_meta
 from dask.dataframe.io.io import _meta_from_array, sorted_division_locations
 from dask.utils import apply, funcname, is_series_like
@@ -129,7 +128,21 @@ class FusedIO(BlockwiseIO):
     def _task(self, index: int):
         expr = self.operand("_expr")
         bucket = self._fusion_buckets[index]
-        return (methods.concat, [expr._filtered_task(i) for i in bucket])
+
+        def _concat(*args):
+            import pyarrow as pa
+
+            from dask_expr.io.parquet import _determine_type_mapper
+
+            tab = pa.concat_tables(*args)
+            return tab.to_pandas(
+                types_mapper=_determine_type_mapper(),
+                use_threads=False,
+                self_destruct=True,
+                ignore_metadata=True,
+            )
+
+        return (_concat, [expr._filtered_task(i, to_pandas=False) for i in bucket])
 
     @functools.cached_property
     def _fusion_buckets(self):

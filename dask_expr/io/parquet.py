@@ -879,7 +879,7 @@ class ReadParquetPyarrowFS(ReadParquet):
         return np.array(self._dataset_info["fragments"])
 
     @staticmethod
-    def _fragment_to_pandas(fragment, columns, filters, schema, index_name):
+    def _fragment_to_pandas(fragment, columns, filters, schema, index_name, to_pandas):
         from dask.utils import parse_bytes
 
         if isinstance(filters, list):
@@ -912,6 +912,8 @@ class ReadParquetPyarrowFS(ReadParquet):
             # TODO: Reconsider this. The OMP_NUM_THREAD variable makes it harmful to enable this
             use_threads=True,
         )
+        if not to_pandas:
+            return table
         df = table.to_pandas(
             types_mapper=_determine_type_mapper(),
             use_threads=False,
@@ -922,7 +924,7 @@ class ReadParquetPyarrowFS(ReadParquet):
             df = df.set_index(index_name)
         return df
 
-    def _filtered_task(self, index: int):
+    def _filtered_task(self, index: int, to_pandas=True):
         return (
             ReadParquetPyarrowFS._fragment_to_pandas,
             self.fragments[index],
@@ -930,6 +932,7 @@ class ReadParquetPyarrowFS(ReadParquet):
             self.filters,
             self._dataset_info["schema"],
             self.index.name if self.index is not None else None,
+            to_pandas,
         )
 
     @property
