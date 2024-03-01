@@ -3,12 +3,14 @@ from __future__ import annotations
 import contextlib
 import itertools
 import operator
+import statistics
 import warnings
 from abc import abstractmethod
 from collections import defaultdict
 from functools import cached_property, partial
 
 import dask
+import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.dataset as pa_ds
@@ -639,50 +641,118 @@ class ReadParquetPyarrowFS(ReadParquet):
                 fs = type(fs)(**region, **storage_options)
             return fs
 
-    def _collect_statistics_plan(self):
-        # TODO: Fails for metadata file path
-        # TODO: Consider just sampling. I don't think we'll need the entire
-        # metadat for everything
-        @dask.delayed
-        def _gather_statistics(frags):
-            def _collect_statistics(token_fragment):
-                return token_fragment[0], _extract_stats(
-                    token_fragment[1].metadata.to_dict()
-                )
+    def approx_statistics(self) -> dict:
+        """Return an approximation of a single files statistics.
 
-            from concurrent.futures import ThreadPoolExecutor
+        This is determined by sampling a few files and averaging their statistics.
 
-            with ThreadPoolExecutor() as tpe:
-                return list(tpe.map(_collect_statistics, frags))
+        Fields
+        ------
+        num_rows: avg
+        num_row_groups: avg
+        serialized_size: avg
+        columns: list
+            A list of all colum statistics where individual fields are also
+            averaged.
 
-        to_collect = []
-        for finfo, frag in zip(
-            self._dataset_info["all_files"], self.fragments_unsorted
-        ):
-            if (token := tokenize(finfo)) not in _STATS_CACHE:
-                to_collect.append((token, frag))
-        # TODO: Should we use delayed or self.map_partitions?
-        return [
-            _gather_statistics(batch)
-            for batch in toolz.itertoolz.partition_all(20, to_collect)
-        ]
+
+        Example
+        -------
+        {
+            'num_rows': 1991129,
+            'num_row_groups': 2.3333333333333335,
+            'serialized_size': 6256.666666666667,
+            'total_byte_size': 118030095,
+            'columns': [
+                {'total_compressed_size': 6284162.333333333,
+                'total_uncompressed_size': 6347380.333333333,
+                'path_in_schema': 'l_orderkey'},
+                {'total_compressed_size': 9423516.333333334,
+                'total_uncompressed_size': 9423063.333333334,
+                'path_in_schema': 'l_partkey'},
+                {'total_compressed_size': 9405796.666666666,
+                'total_uncompressed_size': 9405346.666666666,
+                'path_in_schema': 'l_suppkey'},
+                ...
+            ]
+        }
+
+        Returns
+        -------
+        dict
+        """
+        idxs = self.sample_statistics()
+        files_to_consider = np.array(self._dataset_info["all_files"])[idxs]
+        stats = [_STATS_CACHE[tokenize(finfo)] for finfo in files_to_consider]
+        agg_cols = {
+            "total_compressed_size": statistics.mean,
+            "total_uncompressed_size": statistics.mean,
+            "path_in_schema": lambda x: set(x).pop(),
+        }
+        return _agg_dicts(
+            _aggregate_statistics_to_file(stats),
+            {
+                "num_rows": statistics.mean,
+                "num_row_groups": statistics.mean,
+                "serialized_size": statistics.mean,
+                "total_byte_size": statistics.mean,
+                "columns": partial(_aggregate_columns, agg_cols=agg_cols),
+            },
+        )
+
+    def load_statistics(self, files=None, fragments=None, scheduler=None):
+        if files is None:
+            files = self._dataset_info["all_files"]
+        if fragments is None:
+            fragments = self.fragments_unsorted
+        token_stats = flatten(
+            dask.compute(
+                _collect_statistics_plan(files, fragments),
+                scheduler=scheduler,
+            )
+        )
+        for token, stats in token_stats:
+            _STATS_CACHE[token] = stats
+
+    def sample_statistics(self, n=3):
+        """Sample statistics from the dataset.
+
+        Sample N file statistics from the dataset. The files are chosen by
+        sorting all files based on their binary file size and picking
+        equidistant sampling points.
+
+        In the special case of n=3 this corresponds to min/median/max.
+
+        """
+        frags = self.fragments_unsorted
+        finfos = np.array(self._dataset_info["all_files"])
+        getsize = np.frompyfunc(lambda x: x.size, nin=1, nout=1)
+        finfo_size_arr = getsize(finfos)
+        finfo_argsort = finfo_size_arr.argsort()
+        nfrags = len(frags)
+        stepsize = max(nfrags // n, 1)
+        finfos_sampled = []
+        frags_samples = []
+        ixs = []
+        for i in range(0, nfrags, stepsize):
+            sort_ix = finfo_argsort[i]
+            ixs.append(sort_ix)
+            finfos_sampled.append(finfos[sort_ix])
+            frags_samples.append(frags[sort_ix])
+        # TODO: if we use a sync scheduler we have to silence this stupid warning
+        self.load_statistics(finfos_sampled, frags_samples, scheduler="sync")
+        return ixs
 
     @cached_property
     def raw_statistics(self):
-        token_stats = flatten(dask.compute(self._collect_statistics_plan()))
-        for token, stats in token_stats:
-            _STATS_CACHE[token] = stats
+        self.load_all_statistics()
         return [
             _STATS_CACHE[tokenize(finfo)] for finfo in self._dataset_info["all_files"]
         ]
 
     @cached_property
     def aggregated_statistics(self):
-        return _aggregate_statistics(self.raw_statistics)
-
-    def set_statistics(self, statistics):
-        statistics = flatten(statistics)
-        return self.substitute_parameters({"_statistics": statistics})
+        return _aggregate_statistics_to_file(self.raw_statistics)
 
     def _get_lengths(self):
         # TODO: Fitlers that only filter partition_expr can be used as well
@@ -778,6 +848,12 @@ class ReadParquetPyarrowFS(ReadParquet):
             return _divisions_from_statistics(self.aggregated_statistics, index_name)
         return tuple([None] * (len(self.fragments_unsorted) + 1)), None
 
+    def all_statistics_known(self) -> bool:
+        """Whether all statistics have been fetched from remote store"""
+        return all(
+            tokenize(finfo) in _STATS_CACHE for finfo in self._dataset_info["all_files"]
+        )
+
     def _fragment_sort_index(self):
         return self._division_from_stats[1]
 
@@ -787,8 +863,8 @@ class ReadParquetPyarrowFS(ReadParquet):
     @property
     def fragments(self):
         if self._fragment_sort_index() is not None:
-            return self.fragments_unsorted[self._fragment_sort_index()].to_list()
-        return self.fragments_unsorted.to_list()
+            return self.fragments_unsorted[self._fragment_sort_index()]
+        return self.fragments_unsorted
 
     @property
     def fragments_unsorted(self):
@@ -797,8 +873,10 @@ class ReadParquetPyarrowFS(ReadParquet):
                 ds = self._dataset_info["dataset"]
             else:
                 ds = self._dataset_info["dataset"]._dataset
-            return list(ds.get_fragments(filter=pq.filters_to_expression(self.filters)))
-        return pd.Series(self._dataset_info["fragments"])
+            return np.array(
+                list(ds.get_fragments(filter=pq.filters_to_expression(self.filters)))
+            )
+        return np.array(self._dataset_info["fragments"])
 
     @staticmethod
     def _fragment_to_pandas(fragment, columns, filters, schema, index_name):
@@ -1510,53 +1588,55 @@ def _extract_stats(original):
     return out
 
 
-def _aggregate_statistics(stats):
+def _agg_dicts(dicts, agg_funcs):
+    result = {}
+    for d in dicts:
+        for k, v in d.items():
+            if k not in result:
+                result[k] = [v]
+            else:
+                result[k].append(v)
+    result2 = {}
+    for k, v in result.items():
+        agg = agg_funcs.get(k)
+        if agg:
+            result2[k] = agg(v)
+    return result2
+
+
+def _aggregate_columns(cols, agg_cols):
+    combine = []
+    i = 0
+    while True:
+        inner = []
+        combine.append(inner)
+        try:
+            for col in cols:
+                inner.append(col[i])
+        except IndexError:
+            combine.pop()
+            break
+        i += 1
+    return [_agg_dicts(c, agg_cols) for c in combine]
+
+
+def _aggregate_statistics_to_file(stats):
     """Aggregate RG information to file level."""
 
-    def _agg_dicts(dicts, agg_funcs):
-        result = {}
-        for d in dicts:
-            for k, v in d.items():
-                if k not in result:
-                    result[k] = [v]
-                else:
-                    result[k].append(v)
-        result2 = {}
-        for k, v in result.items():
-            agg = agg_funcs.get(k)
-            if agg:
-                result2[k] = agg(v)
-        return result2
-
-    def _aggregate_columns(cols):
-        agg_stats = {
-            "min": min,
-            "max": max,
-        }
-        agg_cols = {
-            "total_compressed_size": sum,
-            "total_uncompressed_size": sum,
-            "statistics": partial(_agg_dicts, agg_funcs=agg_stats),
-            "path_in_schema": lambda x: set(x).pop(),
-        }
-        combine = []
-        i = 0
-        while True:
-            inner = []
-            combine.append(inner)
-            try:
-                for col in cols:
-                    inner.append(col[i])
-            except IndexError:
-                combine.pop()
-                break
-            i += 1
-        return [_agg_dicts(c, agg_cols) for c in combine]
-
+    agg_stats = {
+        "min": min,
+        "max": max,
+    }
+    agg_cols = {
+        "total_compressed_size": sum,
+        "total_uncompressed_size": sum,
+        "statistics": partial(_agg_dicts, agg_funcs=agg_stats),
+        "path_in_schema": lambda x: set(x).pop(),
+    }
     agg_func = {
         "num_rows": sum,
         "total_byte_size": sum,
-        "columns": _aggregate_columns,
+        "columns": partial(_aggregate_columns, agg_cols=agg_cols),
     }
     aggregated_stats = []
     for file_stat in stats:
@@ -1565,3 +1645,28 @@ def _aggregate_statistics(stats):
 
         file_stat.update(_agg_dicts(file_stat.pop("row_groups"), agg_func))
     return aggregated_stats
+
+
+def _collect_statistics_plan(file_infos, fragments):
+    """Collect statistics for a list of files and their corresponding fragments"""
+
+    @dask.delayed
+    def _gather_statistics(frags):
+        def _collect_statistics(token_fragment):
+            return token_fragment[0], _extract_stats(
+                token_fragment[1].metadata.to_dict()
+            )
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor() as tpe:
+            return list(tpe.map(_collect_statistics, frags))
+
+    to_collect = []
+    for finfo, frag in zip(file_infos, fragments):
+        if (token := tokenize(finfo)) not in _STATS_CACHE:
+            to_collect.append((token, frag))
+    return [
+        _gather_statistics(batch)
+        for batch in toolz.itertoolz.partition_all(20, to_collect)
+    ]

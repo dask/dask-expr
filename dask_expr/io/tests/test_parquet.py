@@ -316,3 +316,9 @@ def test_columns_index(tmpdir):
         ddf.clear_divisions(),
         check_divisions=True,
     )
+
+
+def test_repr_doesnt_trigger_stats(tmpdir):
+    fn = _make_file(tmpdir)
+    df = read_parquet(fn, filesystem="arrow")
+    repr(df)
