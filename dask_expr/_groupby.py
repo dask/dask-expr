@@ -742,10 +742,6 @@ class Var(GroupByReduction):
 
 
 class Std(Var):
-    @functools.cached_property
-    def _meta(self):
-        return self._lower()._meta
-
     def _lower(self):
         v = Var(*self.operands)
         return MapPartitions(
