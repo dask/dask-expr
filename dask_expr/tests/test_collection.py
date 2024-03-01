@@ -270,6 +270,13 @@ def test_filter_pushdown_reducer_in_predicate():
     assert q.expr.frame.frame.frame.columns == ["a", "b"]
 
 
+def test_assign_empty_columns(df, pdf):
+    df[[]] = df[[]].astype("float64")
+    assert list(df.columns) == list(pdf.columns)
+    pdf[[]] = pdf[[]].astype("float64")
+    assert_eq(df, pdf)
+
+
 def test_index_divisions():
     df = pd.DataFrame({"x": [1, 2, 3, 4, 5]})
     ddf = from_pandas(df, npartitions=2)
@@ -1502,6 +1509,13 @@ def test_random_partitions(df, pdf):
     with pytest.raises(ValueError):
         df.random_split([0.4, 0.5], 42)
 
+    a, b = df.x.random_split([0.5, 0.5], 42, True)
+    a2, b2 = df.x.random_split([0.5, 0.5], 42, True)
+    assert_eq(a, a2)
+    assert_eq(b, b2)
+    assert a.ndim == 1
+    assert b.ndim == 1
+
 
 def test_simple_graphs(df):
     expr = (df + 1).expr
@@ -1801,8 +1815,9 @@ def test_unknown_partitions_different_root():
     df = from_pandas(pdf, npartitions=2, sort=False)
     pdf2 = pd.DataFrame({"a": 1}, index=[4, 3, 2, 1])
     df2 = from_pandas(pdf2, npartitions=2, sort=False)
-    with pytest.raises(ValueError, match="Not all divisions"):
-        df.align(df2)[0].optimize()
+    result = df.align(df2)[0].optimize()
+    assert len(list(result.find_operations(Shuffle))) > 0
+    assert_eq(result, pdf.align(pdf2)[0])
 
 
 @pytest.mark.parametrize("split_every", [None, 2])
@@ -1927,6 +1942,12 @@ def test_assign_squash_together(df, pdf):
     assert "Assign: a=1, b=2" in [line for line in result.expr._tree_repr_lines()]
 
 
+def test_rename_series_reduction(pdf, df):
+    result = df[["x"]].rename(columns={"x": "a"})["a"]
+    expected = pdf[["x"]].rename(columns={"x": "a"})["a"]
+    assert_eq(result, expected)
+
+
 def test_are_co_aligned(pdf, df):
     df2 = df.reset_index()
     assert are_co_aligned(df.expr, df2.expr)
@@ -1946,17 +1967,6 @@ def test_are_co_aligned(pdf, df):
     merged_second = merged.rename(columns={"x": "a"})
     assert are_co_aligned(merged_first.expr, merged_second.expr)
     assert not are_co_aligned(merged_first.expr, df.expr)
-
-
-def test_assign_different_roots():
-    pdf = pd.DataFrame(list(range(100)), index=list(range(1000, 0, -10)), columns=["x"])
-    pdf2 = pd.DataFrame(list(range(100)), index=list(range(100, 0, -1)), columns=["x"])
-    df = from_pandas(pdf, npartitions=10, sort=False)
-    df2 = from_pandas(pdf2, npartitions=10, sort=False)
-
-    with pytest.raises(ValueError, match="Not all divisions"):
-        df["new"] = df2.x
-        df.optimize()
 
 
 def test_assign_pandas_inputs(df, pdf):

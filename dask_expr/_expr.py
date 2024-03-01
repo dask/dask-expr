@@ -560,7 +560,7 @@ class MapPartitions(Blockwise):
         # Always broadcast single-partition dependencies in MapPartitions
         return dep.npartitions == 1
 
-    @property
+    @functools.cached_property
     def args(self):
         return [self.frame] + self.operands[len(self._parameters) :]
 
@@ -568,7 +568,12 @@ class MapPartitions(Blockwise):
     def _meta(self):
         meta = self.operand("meta")
         return _get_meta_map_partitions(
-            self.args, [self.frame], self.func, self.kwargs, meta, self.parent_meta
+            self.args,
+            [e for e in self.args if isinstance(e, Expr)],
+            self.func,
+            self.kwargs,
+            meta,
+            self.parent_meta,
         )
 
     def _divisions(self):
@@ -729,7 +734,7 @@ class MapOverlapAlign(Expr):
         ]
         return _get_meta_map_partitions(
             args,
-            [self.frame],
+            [self.dependencies()[0]],
             self.func,
             self.kwargs,
             meta,
@@ -738,7 +743,7 @@ class MapOverlapAlign(Expr):
 
     def _divisions(self):
         args = [self.frame] + self.operands[len(self._parameters) :]
-        return calc_divisions_for_align(*args)
+        return calc_divisions_for_align(*args, allow_shuffle=False)
 
     def _lower(self):
         args = [self.frame] + self.operands[len(self._parameters) :]
@@ -804,7 +809,7 @@ class MapOverlap(MapPartitions):
         ]
         return _get_meta_map_partitions(
             args,
-            [self.frame],
+            [self.dependencies()[0]],
             self.func,
             self.kwargs,
             meta,
@@ -1172,6 +1177,7 @@ class RenameFrame(Elemwise):
             reverse_mapping = {val: key for key, val in self.operand("columns").items()}
 
             columns = determine_column_projection(self, parent, dependents)
+            columns = _convert_to_list(columns)
             columns = [
                 reverse_mapping[col] if col in reverse_mapping else col
                 for col in columns
@@ -1525,6 +1531,8 @@ def pd_split(df, p, random_state=None, shuffle=False):
             random_state = np.random.RandomState(random_state)
         df = df.sample(frac=1.0, random_state=random_state)
     index = pseudorandom(len(df), p, random_state)
+    if df.ndim == 1:
+        df = df.to_frame()
     return df.assign(_split=index)
 
 
@@ -1548,12 +1556,15 @@ class Split(Elemwise):
         return apply, self.operation, args, kwargs
 
 
-def _random_split_take(df, i):
-    return df[df["_split"] == i].drop(columns="_split")
+def _random_split_take(df, i, ndim):
+    df = df[df["_split"] == i].drop(columns="_split")
+    if ndim == 1:
+        return df[df.columns[0]]
+    return df
 
 
 class SplitTake(Blockwise):
-    _parameters = ["frame", "i"]
+    _parameters = ["frame", "i", "ndim"]
     operation = staticmethod(_random_split_take)
 
 
@@ -2825,16 +2836,24 @@ def is_broadcastable(dfs, s):
     )
 
 
-def non_blockwise_ancestors(expr):
-    """Traverse through tree to find ancestors that are not blockwise or are IO"""
+def are_co_aligned(*exprs):
+    """Do inputs come from the same parents, modulo blockwise?"""
+
     from dask_expr._cumulative import CumulativeAggregations
     from dask_expr._reductions import Reduction
 
-    stack = [expr]
+    seen = set()
+    # Scalars can always be broadcasted
+    stack = [e for e in exprs if e.ndim > 0]
+    ancestors = []
     while stack:
         e = stack.pop()
+        if e._name in seen:
+            continue
+        seen.add(e._name)
+
         if isinstance(e, IO):
-            yield e
+            ancestors.append(e)
         elif e.ndim == 0:
             # Scalars are valid ancestors that are always broadcastable,
             # so don't walk through them
@@ -2842,22 +2861,16 @@ def non_blockwise_ancestors(expr):
         elif isinstance(e, (Blockwise, CumulativeAggregations, Reduction)):
             # TODO: Capture this in inheritance logic
             dependencies = e.dependencies()
-            stack.extend([expr for expr in dependencies])
+            stack.extend(dependencies)
         elif isinstance(e, _DelayedExpr):
             continue
         else:
-            yield e
+            ancestors.append(e)
 
-
-def are_co_aligned(*exprs, allow_broadcast=True):
-    """Do inputs come from the same parents, modulo blockwise?"""
-    # Scalars can always be broadcasted
-    exprs = [e for e in exprs if e.ndim > 0]
-    ancestors = [set(non_blockwise_ancestors(e)) for e in exprs]
     unique_ancestors = {
         # Account for column projection within IO expressions
-        _tokenize_partial(item, ["columns", "_series"])
-        for item in flatten(ancestors, container=set)
+        _tokenize_partial(item, ["columns", "_series", "_dataset_info_cache"])
+        for item in ancestors
     }
     # Don't check divisions or npartitions at all
     return len(unique_ancestors) <= 1
@@ -3168,12 +3181,43 @@ class MaybeAlignPartitions(Expr):
             or len(self.divisions) == 2
         ):
             return self._expr_cls(*self.operands)
+        elif self.divisions[0] is None:
+            # We have to shuffle
+            npartitions = max(df.npartitions for df in dfs)
+            dtypes = {df._meta.index.dtype for df in dfs}
+            if not _are_dtypes_shuffle_compatible(dtypes):
+                raise TypeError(
+                    "DataFrames are not aligned. We need to shuffle to align partitions "
+                    "with each other. This is not possible because the indexes of the "
+                    f"DataFrames have differing dtypes={dtypes}. Please ensure that "
+                    "all Indexes have the same dtype or align manually for this to "
+                    "work."
+                )
+
+            from dask_expr._shuffle import RearrangeByColumn
+
+            args = [
+                RearrangeByColumn(df, None, npartitions, index_shuffle=True)
+                if isinstance(df, Expr)
+                else df
+                for df in self.operands
+            ]
+            return self._expr_cls(*args)
+
         args = maybe_align_partitions(*self.operands, divisions=self.divisions)
         return self._expr_cls(*args)
 
     @functools.cached_property
     def _meta(self):
         return self._expr_cls(*self.operands)._meta
+
+
+def _are_dtypes_shuffle_compatible(dtypes):
+    if len(dtypes) == 1:
+        return True
+    if all(pd.api.types.is_numeric_dtype(d) for d in dtypes):
+        return True
+    return False
 
 
 class CombineFirstAlign(MaybeAlignPartitions):
@@ -3658,15 +3702,10 @@ def _check_dependents_are_predicates(
     return other_names.issubset(allowed_expressions)
 
 
-def calc_divisions_for_align(*exprs):
+def calc_divisions_for_align(*exprs, allow_shuffle=True):
     dfs = [df for df in exprs if isinstance(df, Expr) and df.ndim > 0]
     if not all(df.known_divisions for df in dfs):
-        are_co_aligned(*exprs)
-        raise ValueError(
-            "Not all divisions are known, can't align "
-            "partitions. Please use `set_index` "
-            "to set the index."
-        )
+        return (None,) * (max(df.npartitions for df in dfs) + 1)
     divisions = list(unique(merge_sorted(*[df.divisions for df in dfs])))
     if len(divisions) == 1:  # single value for index
         divisions = (divisions[0], divisions[0])

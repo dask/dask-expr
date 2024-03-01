@@ -12,6 +12,7 @@ import dask.array as da
 import dask.dataframe.methods as methods
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 from dask import compute, delayed
 from dask.array import Array
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
@@ -57,10 +58,12 @@ from dask.utils import (
 )
 from dask.widgets import get_template
 from fsspec.utils import stringify_path
+from packaging.version import parse as parse_version
 from pandas import CategoricalDtype
 from pandas.api.types import is_bool_dtype, is_datetime64_any_dtype, is_numeric_dtype
 from pandas.api.types import is_scalar as pd_is_scalar
 from pandas.api.types import is_timedelta64_dtype
+from pyarrow import fs as pa_fs
 from tlz import first
 
 import dask_expr._backends  # noqa: F401
@@ -686,10 +689,11 @@ class FrameBase(DaskMethodsMixin):
 
     def shuffle(
         self,
-        on: str | list,
+        on: str | list | no_default = no_default,
         ignore_index: bool = False,
         npartitions: int | None = None,
         shuffle_method: str | None = None,
+        on_index: bool = False,
         **options,
     ):
         """Rearrange DataFrame into new partitions
@@ -709,6 +713,9 @@ class FrameBase(DaskMethodsMixin):
             be preserved by default.
         shuffle_method : optional
             Desired shuffle method. Default chosen at optimization time.
+        on_index : bool, default False
+            Whether to shuffle on the index. Mutually exclusive with 'on'.
+            Set this to ``True`` if 'on' is not provided.
         **options : optional
             Algorithm-specific options.
 
@@ -721,6 +728,16 @@ class FrameBase(DaskMethodsMixin):
         --------
         >>> df = df.shuffle(df.columns[0])  # doctest: +SKIP
         """
+        if on is no_default and not on_index:
+            raise TypeError(
+                "Must shuffle on either columns or the index; currently shuffling on "
+                "neither. Pass column(s) to 'on' or set 'on_index' to True."
+            )
+        elif on is not no_default and on_index:
+            raise TypeError(
+                "Cannot shuffle on both columns and the index. Do not pass column(s) "
+                "to 'on' or set 'on_index' to False."
+            )
 
         # Preserve partition count by default
         npartitions = npartitions or self.npartitions
@@ -742,6 +759,7 @@ class FrameBase(DaskMethodsMixin):
                 ignore_index,
                 shuffle_method,
                 options,
+                index_shuffle=on_index,
             )
         )
 
@@ -1733,7 +1751,7 @@ class FrameBase(DaskMethodsMixin):
 
         out = []
         for i in range(len(frac)):
-            out.append(new_collection(expr.SplitTake(frame, i)))
+            out.append(new_collection(expr.SplitTake(frame, i, self.ndim)))
         return out
 
     def isnull(self):
@@ -2410,12 +2428,12 @@ class DataFrame(FrameBase):
 
             elif isinstance(v, (Scalar, Series)):
                 if isinstance(v, Series):
-                    if not expr.are_co_aligned(
-                        result.expr, v.expr, allow_broadcast=False
-                    ):
-                        result = expr.Assign(result, *args)
-                        args = []
+                    if not expr.are_co_aligned(result.expr, v.expr):
+                        if len(args) > 0:
+                            result = expr.Assign(result, *args)
+                            args = []
                         result = new_collection(expr.AssignAlign(result, k, v.expr))
+                        continue
 
             elif not isinstance(v, FrameBase) and isinstance(v, Hashable):
                 pass
@@ -2434,7 +2452,10 @@ class DataFrame(FrameBase):
                 raise TypeError(f"Column assignment doesn't support type {type(v)}")
             args.extend([k, v])
 
-        return new_collection(expr.Assign(result, *args))
+        if len(args) > 0:
+            result = new_collection(expr.Assign(result, *args))
+
+        return result
 
     @derived_from(pd.DataFrame)
     def clip(self, lower=None, upper=None, axis=None, **kwargs):
@@ -4606,7 +4627,11 @@ def read_parquet(
     engine=None,
     **kwargs,
 ):
-    from dask_expr.io.parquet import ReadParquet, _set_parquet_engine
+    from dask_expr.io.parquet import (
+        ReadParquetFSSpec,
+        ReadParquetPyarrowFS,
+        _set_parquet_engine,
+    )
 
     if not isinstance(path, str):
         path = stringify_path(path)
@@ -4619,8 +4644,61 @@ def read_parquet(
             if op == "in" and not isinstance(val, (set, list, tuple)):
                 raise TypeError("Value of 'in' filter must be a list, set or tuple.")
 
+    if (
+        isinstance(filesystem, pa_fs.FileSystem)
+        or isinstance(filesystem, str)
+        and filesystem.lower() in ("arrow", "pyarrow")
+    ):
+        if parse_version(pa.__version__) < parse_version("15.0.0"):
+            raise ValueError(
+                "pyarrow>=15.0.0 is required to use the pyarrow filesystem."
+            )
+        if calculate_divisions:
+            raise NotImplementedError(
+                "calculate_divisions is not supported when using the pyarrow filesystem."
+            )
+        if metadata_task_size is not None:
+            raise NotImplementedError(
+                "metadata_task_size is not supported when using the pyarrow filesystem."
+            )
+        if split_row_groups != "infer":
+            raise NotImplementedError(
+                "split_row_groups is not supported when using the pyarrow filesystem."
+            )
+        if blocksize is not None and blocksize != "default":
+            raise NotImplementedError(
+                "blocksize is not supported when using the pyarrow filesystem."
+            )
+        if aggregate_files is not None:
+            raise NotImplementedError(
+                "aggregate_files is not supported when using the pyarrow filesystem."
+            )
+        if parquet_file_extension != (".parq", ".parquet", ".pq"):
+            raise NotImplementedError(
+                "parquet_file_extension is not supported when using the pyarrow filesystem."
+            )
+        if engine is not None:
+            raise NotImplementedError(
+                "engine is not supported when using the pyarrow filesystem."
+            )
+
+        return new_collection(
+            ReadParquetPyarrowFS(
+                path,
+                columns=_convert_to_list(columns),
+                filters=filters,
+                categories=categories,
+                index=index,
+                storage_options=storage_options,
+                filesystem=filesystem,
+                ignore_metadata_file=ignore_metadata_file,
+                kwargs=kwargs,
+                _series=isinstance(columns, str),
+            )
+        )
+
     return new_collection(
-        ReadParquet(
+        ReadParquetFSSpec(
             path,
             columns=_convert_to_list(columns),
             filters=filters,

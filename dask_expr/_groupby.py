@@ -31,6 +31,7 @@ from dask.dataframe.groupby import (
     _groupby_aggregate_spec,
     _groupby_apply_funcs,
     _groupby_get_group,
+    _groupby_raise_unaligned,
     _groupby_slice_apply,
     _groupby_slice_shift,
     _groupby_slice_transform,
@@ -79,6 +80,66 @@ def _as_dict(key, value):
 
 def _adjust_split_out_for_group_keys(npartitions, by):
     return math.ceil(npartitions / (100 / (len(by) - 1)))
+
+
+class Aggregation:
+    """User defined groupby-aggregation.
+
+    This class allows users to define their own custom aggregation in terms of
+    operations on Pandas dataframes in a map-reduce style. You need to specify
+    what operation to do on each chunk of data, how to combine those chunks of
+    data together, and then how to finalize the result.
+
+    See :ref:`dataframe.groupby.aggregate` for more.
+
+    Parameters
+    ----------
+    name : str
+        the name of the aggregation. It should be unique, since intermediate
+        result will be identified by this name.
+    chunk : callable
+        a function that will be called with the grouped column of each
+        partition. It can either return a single series or a tuple of series.
+        The index has to be equal to the groups.
+    agg : callable
+        a function that will be called to aggregate the results of each chunk.
+        Again the argument(s) will be grouped series. If ``chunk`` returned a
+        tuple, ``agg`` will be called with all of them as individual positional
+        arguments.
+    finalize : callable
+        an optional finalizer that will be called with the results from the
+        aggregation.
+
+    Examples
+    --------
+    We could implement ``sum`` as follows:
+
+    >>> custom_sum = dd.Aggregation(
+    ...     name='custom_sum',
+    ...     chunk=lambda s: s.sum(),
+    ...     agg=lambda s0: s0.sum()
+    ... )  # doctest: +SKIP
+    >>> df.groupby('g').agg(custom_sum)  # doctest: +SKIP
+
+    We can implement ``mean`` as follows:
+
+    >>> custom_mean = dd.Aggregation(
+    ...     name='custom_mean',
+    ...     chunk=lambda s: (s.count(), s.sum()),
+    ...     agg=lambda count, sum: (count.sum(), sum.sum()),
+    ...     finalize=lambda count, sum: sum / count,
+    ... )  # doctest: +SKIP
+    >>> df.groupby('g').agg(custom_mean)  # doctest: +SKIP
+
+    Though of course, both of these are built-in and so you don't need to
+    implement them yourself.
+    """
+
+    def __init__(self, name, chunk, agg, finalize=None):
+        self.chunk = chunk
+        self.agg = agg
+        self.finalize = finalize
+        self.__name__ = name
 
 
 ###
@@ -298,19 +359,6 @@ class GroupbyAggregationBase(GroupByApplyConcatApply, GroupByBase):
     }
 
     @functools.cached_property
-    def _meta(self):
-        meta = meta_nonempty(self.frame._meta)
-        meta = meta.groupby(
-            self._by_meta,
-            **_as_dict("observed", self.observed),
-            **_as_dict("dropna", self.dropna),
-        )
-        if self._slice is not None:
-            meta = meta[self._slice]
-        meta = meta.aggregate(self.arg)
-        return make_meta(meta)
-
-    @functools.cached_property
     def spec(self):
         # Converts the `arg` operand into specific
         # chunk, aggregate, and finalizer functions
@@ -374,6 +422,10 @@ class GroupbyAggregation(GroupbyAggregationBase):
     """
 
     @functools.cached_property
+    def _meta(self):
+        return self._lower()._meta
+
+    @functools.cached_property
     def _is_decomposable(self):
         return not any(s[1] in ("median", np.median) for s in self.spec)
 
@@ -402,21 +454,23 @@ class HolisticGroupbyAggregation(GroupbyAggregationBase):
 
     This class always calculates the aggregates by first collecting all the data for
     the groups and then aggregating at once.
+
+    We are always shuffling, so we will never call combine
     """
+
+    @functools.cached_property
+    def _meta(self):
+        meta = self._meta_chunk
+        aggregate = self.aggregate or (lambda x: x)
+        aggregate_kwargs = self.aggregate_kwargs
+        meta = aggregate([meta], **aggregate_kwargs)
+        return make_meta(meta)
 
     chunk = staticmethod(_non_agg_chunk)
 
     @property
     def should_shuffle(self):
         return True
-
-    @classmethod
-    def chunk(cls, df, *by, **kwargs):
-        return _non_agg_chunk(df, *by, **kwargs)
-
-    @classmethod
-    def combine(cls, inputs, **kwargs):
-        return _groupby_aggregate_spec(_concat(inputs), **kwargs)
 
     @classmethod
     def aggregate(cls, inputs, **kwargs):
@@ -427,15 +481,6 @@ class HolisticGroupbyAggregation(GroupbyAggregationBase):
         return {
             "by": self._by_columns,
             "key": [col for col in self.frame.columns if col not in self._by_columns],
-            **_as_dict("observed", self.observed),
-            **_as_dict("dropna", self.dropna),
-        }
-
-    @property
-    def combine_kwargs(self) -> dict:
-        return {
-            "spec": self.arg,
-            "levels": _determine_levels(self.by),
             **_as_dict("observed", self.observed),
             **_as_dict("dropna", self.dropna),
         }
@@ -492,7 +537,7 @@ class DecomposableGroupbyAggregation(GroupbyAggregationBase):
             "arg": self.arg,
             "columns": self._slice,
             "finalize_funcs": self.agg_args["finalizers"],
-            "is_series": self._meta.ndim == 1,
+            "is_series": self.frame._meta.ndim == 1,
             "level": self.levels,
             "sort": self.sort,
             **_as_dict("observed", self.observed),
@@ -725,26 +770,62 @@ class Std(SingleAggregation):
         )
 
 
-class Mean(SingleAggregation):
-    @functools.cached_property
-    def _meta(self):
-        return self._lower()._meta
+def _mean_chunk(df, *by, observed=None, dropna=None):
+    if is_series_like(df):
+        df = df.to_frame()
 
-    def _lower(self):
-        s = Sum(*self.operands)
-        # Drop chunk/aggregate_kwargs for count
-        c = Count(
-            *[
-                self.operand(param)
-                if param not in ("chunk_kwargs", "aggregate_kwargs")
-                else {}
-                for param in self._parameters
-            ],
-            *self.by,
-        )
-        if is_dataframe_like(s._meta):
-            c = c[s.columns]
-        return s / c
+    g = _groupby_raise_unaligned(df, by=by, observed=observed, dropna=dropna)
+    x = g.sum(numeric_only=True)
+    n = g[x.columns].count().rename(columns=lambda c: c + "-count")
+    return concat([x, n], axis=1)
+
+
+def _mean_combine(g, levels, sort=False):
+    return g.groupby(level=levels, sort=sort).sum()
+
+
+def _mean_agg(g, levels, sort=False, observed=False, dropna=True):
+    result = g.groupby(level=levels, sort=sort, observed=observed, dropna=dropna).sum()
+    s = result[result.columns[: len(result.columns) // 2]]
+    c = result[result.columns[len(result.columns) // 2 :]]
+    c.columns = s.columns
+    return s / c
+
+
+class Mean(GroupByReduction):
+    _parameters = SingleAggregation._parameters
+    _defaults = SingleAggregation._defaults
+    reduction_aggregate = staticmethod(_mean_agg)
+    reduction_combine = staticmethod(_mean_combine)
+    chunk = staticmethod(_mean_chunk)
+
+    @functools.cached_property
+    def aggregate_kwargs(self):
+        return {
+            "levels": self.levels,
+            "sort": self.sort,
+            "observed": self.observed,
+            "dropna": self.dropna,
+        }
+
+    @functools.cached_property
+    def chunk_kwargs(self):
+        return {"observed": self.observed, "dropna": self.dropna}
+
+    @functools.cached_property
+    def combine_kwargs(self):
+        return {"levels": self.levels}
+
+    def _divisions(self):
+        if self.sort:
+            return (None, None)
+        split_out = self.split_out
+        if split_out is True:
+            split_out = self.frame.npartitions
+        return (None,) * (split_out + 1)
+
+    def _simplify_up(self, parent, dependents):
+        return groupby_projection(self, parent, dependents)
 
 
 def nunique_df_combine(dfs, *args, **kwargs):
@@ -1585,13 +1666,28 @@ class GroupBy:
         return len(set(post_group_columns) - set(numerics.columns)) == 0
 
     @derived_from(pd.core.groupby.GroupBy)
-    def mean(self, numeric_only=False, **kwargs):
+    def mean(self, numeric_only=False, split_out=1, **kwargs):
         if not numeric_only and not self._all_numeric():
             raise NotImplementedError(
                 "'numeric_only=False' is not implemented in Dask."
             )
         numeric_kwargs = self._numeric_only_kwargs(numeric_only)
-        return self._single_agg(Mean, **kwargs, **numeric_kwargs)
+        result = self._single_agg(Mean, split_out=split_out, **kwargs, **numeric_kwargs)
+        return self._postprocess_series_squeeze(result)
+
+    def _postprocess_series_squeeze(self, result):
+        if (
+            isinstance(self.obj, Series)
+            or is_scalar(self._slice)
+            and self._slice is not None
+        ):
+            if len(result.columns) < 1:
+                raise NotImplementedError(
+                    "Cannot call `SeriesGroupBy.var` or `SeriesGroupBy.mean` on the key "
+                    "column. Please use `aggregate` if you really need to do this."
+                )
+            result = result[result.columns[0]]
+        return result
 
     @derived_from(pd.core.groupby.GroupBy)
     def min(self, numeric_only=False, **kwargs):
@@ -1759,18 +1855,7 @@ class GroupBy:
                 *self.by,
             )
         )
-        if (
-            isinstance(self.obj, Series)
-            or is_scalar(self._slice)
-            and self._slice is not None
-        ):
-            if len(result.columns) < 1:
-                raise NotImplementedError(
-                    "Cannot call `SeriesGroupBy.var` on the key column. "
-                    "Please use `aggregate` if you really need to do this."
-                )
-            result = result[result.columns[0]]
-        return result
+        return self._postprocess_series_squeeze(result)
 
     @derived_from(pd.core.groupby.GroupBy)
     def std(
@@ -1799,18 +1884,7 @@ class GroupBy:
                 *self.by,
             )
         )
-        if (
-            isinstance(self.obj, Series)
-            or is_scalar(self._slice)
-            and self._slice is not None
-        ):
-            if len(result.columns) < 1:
-                raise NotImplementedError(
-                    "Cannot call `SeriesGroupBy.std` on the key column. "
-                    "Please use `aggregate` if you really need to do this."
-                )
-            result = result[result.columns[0]]
-        return result
+        return self._postprocess_series_squeeze(result)
 
     @_aggregate_docstring(based_on="pd.core.groupby.DataFrameGroupBy.agg")
     def aggregate(
