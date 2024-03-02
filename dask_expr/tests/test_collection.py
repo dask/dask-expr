@@ -1462,8 +1462,9 @@ def test_tree_repr(fuse):
     assert "Sum:" in s
     assert "Add:" in s
     assert "Mean:" in s
+    assert "ArrowStringConversion" in s
     assert "AlignPartitions:" not in s
-    assert str(df.seed) in s.lower()
+    assert str(df.frame.seed) in s.lower()
 
     # Check result after optimization
     optimized = expr.optimize(fuse=fuse)
@@ -1476,7 +1477,7 @@ def test_tree_repr(fuse):
     assert "True" not in s
     assert "None" not in s
     assert "skipna=False" in s
-    assert str(df.seed) in s.lower()
+    assert str(df.frame.seed) in s.lower()
     if fuse:
         assert "Fused" in s
         assert "|" in s

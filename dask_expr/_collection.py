@@ -42,6 +42,7 @@ from dask.dataframe.utils import (
     insert_meta_param_description,
     meta_frame_constructor,
     meta_series_constructor,
+    pyarrow_strings_enabled,
 )
 from dask.delayed import delayed
 from dask.utils import (
@@ -4997,7 +4998,7 @@ def from_map(
     kwargs = {} if kwargs is None else kwargs
     if allow_projection:
         columns = kwargs.pop("columns", None)
-        return new_collection(
+        result = new_collection(
             FromMapProjectable(
                 func,
                 iterables,
@@ -5012,7 +5013,7 @@ def from_map(
             )
         )
     else:
-        return new_collection(
+        result = new_collection(
             FromMap(
                 func,
                 iterables,
@@ -5024,6 +5025,9 @@ def from_map(
                 label,
             )
         )
+    if pyarrow_strings_enabled():
+        return new_collection(expr.ArrowStringConversion(result))
+    return result
 
 
 def repartition(df, divisions, force=False):
