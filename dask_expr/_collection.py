@@ -4999,7 +4999,7 @@ def from_map(
     kwargs = {} if kwargs is None else kwargs
     if allow_projection:
         columns = kwargs.pop("columns", None)
-        return new_collection(
+        result = new_collection(
             FromMapProjectable(
                 func,
                 iterables,
@@ -5014,7 +5014,7 @@ def from_map(
             )
         )
     else:
-        return new_collection(
+        result = new_collection(
             FromMap(
                 func,
                 iterables,
@@ -5026,6 +5026,9 @@ def from_map(
                 label,
             )
         )
+    if pyarrow_strings_enabled():
+        return new_collection(expr.ArrowStringConversion(result))
+    return result
 
 
 def repartition(df, divisions, force=False):

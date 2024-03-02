@@ -31,6 +31,7 @@ from dask.dataframe.groupby import (
     _groupby_aggregate_spec,
     _groupby_apply_funcs,
     _groupby_get_group,
+    _groupby_raise_unaligned,
     _groupby_slice_apply,
     _groupby_slice_shift,
     _groupby_slice_transform,
@@ -670,6 +671,34 @@ class GroupByReduction(Reduction, GroupByBase):
         meta = meta_nonempty(self.frame._meta)
         return self.chunk(meta, *self._by_meta, **self.chunk_kwargs)
 
+    def _divisions(self):
+        if self.sort:
+            return (None, None)
+        split_out = self.split_out
+        if split_out is True:
+            split_out = self.frame.npartitions
+        return (None,) * (split_out + 1)
+
+    def _simplify_up(self, parent, dependents):
+        return groupby_projection(self, parent, dependents)
+
+    @functools.cached_property
+    def combine_kwargs(self):
+        return {"levels": self.levels, "observed": self.observed, "dropna": self.dropna}
+
+    @functools.cached_property
+    def chunk_kwargs(self):
+        return {"observed": self.observed, "dropna": self.dropna}
+
+    @functools.cached_property
+    def aggregate_kwargs(self):
+        return {
+            "levels": self.levels,
+            "sort": self.sort,
+            "observed": self.observed,
+            "dropna": self.dropna,
+        }
+
 
 def _var_combine(g, levels, sort=False, observed=False, dropna=True):
     return g.groupby(level=levels, sort=sort, observed=observed, dropna=dropna).sum()
@@ -695,68 +724,24 @@ class Var(GroupByReduction):
         "split_every": None,
         "shuffle_method": None,
     }
-    reduction_aggregate = _var_agg
-    reduction_combine = _var_combine
-
-    @staticmethod
-    def chunk(frame, *by, **kwargs):
-        return _var_chunk(frame, *by, **kwargs)
+    reduction_aggregate = staticmethod(_var_agg)
+    reduction_combine = staticmethod(_var_combine)
+    chunk = staticmethod(_var_chunk)
 
     @functools.cached_property
     def aggregate_kwargs(self):
         return {
             "ddof": self.ddof,
-            "levels": self.levels,
             "numeric_only": self.numeric_only,
-            "sort": self.sort,
-            "observed": self.observed,
-            "dropna": self.dropna,
+            **super().aggregate_kwargs,
         }
 
     @functools.cached_property
     def chunk_kwargs(self):
-        return {
-            "numeric_only": self.numeric_only,
-            "observed": self.observed,
-            "dropna": self.dropna,
-        }
-
-    @functools.cached_property
-    def combine_kwargs(self):
-        return {"levels": self.levels, "observed": self.observed, "dropna": self.dropna}
-
-    def _divisions(self):
-        if self.sort:
-            return (None, None)
-        return (None,) * (self.split_out + 1)
-
-    def _simplify_up(self, parent, dependents):
-        return groupby_projection(self, parent, dependents)
+        return {"numeric_only": self.numeric_only, **super().chunk_kwargs}
 
 
-class Std(SingleAggregation):
-    _parameters = [
-        "frame",
-        "ddof",
-        "numeric_only",
-        "split_out",
-        "split_every",
-        "sort",
-        "dropna",
-        "observed",
-        "shuffle_method",
-    ]
-    _defaults = {
-        "split_out": 1,
-        "sort": None,
-        "split_every": None,
-        "shuffle_method": None,
-    }
-
-    @functools.cached_property
-    def _meta(self):
-        return self._lower()._meta
-
+class Std(Var):
     def _lower(self):
         v = Var(*self.operands)
         return MapPartitions(
@@ -769,26 +754,34 @@ class Std(SingleAggregation):
         )
 
 
-class Mean(SingleAggregation):
-    @functools.cached_property
-    def _meta(self):
-        return self._lower()._meta
+def _mean_chunk(df, *by, observed=None, dropna=None):
+    if is_series_like(df):
+        df = df.to_frame()
 
-    def _lower(self):
-        s = Sum(*self.operands)
-        # Drop chunk/aggregate_kwargs for count
-        c = Count(
-            *[
-                self.operand(param)
-                if param not in ("chunk_kwargs", "aggregate_kwargs")
-                else {}
-                for param in self._parameters
-            ],
-            *self.by,
-        )
-        if is_dataframe_like(s._meta):
-            c = c[s.columns]
-        return s / c
+    g = _groupby_raise_unaligned(df, by=by, observed=observed, dropna=dropna)
+    x = g.sum(numeric_only=True)
+    n = g[x.columns].count().rename(columns=lambda c: c + "-count")
+    return concat([x, n], axis=1)
+
+
+def _mean_combine(g, levels, sort=False, observed=None, dropna=None):
+    return g.groupby(level=levels, sort=sort, observed=observed, dropna=dropna).sum()
+
+
+def _mean_agg(g, levels, sort=False, observed=False, dropna=True):
+    result = g.groupby(level=levels, sort=sort, observed=observed, dropna=dropna).sum()
+    s = result[result.columns[: len(result.columns) // 2]]
+    c = result[result.columns[len(result.columns) // 2 :]]
+    c.columns = s.columns
+    return s / c
+
+
+class Mean(GroupByReduction):
+    _parameters = SingleAggregation._parameters
+    _defaults = SingleAggregation._defaults
+    reduction_aggregate = staticmethod(_mean_agg)
+    reduction_combine = staticmethod(_mean_combine)
+    chunk = staticmethod(_mean_chunk)
 
 
 def nunique_df_combine(dfs, *args, **kwargs):
@@ -1629,13 +1622,28 @@ class GroupBy:
         return len(set(post_group_columns) - set(numerics.columns)) == 0
 
     @derived_from(pd.core.groupby.GroupBy)
-    def mean(self, numeric_only=False, **kwargs):
+    def mean(self, numeric_only=False, split_out=1, **kwargs):
         if not numeric_only and not self._all_numeric():
             raise NotImplementedError(
                 "'numeric_only=False' is not implemented in Dask."
             )
         numeric_kwargs = self._numeric_only_kwargs(numeric_only)
-        return self._single_agg(Mean, **kwargs, **numeric_kwargs)
+        result = self._single_agg(Mean, split_out=split_out, **kwargs, **numeric_kwargs)
+        return self._postprocess_series_squeeze(result)
+
+    def _postprocess_series_squeeze(self, result):
+        if (
+            isinstance(self.obj, Series)
+            or is_scalar(self._slice)
+            and self._slice is not None
+        ):
+            if len(result.columns) < 1:
+                raise NotImplementedError(
+                    "Cannot call `SeriesGroupBy.var` or `SeriesGroupBy.mean` on the key "
+                    "column. Please use `aggregate` if you really need to do this."
+                )
+            result = result[result.columns[0]]
+        return result
 
     @derived_from(pd.core.groupby.GroupBy)
     def min(self, numeric_only=False, **kwargs):
@@ -1803,18 +1811,7 @@ class GroupBy:
                 *self.by,
             )
         )
-        if (
-            isinstance(self.obj, Series)
-            or is_scalar(self._slice)
-            and self._slice is not None
-        ):
-            if len(result.columns) < 1:
-                raise NotImplementedError(
-                    "Cannot call `SeriesGroupBy.var` on the key column. "
-                    "Please use `aggregate` if you really need to do this."
-                )
-            result = result[result.columns[0]]
-        return result
+        return self._postprocess_series_squeeze(result)
 
     @derived_from(pd.core.groupby.GroupBy)
     def std(
@@ -1843,18 +1840,7 @@ class GroupBy:
                 *self.by,
             )
         )
-        if (
-            isinstance(self.obj, Series)
-            or is_scalar(self._slice)
-            and self._slice is not None
-        ):
-            if len(result.columns) < 1:
-                raise NotImplementedError(
-                    "Cannot call `SeriesGroupBy.std` on the key column. "
-                    "Please use `aggregate` if you really need to do this."
-                )
-            result = result[result.columns[0]]
-        return result
+        return self._postprocess_series_squeeze(result)
 
     @_aggregate_docstring(based_on="pd.core.groupby.DataFrameGroupBy.agg")
     def aggregate(

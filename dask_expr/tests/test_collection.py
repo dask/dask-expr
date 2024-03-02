@@ -1462,8 +1462,9 @@ def test_tree_repr(fuse):
     assert "Sum:" in s
     assert "Add:" in s
     assert "Mean:" in s
+    assert "ArrowStringConversion" in s
     assert "AlignPartitions:" not in s
-    assert str(df.seed) in s.lower()
+    assert str(df.frame.seed) in s.lower()
 
     # Check result after optimization
     optimized = expr.optimize(fuse=fuse)
@@ -1476,7 +1477,7 @@ def test_tree_repr(fuse):
     assert "True" not in s
     assert "None" not in s
     assert "skipna=False" in s
-    assert str(df.seed) in s.lower()
+    assert str(df.frame.seed) in s.lower()
     if fuse:
         assert "Fused" in s
         assert "|" in s
@@ -2425,7 +2426,15 @@ def test_scalar_repr(df):
     assert result == "<dask_expr.expr.Scalar: expr=df.size(), dtype=int64>"
 
 
-def test_reset_index_filter_pushdown(df):
+def test_array_conversion(df, pdf):
+    import dask.array as da
+
+    result = df.map_partitions(lambda x: np.asarray(x))
+    expected = np.asarray(pdf)
+    da.utils.assert_eq(result, expected)
+
+
+def test_reset_index_filter_pushdown(df, pdf):
     q = df.reset_index()
     result = q[q.x > 5]
     expected = df[df.x > 5].reset_index()
@@ -2433,8 +2442,9 @@ def test_reset_index_filter_pushdown(df):
 
     # We are accessing the index, so don't do anything
     result = q[q["index"] > 5]
-    expected = df[df.index > 5].reset_index()
-    assert result.simplify()._name == expected._name
+    expected = pdf.reset_index()
+    expected = expected[expected["index"] > 5]
+    assert_eq(result, expected, check_index=False)
 
     q = df.x.reset_index(drop=True)
     result = q[q > 5]
