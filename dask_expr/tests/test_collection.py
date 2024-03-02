@@ -131,10 +131,11 @@ def test_setitem(pdf, df):
 
 @xfail_gpu("https://github.com/rapidsai/cudf/issues/10271")
 def test_explode():
-    pdf = pd.DataFrame({"a": [[1, 2], [3, 4]]})
-    df = from_pandas(pdf)
-    assert_eq(pdf.explode(column="a"), df.explode(column="a"))
-    assert_eq(pdf.a.explode(), df.a.explode())
+    with dask.config.set({"dataframe.convert-string": False}):
+        pdf = pd.DataFrame({"a": [[1, 2], [3, 4]]})
+        df = from_pandas(pdf)
+        assert_eq(pdf.explode(column="a"), df.explode(column="a"))
+        assert_eq(pdf.a.explode(), df.a.explode())
 
 
 @xfail_gpu("https://github.com/rapidsai/cudf/issues/10271")
