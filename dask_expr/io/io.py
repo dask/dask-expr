@@ -5,6 +5,7 @@ import math
 import operator
 
 import numpy as np
+import pyarrow as pa
 from dask.dataframe import methods
 from dask.dataframe._pyarrow import to_pyarrow_string
 from dask.dataframe.core import apply_and_enforce, is_dataframe_like, make_meta
@@ -132,6 +133,12 @@ class FusedIO(BlockwiseIO):
         bucket = self._fusion_buckets[index]
         return (methods.concat, [expr._filtered_task(i) for i in bucket])
 
+    def _simplify_down(self):
+        from dask_expr.io.parquet import ReadParquetPyarrowFS
+
+        if isinstance(self.operand("_expr"), ReadParquetPyarrowFS):
+            return FusedParquetIO(self.operand("_expr"))
+
     @functools.cached_property
     def _fusion_buckets(self):
         partitions = self.operand("_expr")._partitions
@@ -145,6 +152,58 @@ class FusedIO(BlockwiseIO):
 
     def _tune_up(self, parent):
         return
+
+
+class FusedParquetIO(FusedIO):
+    _parameters = ["_expr"]
+
+    @functools.cached_property
+    def _name(self):
+        return (
+            funcname(type(self.operand("_expr"))).lower()
+            + "-fused-parq-"
+            + _tokenize_deterministic(*self.operands)
+        )
+
+    @staticmethod
+    def _load_multiple_files(frag_filters, columns, schema, index_name):
+        from dask_expr.io.parquet import ReadParquetPyarrowFS
+
+        # Note: Ideally we'd build a pyarrow fragment that points to multiple
+        # tables since pyarrow handles IO and CPU threading separately and we're
+        # just overcomitting threads here. However, this isn't exposed at time
+        # of writing
+        # TODO: We may want to use a gloal pool with sufficient threads since
+        # executing this task in a local executor could be a little too much
+        tables = (
+            ReadParquetPyarrowFS._fragment_to_table(
+                frag,
+                filter,
+                columns,
+                schema,
+            )
+            for frag, filter in frag_filters
+        )
+        table = pa.concat_tables(tables)
+        return ReadParquetPyarrowFS._table_to_pandas(table, index_name)
+
+    def _task(self, index: int):
+        expr = self.operand("_expr")
+        bucket = self._fusion_buckets[index]
+        fragments_filters = []
+        assert bucket
+        for i in bucket:
+            _, frag_to_table, index_name = expr._filtered_task(i)
+            fragments_filters.append((frag_to_table[1], frag_to_table[2]))
+            columns = frag_to_table[3]
+            schema = frag_to_table[4]
+        return (
+            self._load_multiple_files,
+            fragments_filters,
+            columns,
+            schema,
+            index_name,
+        )
 
 
 class FromMap(PartitionsFiltered, BlockwiseIO):
