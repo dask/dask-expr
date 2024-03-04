@@ -852,8 +852,8 @@ class ReadParquetPyarrowFS(ReadParquet):
                     filesystem=self.fs,
                 )
                 dataset_info["using_metadata_file"] = True
+                dataset_info["fragments"] = _frags = list(dataset.get_fragments())
                 dataset_info["file_sizes"] = [None for fi in _frags]
-                dataset_info["fragments"] = list(dataset.get_fragments())
 
         if checksum is None:
             checksum = tokenize(all_files)
@@ -928,50 +928,6 @@ class ReadParquetPyarrowFS(ReadParquet):
             )
         return np.array(self._dataset_info["fragments"])
 
-    @staticmethod
-    def _fragment_to_pandas(fragment, columns, filters, schema, index_name):
-        from dask.utils import parse_bytes
-
-        if isinstance(filters, list):
-            filters = pq.filters_to_expression(filters)
-        if index_name is not None and columns is not None and index_name not in columns:
-            columns = columns.copy()
-            columns.append(index_name)
-        # TODO: There should be a way for users to define the type mapper
-        table = fragment.to_table(
-            schema=schema,
-            columns=columns,
-            filter=filters,
-            # Batch size determines how many rows are read at once and will
-            # cause the underlying array to be split into chunks of this size
-            # (max). We'd like to avoid fragmentation as much as possible and
-            # and to set this to something like inf but we have to set a finite,
-            # positive number.
-            # In the presence of row groups, the underlying array will still be
-            # chunked per rowgroup
-            batch_size=10_000_000,
-            # batch_readahead=16,
-            # fragment_readahead=4,
-            fragment_scan_options=pa.dataset.ParquetFragmentScanOptions(
-                pre_buffer=True,
-                cache_options=pa.CacheOptions(
-                    hole_size_limit=parse_bytes("4 MiB"),
-                    range_size_limit=parse_bytes("32.00 MiB"),
-                ),
-            ),
-            # TODO: Reconsider this. The OMP_NUM_THREAD variable makes it harmful to enable this
-            use_threads=True,
-        )
-        df = table.to_pandas(
-            types_mapper=_determine_type_mapper(),
-            use_threads=False,
-            self_destruct=True,
-            ignore_metadata=True,
-        )
-        if index_name is not None:
-            df = df.set_index(index_name)
-        return df
-
     def _filtered_task(self, index: int):
         return (
             _fragment_to_pandas,
@@ -998,10 +954,13 @@ class ReadParquetPyarrowFS(ReadParquet):
         return max(after_projection / total_uncompressed, 0.001)
 
 
-def _fragment_to_pandas(fragment_wrapper, columns, filters, schema):
+def _fragment_to_pandas(fragment_wrapper, columns, filters, schema, index_name):
     fragment = fragment_wrapper.fragment
     if isinstance(filters, list):
         filters = pq.filters_to_expression(filters)
+    if index_name is not None and columns is not None and index_name not in columns:
+        columns = columns.copy()
+        columns.append(index_name)
     # TODO: There should be a way for users to define the type mapper
     table = fragment.to_table(
         schema=schema,
@@ -1030,6 +989,8 @@ def _fragment_to_pandas(fragment_wrapper, columns, filters, schema):
         use_threads=False,
         self_destruct=True,
     )
+    if index_name is not None:
+        df = df.set_index(index_name)
     return df
 
 
@@ -1747,20 +1708,19 @@ def _aggregate_statistics_to_file(stats):
     return aggregated_stats
 
 
+@dask.delayed
+def _gather_statistics(frags):
+    def _collect_statistics(token_fragment):
+        return token_fragment[0], _extract_stats(token_fragment[1].metadata.to_dict())
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor() as tpe:
+        return list(tpe.map(_collect_statistics, frags))
+
+
 def _collect_statistics_plan(file_infos, fragments):
     """Collect statistics for a list of files and their corresponding fragments"""
-
-    @dask.delayed
-    def _gather_statistics(frags):
-        def _collect_statistics(token_fragment):
-            return token_fragment[0], _extract_stats(
-                token_fragment[1].metadata.to_dict()
-            )
-
-        from concurrent.futures import ThreadPoolExecutor
-
-        with ThreadPoolExecutor() as tpe:
-            return list(tpe.map(_collect_statistics, frags))
 
     to_collect = []
     for finfo, frag in zip(file_infos, fragments):
