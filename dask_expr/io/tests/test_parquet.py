@@ -11,6 +11,11 @@ from dask_expr import from_graph, from_pandas, read_parquet
 from dask_expr._expr import Filter, Lengths, Literal
 from dask_expr._reductions import Len
 from dask_expr.io import FusedIO, ReadParquet
+from dask_expr.io.parquet import (
+    _aggregate_statistics_to_file,
+    _combine_stats,
+    _extract_stats,
+)
 
 
 def _make_file(dir, df=None):
@@ -336,7 +341,247 @@ def test_columns_index(tmpdir):
     )
 
 
-def test_repr_doesnt_trigger_stats(tmpdir):
-    fn = _make_file(tmpdir)
-    df = read_parquet(fn, filesystem="arrow")
-    repr(df)
+def test_aggregate_rg_stats_to_file(tmpdir):
+    filesystem = fs.LocalFileSystem()
+    fn = str(tmpdir)
+    ddf = dd.from_pandas(pd.DataFrame({"a": range(10)}), npartitions=1)
+    ddf.to_parquet(fn)
+    ddf = dd.read_parquet(fn, filesystem=filesystem)
+    frag = ddf._expr.fragments[0]
+    # Make sure this doesn't raise. We'll test the actual aggregation below
+    _aggregate_statistics_to_file([frag.metadata.to_dict()])
+    # In reality, we'll strip the metadata down
+    assert (
+        len(_aggregate_statistics_to_file([_extract_stats(frag.metadata.to_dict())]))
+        > 0
+    )
+
+
+def test_aggregate_statistics_to_file():
+    file_in = {
+        "top-level-file-stat": "not-interested",
+        "row_groups": [
+            # RG 1
+            {
+                "num_rows": 100,
+                "total_byte_size": 1000,
+                "columns": [
+                    {
+                        "total_compressed_size": 10,
+                        "total_uncompressed_size": 15,
+                        "statistics": {
+                            "min": 0,
+                            "max": 10,
+                            "null_count": 5,
+                            "distinct_count": None,
+                            "new_powerful_yet_uknown_stat": 42,
+                        },
+                        "path_in_schema": "a",
+                    },
+                    {
+                        "total_compressed_size": 7,
+                        "total_uncompressed_size": 23,
+                        "statistics": {
+                            "min": 11,
+                            "max": 20,
+                            "null_count": 1,
+                            "distinct_count": 12,
+                            "new_powerful_yet_uknown_stat": 42,
+                        },
+                        "path_in_schema": "b",
+                    },
+                ],
+            },
+            # RG 2
+            {
+                "num_rows": 50,
+                "total_byte_size": 500,
+                "columns": [
+                    {
+                        "total_compressed_size": 5,
+                        "total_uncompressed_size": 7,
+                        "statistics": {
+                            "min": 40,
+                            "max": 50,
+                            "null_count": 0,
+                            "distinct_count": None,
+                            "new_powerful_yet_uknown_stat": 42,
+                        },
+                        "path_in_schema": "a",
+                    },
+                    {
+                        "total_compressed_size": 7,
+                        "total_uncompressed_size": 23,
+                        "statistics": {
+                            "min": 0,
+                            "max": 20,
+                            "null_count": 0,
+                            "distinct_count": None,
+                            "new_powerful_yet_uknown_stat": 42,
+                        },
+                        "path_in_schema": "b",
+                    },
+                ],
+            },
+        ],
+    }
+
+    expected = {
+        "top-level-file-stat": "not-interested",
+        "num_rows": 150,
+        "total_byte_size": 1500,
+        "columns": [
+            {
+                "path_in_schema": "a",
+                "total_compressed_size": 15,
+                "total_uncompressed_size": 22,
+                "statistics": {
+                    "min": 0,
+                    "max": 50,
+                },
+            },
+            {
+                "path_in_schema": "b",
+                "total_compressed_size": 14,
+                "total_uncompressed_size": 46,
+                "statistics": {
+                    "min": 0,
+                    "max": 20,
+                },
+            },
+        ],
+    }
+    actual = _aggregate_statistics_to_file([file_in])
+    assert len(actual) == 1
+    assert actual[0] == expected
+
+
+def test_combine_statistics():
+    file_in = [
+        # File 1
+        {
+            "top-level-file-stat": "not-interested",
+            "num_row_groups": 2,
+            "row_groups": [
+                # RG 1
+                {
+                    "num_rows": 200,
+                    "total_byte_size": 1000,
+                    "columns": [
+                        {
+                            "total_compressed_size": 10,
+                            "total_uncompressed_size": 15,
+                            "statistics": {
+                                "min": 0,
+                                "max": 10,
+                                "null_count": 5,
+                                "distinct_count": None,
+                                "new_powerful_yet_uknown_stat": 42,
+                            },
+                            "path_in_schema": "a",
+                        },
+                        {
+                            "total_compressed_size": 7,
+                            "total_uncompressed_size": 23,
+                            "statistics": {
+                                "min": 11,
+                                "max": 20,
+                                "null_count": 1,
+                                "distinct_count": 12,
+                                "new_powerful_yet_uknown_stat": 42,
+                            },
+                            "path_in_schema": "b",
+                        },
+                    ],
+                },
+                # RG 2
+                {
+                    "num_rows": 50,
+                    "total_byte_size": 500,
+                    "columns": [
+                        {
+                            "total_compressed_size": 5,
+                            "total_uncompressed_size": 7,
+                            "statistics": {
+                                "min": 40,
+                                "max": 50,
+                                "null_count": 0,
+                                "distinct_count": None,
+                                "new_powerful_yet_uknown_stat": 42,
+                            },
+                            "path_in_schema": "a",
+                        },
+                        {
+                            "total_compressed_size": 7,
+                            "total_uncompressed_size": 23,
+                            "statistics": {
+                                "min": 0,
+                                "max": 20,
+                                "null_count": 0,
+                                "distinct_count": None,
+                                "new_powerful_yet_uknown_stat": 42,
+                            },
+                            "path_in_schema": "b",
+                        },
+                    ],
+                },
+            ],
+        },
+        # File 2
+        {
+            "top-level-file-stat": "not-interested",
+            "num_row_groups": 1,
+            "row_groups": [
+                # RG 1
+                {
+                    "num_rows": 100,
+                    "total_byte_size": 2000,
+                    "columns": [
+                        {
+                            "total_compressed_size": 10,
+                            "total_uncompressed_size": 15,
+                            "statistics": {
+                                "min": 0,
+                                "max": 10,
+                                "null_count": 5,
+                                "distinct_count": None,
+                                "new_powerful_yet_uknown_stat": 42,
+                            },
+                            "path_in_schema": "a",
+                        },
+                        {
+                            "total_compressed_size": 7,
+                            "total_uncompressed_size": 23,
+                            "statistics": {
+                                "min": 11,
+                                "max": 20,
+                                "null_count": 1,
+                                "distinct_count": 12,
+                                "new_powerful_yet_uknown_stat": 42,
+                            },
+                            "path_in_schema": "b",
+                        },
+                    ],
+                },
+            ],
+        },
+    ]
+    actual = _combine_stats(file_in)
+    expected = {
+        "num_rows": ((200 + 50) + 100) // 2,
+        "total_byte_size": ((1000 + 500) + 2000) // 2,
+        "num_row_groups": 1.5,
+        "columns": [
+            {
+                "total_compressed_size": ((10 + 5) + 10) / 2,
+                "total_uncompressed_size": ((15 + 7) + 15) / 2,
+                "path_in_schema": "a",
+            },
+            {
+                "total_compressed_size": ((7 + 7) + 7) / 2,
+                "total_uncompressed_size": ((23 + 23) + 23) / 2,
+                "path_in_schema": "b",
+            },
+        ],
+    }
+    assert actual == expected

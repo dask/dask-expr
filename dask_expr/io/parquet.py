@@ -746,21 +746,7 @@ class ReadParquetPyarrowFS(ReadParquet):
         idxs = self.sample_statistics()
         files_to_consider = np.array(self._dataset_info["all_files"])[idxs]
         stats = [_STATS_CACHE[tokenize(finfo)] for finfo in files_to_consider]
-        agg_cols = {
-            "total_compressed_size": statistics.mean,
-            "total_uncompressed_size": statistics.mean,
-            "path_in_schema": lambda x: set(x).pop(),
-        }
-        return _agg_dicts(
-            _aggregate_statistics_to_file(stats),
-            {
-                "num_rows": statistics.mean,
-                "num_row_groups": statistics.mean,
-                "serialized_size": statistics.mean,
-                "total_byte_size": statistics.mean,
-                "columns": partial(_aggregate_columns, agg_cols=agg_cols),
-            },
-        )
+        return _combine_stats(stats)
 
     def load_statistics(self, files=None, fragments=None, scheduler=None):
         if files is None:
@@ -1784,3 +1770,23 @@ def _collect_statistics_plan(file_infos, fragments):
         _gather_statistics(batch)
         for batch in toolz.itertoolz.partition_all(20, to_collect)
     ]
+
+
+def _combine_stats(stats):
+    """Combine multiple file-level statistics into a single dict of metrics that
+    represent the average values of the parquet statistics"""
+    agg_cols = {
+        "total_compressed_size": statistics.mean,
+        "total_uncompressed_size": statistics.mean,
+        "path_in_schema": lambda x: set(x).pop(),
+    }
+    return _agg_dicts(
+        _aggregate_statistics_to_file(stats),
+        {
+            "num_rows": statistics.mean,
+            "num_row_groups": statistics.mean,
+            "serialized_size": statistics.mean,
+            "total_byte_size": statistics.mean,
+            "columns": partial(_aggregate_columns, agg_cols=agg_cols),
+        },
+    )
