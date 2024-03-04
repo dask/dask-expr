@@ -87,9 +87,6 @@ NONE_LABEL = "__null_dask_index__"
 _CACHED_PLAN_SIZE = 10
 _cached_plan = {}
 
-import pickle
-import weakref
-
 
 class FragmentWrapper:
     _filesystems = weakref.WeakValueDictionary()
