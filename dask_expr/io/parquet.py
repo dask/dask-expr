@@ -130,7 +130,7 @@ class FragmentWrapper:
             if fs is None:
                 fs = pickle.loads(fs_raw)
                 FragmentWrapper._filesystems[fs_raw] = fs
-            # arrow doens't keep the python object alive so if we want to reuse
+            # arrow doesn't keep the python object alive so if we want to reuse
             # we need to keep a reference
             self._fs = fs
             self._fragment = pqformat.make_fragment(
@@ -149,65 +149,6 @@ class FragmentWrapper:
     def __reduce__(self):
         self.pack()
         return FragmentWrapper, (None, None, self._fragment_packed)
-
-
-class FragmentWrapper:
-    _filesystems = weakref.WeakValueDictionary()
-
-    def __init__(
-        self, fragment=None, file_size=None, fragment_packed=None, include_meta=False
-    ) -> None:
-        """Wrap a pyarrow Fragment to only deserialize when needed."""
-        # https://github.com/apache/arrow/issues/40279
-        self._fragment = fragment
-        self._fragment_packed = fragment_packed
-        self._file_size = file_size
-        self.include_meta = include_meta
-
-    def pack(self):
-        if self._fragment_packed is None:
-            self._fragment_packed = (
-                self._fragment.format,
-                self._fragment.path,
-                pickle.dumps(self._fragment.filesystem),
-                self._fragment.partition_expression,
-                self._fragment.row_groups if self.include_meta else None,
-                self._file_size,
-            )
-        self._fragment = None
-
-    def unpack(self):
-        if self._fragment is None:
-            (
-                pqformat,
-                path,
-                fs_raw,
-                partition_expression,
-                row_groups,
-                file_size,
-            ) = self._fragment_packed
-            fs = FragmentWrapper._filesystems.get(fs_raw)
-            if fs is None:
-                fs = pickle.loads(fs_raw)
-                FragmentWrapper._filesystems[fs_raw] = fs
-
-            self._fragment = pqformat.make_fragment(
-                path,
-                filesystem=fs,
-                partition_expression=partition_expression,
-                row_groups=row_groups,
-                file_size=file_size,
-            )
-        self._fragment_packed = None
-
-    @property
-    def fragment(self):
-        self.unpack()
-        return self._fragment
-
-    def __reduce__(self):
-        self.pack()
-        return FragmentWrapper, (None, None, self._fragment_packed, self.include_meta)
 
 
 def _control_cached_plan(key):
