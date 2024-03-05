@@ -4643,7 +4643,7 @@ def read_parquet(
     categories=None,
     index=None,
     storage_options=None,
-    dtype_backend=None,
+    dtype_backend=no_default,
     calculate_divisions=False,
     ignore_metadata_file=False,
     metadata_task_size=None,

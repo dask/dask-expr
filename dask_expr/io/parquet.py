@@ -52,6 +52,7 @@ from dask_expr._expr import (
     Or,
     Projection,
     determine_column_projection,
+    no_default,
 )
 from dask_expr._reductions import Len
 from dask_expr._util import _convert_to_list, _tokenize_deterministic
@@ -528,6 +529,8 @@ def _determine_type_mapper(*, user_types_mapper, dtype_backend):
         type_mappers.append(_convert_decimal_type)
 
     # and then nullable types
+    if dtype_backend == no_default:
+        dtype_backend = "pyarrow"
     if dtype_backend == "numpy_nullable":
         type_mappers.append(PYARROW_NULLABLE_DTYPE_MAPPING.get)
     elif dtype_backend == "pyarrow":

@@ -80,7 +80,7 @@ def test_pyarrow_filesystem(parquet_file):
     filesystem = fs.LocalFileSystem()
 
     df_pa = read_parquet(parquet_file, filesystem=filesystem)
-    df = read_parquet(parquet_file)
+    df = read_parquet(parquet_file, dtype_backend="pyarrow")
     assert assert_eq(df, df_pa)
 
 
@@ -106,7 +106,11 @@ def test_pyarrow_filesystem_types_mapper(parquet_file, types_mapper):
         filesystem=filesystem,
         arrow_to_pandas={"types_mapper": types_mapper},
     )
-    df = read_parquet(parquet_file, arrow_to_pandas={"types_mapper": types_mapper})
+    df = read_parquet(
+        parquet_file,
+        arrow_to_pandas={"types_mapper": types_mapper},
+        dtype_backend="pyarrow",
+    )
     assert assert_eq(df, df_pa)
 
 
@@ -175,8 +179,8 @@ def test_predicate_pushdown(tmpdir):
             "c": range(50),
             "d": [6, 7] * 25,
             "e": [8, 9] * 25,
-        }
-    )
+        },
+    ).convert_dtypes(dtype_backend="pyarrow")
     fn = _make_file(tmpdir, df=original)
     df = read_parquet(fn, filesystem="arrow")
     assert_eq(df, original)
@@ -209,7 +213,7 @@ def test_predicate_pushdown_compound(tmpdir):
             "d": [6, 7] * 25,
             "e": [8, 9] * 25,
         }
-    )
+    ).convert_dtypes(dtype_backend="pyarrow")
     fn = _make_file(tmpdir, df=pdf)
     df = read_parquet(fn, filesystem="arrow")
 
