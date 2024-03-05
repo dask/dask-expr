@@ -119,6 +119,13 @@ def test_info(df, verbose, buf, memory_usage):
         raise NotImplementedError(f"Case not covered for kwargs: {kwargs}")
 
 
+def test_column_projection_modify_list(df, pdf):
+    cols = ["x"]
+    result = df[cols]
+    cols.append("bla")
+    assert_eq(result, pdf[["x"]])
+
+
 def test_setitem(pdf, df):
     pdf = pdf.copy()
     pdf["z"] = pdf.x + pdf.y
@@ -938,7 +945,7 @@ def test_isin_repr(df):
     result = df.isin([1, 2])
     # This was raising previously
     result = result.__repr__()
-    assert "<dask_expr.expr.DataFrame: expr=Isin(frame=df, values=" in result
+    assert "Expr=Isin(frame=df, values=" in result
 
 
 def test_round(pdf):

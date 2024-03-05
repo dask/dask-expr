@@ -957,69 +957,69 @@ class ReadParquetPyarrowFS(ReadParquet):
         return np.array(self._dataset_info["fragments"])
 
     def _filtered_task(self, index: int):
+        columns = self.columns.copy()
+        index_name = self.index.name
+        if self.index is not None:
+            index_name = self.index.name
+        schema = self._dataset_info["schema"].remove_metadata()
+        if index_name:
+            if columns is None:
+                columns = list(schema.names)
+            columns.append(index_name)
         return (
-            _fragment_to_pandas,
-            FragmentWrapper(self.fragments[index]),
-            self.columns,
-            self.filters,
-            self._dataset_info["schema"].remove_metadata(),
-            self.index.name if self.index is not None else None,
+            ReadParquetPyarrowFS._table_to_pandas,
+            (
+                ReadParquetPyarrowFS._fragment_to_table,
+                FragmentWrapper(self.fragments[index]),
+                self.filters,
+                columns,
+                schema,
+            ),
+            index_name,
         )
 
-    @property
-    def _fusion_compression_factor(self):
-        if self.operand("columns") is None:
-            return 1
-        approx_stats = self.approx_statistics()
-        total_uncompressed = 0
-        after_projection = 0
-        col_op = self.operand("columns")
-        for col in approx_stats["columns"]:
-            total_uncompressed += col["total_uncompressed_size"]
-            if col["path_in_schema"] in col_op:
-                after_projection += col["total_uncompressed_size"]
-
-        return max(after_projection / total_uncompressed, 0.001)
-
-
-def _fragment_to_pandas(fragment_wrapper, columns, filters, schema, index_name):
-    fragment = fragment_wrapper.fragment
-    if isinstance(filters, list):
-        filters = pq.filters_to_expression(filters)
-    if index_name is not None and columns is not None and index_name not in columns:
-        columns = columns.copy()
-        columns.append(index_name)
-    # TODO: There should be a way for users to define the type mapper
-    table = fragment.to_table(
-        schema=schema,
-        columns=columns,
-        filter=filters,
-        # Batch size determines how many rows are read at once and will
-        # cause the underlying array to be split into chunks of this size
-        # (max). We'd like to avoid fragmentation as much as possible and
-        # and to set this to something like inf but we have to set a finite,
-        # positive number.
-        # In the presence of row groups, the underlying array will still be
-        # chunked per rowgroup
-        batch_size=10_000_000,
-        fragment_scan_options=pa.dataset.ParquetFragmentScanOptions(
-            pre_buffer=True,
-            cache_options=pa.CacheOptions(
-                hole_size_limit=parse_bytes("4 MiB"),
-                range_size_limit=parse_bytes("32.00 MiB"),
+    @staticmethod
+    def _fragment_to_table(fragment_wrapper, filters, columns, schema):
+        if isinstance(fragment_wrapper, FragmentWrapper):
+            fragment = fragment_wrapper.fragment
+        else:
+            fragment = fragment_wrapper
+        if isinstance(filters, list):
+            filters = pq.filters_to_expression(filters)
+        return fragment.to_table(
+            schema=schema,
+            columns=columns,
+            filter=filters,
+            # Batch size determines how many rows are read at once and will
+            # cause the underlying array to be split into chunks of this size
+            # (max). We'd like to avoid fragmentation as much as possible and
+            # and to set this to something like inf but we have to set a finite,
+            # positive number.
+            # In the presence of row groups, the underlying array will still be
+            # chunked per rowgroup
+            batch_size=10_000_000,
+            fragment_scan_options=pa.dataset.ParquetFragmentScanOptions(
+                pre_buffer=True,
+                cache_options=pa.CacheOptions(
+                    hole_size_limit=parse_bytes("4 MiB"),
+                    range_size_limit=parse_bytes("32.00 MiB"),
+                ),
             ),
-        ),
-        # TODO: Reconsider this. The OMP_NUM_THREAD variable makes it harmful to enable this
-        use_threads=True,
-    )
-    df = table.to_pandas(
-        types_mapper=_determine_type_mapper(),
-        use_threads=False,
-        self_destruct=True,
-    )
-    if index_name is not None:
-        df = df.set_index(index_name)
-    return df
+            # TODO: Reconsider this. The OMP_NUM_THREAD variable makes it harmful to enable this
+            use_threads=True,
+        )
+
+    @staticmethod
+    def _table_to_pandas(table, index_name):
+        df = table.to_pandas(
+            types_mapper=_determine_type_mapper(),
+            use_threads=False,
+            self_destruct=True,
+            ignore_metadata=True,
+        )
+        if index_name is not None:
+            df = df.set_index(index_name)
+        return df
 
 
 class ReadParquetFSSpec(ReadParquet):
