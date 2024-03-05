@@ -768,6 +768,10 @@ class ReadParquetPyarrowFS(ReadParquet):
 
         In the special case of n=3 this corresponds to min/median/max.
 
+        Returns
+        -------
+        ixs: list[int]
+            The indices of files that were sampled
         """
         frags = self.fragments_unsorted
         finfos = np.array(self._dataset_info["all_files"])
@@ -784,8 +788,11 @@ class ReadParquetPyarrowFS(ReadParquet):
             ixs.append(sort_ix)
             finfos_sampled.append(finfos[sort_ix])
             frags_samples.append(frags[sort_ix])
-        # TODO: if we use a sync scheduler we have to silence this stupid warning
-        self.load_statistics(finfos_sampled, frags_samples, scheduler="sync")
+        # Note: Providing get explicitly avoids a warning that is raised if a
+        # distributed client is in context
+        from dask.local import get_sync
+
+        self.load_statistics(finfos_sampled, frags_samples, scheduler=get_sync)
         return ixs
 
     @cached_property
