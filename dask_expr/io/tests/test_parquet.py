@@ -84,6 +84,17 @@ def test_pyarrow_filesystem(parquet_file):
     assert assert_eq(df, df_pa)
 
 
+@pytest.mark.parametrize("dtype_backend", ["pyarrow", "numpy_nullable", None])
+def test_pyarrow_filesystem_dtype_backend(parquet_file, dtype_backend):
+    filesystem = fs.LocalFileSystem()
+
+    df_pa = read_parquet(
+        parquet_file, filesystem=filesystem, dtype_backend=dtype_backend
+    )
+    df = read_parquet(parquet_file, dtype_backend=dtype_backend)
+    assert assert_eq(df, df_pa)
+
+
 def test_pyarrow_filesystem_serialize(parquet_file):
     filesystem = fs.LocalFileSystem()
 

@@ -4644,6 +4644,7 @@ def read_parquet(
     index=None,
     storage_options=None,
     dtype_backend=None,
+    types_mapper=None,
     calculate_divisions=False,
     ignore_metadata_file=False,
     metadata_task_size=None,
@@ -4720,6 +4721,7 @@ def read_parquet(
                 storage_options=storage_options,
                 filesystem=filesystem,
                 ignore_metadata_file=ignore_metadata_file,
+                types_mapper=types_mapper,
                 kwargs=kwargs,
                 _series=isinstance(columns, str),
             )

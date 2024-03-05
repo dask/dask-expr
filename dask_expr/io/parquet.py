@@ -29,6 +29,7 @@ from dask.dataframe.io.parquet.core import (
 )
 from dask.dataframe.io.parquet.utils import _split_user_options
 from dask.dataframe.io.utils import _is_local_fs
+from dask.dataframe.utils import pyarrow_strings_enabled
 from dask.delayed import delayed
 from dask.utils import apply, funcname, natural_sort_key, parse_bytes, typename
 from fsspec.utils import stringify_path
@@ -498,9 +499,7 @@ def to_parquet(
     return out
 
 
-def _determine_type_mapper(
-    *, user_types_mapper=None, dtype_backend=None, convert_string=True
-):
+def _determine_type_mapper(*, user_types_mapper, dtype_backend):
     type_mappers = []
 
     def pyarrow_type_mapper(pyarrow_dtype):
@@ -516,7 +515,7 @@ def _determine_type_mapper(
         type_mappers.append(user_types_mapper)
 
     # next in priority is converting strings
-    if convert_string:
+    if pyarrow_strings_enabled():
         type_mappers.append({pa.string(): pd.StringDtype("pyarrow")}.get)
         type_mappers.append({pa.date32(): pd.ArrowDtype(pa.date32())}.get)
         type_mappers.append({pa.date64(): pd.ArrowDtype(pa.date64())}.get)
@@ -654,6 +653,7 @@ class ReadParquetPyarrowFS(ReadParquet):
         "storage_options",
         "filesystem",
         "ignore_metadata_file",
+        "types_mapper",
         "kwargs",
         "_partitions",
         "_series",
@@ -667,6 +667,7 @@ class ReadParquetPyarrowFS(ReadParquet):
         "storage_options": None,
         "filesystem": None,
         "ignore_metadata_file": True,
+        "types_mapper": None,
         "kwargs": None,
         "_partitions": None,
         "_series": False,
@@ -785,14 +786,22 @@ class ReadParquetPyarrowFS(ReadParquet):
             self.columns,
             self.filters,
             self._dataset_info["schema"].remove_metadata(),
+            self.types_mapper,
+            self.kwargs.get("dtype_backend"),
         )
 
 
-def _fragment_to_pandas(fragment_wrapper, columns, filters, schema):
+def _fragment_to_pandas(
+    fragment_wrapper,
+    columns,
+    filters,
+    schema,
+    user_types_mapper,
+    dtype_backend,
+):
     fragment = fragment_wrapper.fragment
     if isinstance(filters, list):
         filters = pq.filters_to_expression(filters)
-    # TODO: There should be a way for users to define the type mapper
     table = fragment.to_table(
         schema=schema,
         columns=columns,
@@ -816,7 +825,9 @@ def _fragment_to_pandas(fragment_wrapper, columns, filters, schema):
         use_threads=True,
     )
     df = table.to_pandas(
-        types_mapper=_determine_type_mapper(),
+        types_mapper=_determine_type_mapper(
+            user_types_mapper=user_types_mapper, dtype_backend=dtype_backend
+        ),
         use_threads=False,
         self_destruct=True,
     )
