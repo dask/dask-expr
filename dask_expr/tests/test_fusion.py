@@ -118,7 +118,7 @@ def test_fuse_broadcast_deps():
 
     query = df.merge(df2).merge(df3)
     # from_pandas is not fused together
-    assert len(query.optimize().__dask_graph__()) == 2  # 4
+    assert len(query.optimize().__dask_graph__()) == 2 + 4
     assert_eq(query, pdf.merge(pdf2).merge(pdf3))
 
 
