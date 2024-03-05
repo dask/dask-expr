@@ -662,7 +662,6 @@ class ReadParquetPyarrowFS(ReadParquet):
         "ignore_metadata_file",
         "calculate_divisions",
         "kwargs",
-        "_statistics",
         "_partitions",
         "_series",
         "_dataset_info_cache",
@@ -676,9 +675,7 @@ class ReadParquetPyarrowFS(ReadParquet):
         "filesystem": None,
         "ignore_metadata_file": True,
         "calculate_divisions": False,
-        "statistics": None,
         "kwargs": None,
-        "_statistics": None,
         "_partitions": None,
         "_series": False,
         "_dataset_info_cache": None,
@@ -793,6 +790,10 @@ class ReadParquetPyarrowFS(ReadParquet):
 
     @cached_property
     def raw_statistics(self):
+        """Parquet statstics for every file in the dataset.
+        The statistics do not include all the metadata that is stored in the
+        file but only a subset. See also `_extract_stats`.
+        """
         self.load_statistics()
         return [
             _STATS_CACHE[tokenize(finfo)] for finfo in self._dataset_info["all_files"]
@@ -800,13 +801,18 @@ class ReadParquetPyarrowFS(ReadParquet):
 
     @cached_property
     def aggregated_statistics(self):
+        """Aggregate statistics for every partition in the dataset.
+
+        These statistics aggregated the row group statistics to partition level
+        such that min/max/total_compressed_size/etc. corresponds to the entire
+        partition instead of individual row groups.
+        """
         return _aggregate_statistics_to_file(self.raw_statistics)
 
     def _get_lengths(self):
-        # TODO: Fitlers that only filter partition_expr can be used as well
+        # TODO: Filters that only filter partition_expr can be used as well
         if not self.filters:
             return tuple(stats["num_rows"] for stats in self.aggregated_statistics)
-        return None
 
     @cached_property
     def _dataset_info(self):
@@ -912,12 +918,27 @@ class ReadParquetPyarrowFS(ReadParquet):
 
     @cached_property
     def fragments(self):
+        """Return all fragments in the dataset after filtering in the order as
+        expected by the divisions.
+
+        See also
+        --------
+        ReadParquetPyarrowFS.fragments_unsorted
+        """
         if self._fragment_sort_index() is not None:
             return self.fragments_unsorted[self._fragment_sort_index()]
         return self.fragments_unsorted
 
     @property
     def fragments_unsorted(self):
+        """All fragments in the dataset after filtering.
+
+        No guarantees on ordering. This is ordered as the files are listed.
+
+        See also
+        --------
+        ReadParquetPyarrowFS.fragments
+        """
         if self.filters is not None:
             if self._dataset_info["using_metadata_file"]:
                 ds = self._dataset_info["dataset"]

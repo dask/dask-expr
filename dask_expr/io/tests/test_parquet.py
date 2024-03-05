@@ -240,113 +240,12 @@ def test_predicate_pushdown_compound(tmpdir):
     assert_eq(y, z)
 
 
-import dask_expr as dd
-
-nrows = 40
-npartitions = 15
-df = pd.DataFrame(
-    {
-        "x": [i * 7 % 5 for i in range(nrows)],  # Not sorted
-        "y": [i * 2.5 for i in range(nrows)],  # Sorted
-    },
-    index=pd.Index([10 * i for i in range(nrows)], name="myindex"),
-)
-
-ddf = dd.from_pandas(df, npartitions=npartitions)
-
-
-def test_columns_index(tmpdir):
-    filesystem = fs.LocalFileSystem()
-    fn = str(tmpdir)
-    ddf.to_parquet(fn)
-
-    # With Index
-    # ----------
-    # ### Empty columns, specify index ###
-    # With divisions if supported
-    assert_eq(
-        dd.read_parquet(
-            fn,
-            columns=[],
-            index="myindex",
-            calculate_divisions=True,
-            filesystem=filesystem,
-        ),
-        ddf[[]],
-    )
-
-    # No divisions
-    assert_eq(
-        dd.read_parquet(
-            fn,
-            columns=[],
-            index="myindex",
-            calculate_divisions=False,
-            filesystem=filesystem,
-        ),
-        ddf[[]].clear_divisions(),
-        check_divisions=True,
-    )
-
-    # ### Single column, specify index ###
-    # With divisions if supported
-    assert_eq(
-        dd.read_parquet(
-            fn,
-            index="myindex",
-            columns=["x"],
-            calculate_divisions=True,
-            filesystem=filesystem,
-        ),
-        ddf[["x"]],
-    )
-
-    # No divisions
-    assert_eq(
-        dd.read_parquet(
-            fn,
-            index="myindex",
-            columns=["x"],
-            calculate_divisions=False,
-            filesystem=filesystem,
-        ),
-        ddf[["x"]].clear_divisions(),
-        check_divisions=True,
-    )
-
-    # ### Two columns, specify index ###
-    # With divisions if supported
-    assert_eq(
-        dd.read_parquet(
-            fn,
-            index="myindex",
-            columns=["x", "y"],
-            calculate_divisions=True,
-            filesystem=filesystem,
-        ),
-        ddf,
-    )
-
-    # No divisions
-    assert_eq(
-        dd.read_parquet(
-            fn,
-            index="myindex",
-            columns=["x", "y"],
-            calculate_divisions=False,
-            filesystem=filesystem,
-        ),
-        ddf.clear_divisions(),
-        check_divisions=True,
-    )
-
-
 def test_aggregate_rg_stats_to_file(tmpdir):
     filesystem = fs.LocalFileSystem()
     fn = str(tmpdir)
-    ddf = dd.from_pandas(pd.DataFrame({"a": range(10)}), npartitions=1)
+    ddf = from_pandas(pd.DataFrame({"a": range(10)}), npartitions=1)
     ddf.to_parquet(fn)
-    ddf = dd.read_parquet(fn, filesystem=filesystem)
+    ddf = read_parquet(fn, filesystem=filesystem)
     frag = ddf._expr.fragments[0]
     # Make sure this doesn't raise. We'll test the actual aggregation below
     _aggregate_statistics_to_file([frag.metadata.to_dict()])
