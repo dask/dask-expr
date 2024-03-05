@@ -32,6 +32,7 @@ from dask.dataframe.io.parquet.core import (
 )
 from dask.dataframe.io.parquet.utils import _split_user_options
 from dask.dataframe.io.utils import _is_local_fs
+from dask.dataframe.utils import pyarrow_strings_enabled
 from dask.delayed import delayed
 from dask.utils import apply, funcname, natural_sort_key, parse_bytes, typename
 from fsspec.utils import stringify_path
@@ -54,6 +55,7 @@ from dask_expr._expr import (
     Or,
     Projection,
     determine_column_projection,
+    no_default,
 )
 from dask_expr._reductions import Len
 from dask_expr._util import _convert_to_list, _tokenize_deterministic
@@ -504,9 +506,7 @@ def to_parquet(
     return out
 
 
-def _determine_type_mapper(
-    *, user_types_mapper=None, dtype_backend=None, convert_string=True
-):
+def _determine_type_mapper(*, user_types_mapper, dtype_backend):
     type_mappers = []
 
     def pyarrow_type_mapper(pyarrow_dtype):
@@ -522,7 +522,7 @@ def _determine_type_mapper(
         type_mappers.append(user_types_mapper)
 
     # next in priority is converting strings
-    if convert_string:
+    if pyarrow_strings_enabled():
         type_mappers.append({pa.string(): pd.StringDtype("pyarrow")}.get)
         type_mappers.append({pa.date32(): pd.ArrowDtype(pa.date32())}.get)
         type_mappers.append({pa.date64(): pd.ArrowDtype(pa.date64())}.get)
@@ -535,6 +535,8 @@ def _determine_type_mapper(
         type_mappers.append(_convert_decimal_type)
 
     # and then nullable types
+    if dtype_backend == no_default:
+        dtype_backend = "pyarrow"
     if dtype_backend == "numpy_nullable":
         type_mappers.append(PYARROW_NULLABLE_DTYPE_MAPPING.get)
     elif dtype_backend == "pyarrow":
@@ -661,6 +663,7 @@ class ReadParquetPyarrowFS(ReadParquet):
         "filesystem",
         "ignore_metadata_file",
         "calculate_divisions",
+        "arrow_to_pandas",
         "kwargs",
         "_partitions",
         "_series",
@@ -675,6 +678,7 @@ class ReadParquetPyarrowFS(ReadParquet):
         "filesystem": None,
         "ignore_metadata_file": True,
         "calculate_divisions": False,
+        "arrow_to_pandas": None,
         "kwargs": None,
         "_partitions": None,
         "_series": False,
@@ -1010,12 +1014,24 @@ class ReadParquetPyarrowFS(ReadParquet):
         )
 
     @staticmethod
-    def _table_to_pandas(table, index_name):
+    def _table_to_pandas(
+        table,
+        index_name,
+        arrow_to_pandas,
+        dtype_backend,
+    ):
+        if arrow_to_pandas is None:
+            arrow_to_pandas = {}
+        else:
+            arrow_to_pandas = arrow_to_pandas.copy()
         df = table.to_pandas(
-            types_mapper=_determine_type_mapper(),
-            use_threads=False,
-            self_destruct=True,
-            ignore_metadata=True,
+            types_mapper=_determine_type_mapper(
+                user_types_mapper=arrow_to_pandas.pop("types_mapper", None),
+                dtype_backend=dtype_backend,
+            ),
+            use_threads=arrow_to_pandas.get("use_threads", False),
+            self_destruct=arrow_to_pandas.get("self_destruct", True),
+            **arrow_to_pandas,
         )
         if index_name is not None:
             df = df.set_index(index_name)
