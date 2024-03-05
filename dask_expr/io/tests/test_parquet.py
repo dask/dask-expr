@@ -95,6 +95,19 @@ def test_pyarrow_filesystem_dtype_backend(parquet_file, dtype_backend):
     assert assert_eq(df, df_pa)
 
 
+@pytest.mark.parametrize("types_mapper", [None, lambda x: x])
+def test_pyarrow_filesystem_types_mapper(parquet_file, types_mapper):
+    filesystem = fs.LocalFileSystem()
+
+    df_pa = read_parquet(
+        parquet_file,
+        filesystem=filesystem,
+        arrow_to_pandas={"types_mapper": types_mapper},
+    )
+    df = read_parquet(parquet_file, arrow_to_pandas={"types_mapper": types_mapper})
+    assert assert_eq(df, df_pa)
+
+
 def test_pyarrow_filesystem_serialize(parquet_file):
     filesystem = fs.LocalFileSystem()
 

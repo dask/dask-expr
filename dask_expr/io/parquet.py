@@ -653,7 +653,7 @@ class ReadParquetPyarrowFS(ReadParquet):
         "storage_options",
         "filesystem",
         "ignore_metadata_file",
-        "types_mapper",
+        "arrow_to_pandas",
         "kwargs",
         "_partitions",
         "_series",
@@ -667,7 +667,7 @@ class ReadParquetPyarrowFS(ReadParquet):
         "storage_options": None,
         "filesystem": None,
         "ignore_metadata_file": True,
-        "types_mapper": None,
+        "arrow_to_pandas": None,
         "kwargs": None,
         "_partitions": None,
         "_series": False,
@@ -786,7 +786,7 @@ class ReadParquetPyarrowFS(ReadParquet):
             self.columns,
             self.filters,
             self._dataset_info["schema"].remove_metadata(),
-            self.types_mapper,
+            self.arrow_to_pandas,
             self.kwargs.get("dtype_backend"),
         )
 
@@ -796,7 +796,7 @@ def _fragment_to_pandas(
     columns,
     filters,
     schema,
-    user_types_mapper,
+    arrow_to_pandas,
     dtype_backend,
 ):
     fragment = fragment_wrapper.fragment
@@ -824,12 +824,19 @@ def _fragment_to_pandas(
         # TODO: Reconsider this. The OMP_NUM_THREAD variable makes it harmful to enable this
         use_threads=True,
     )
+    if arrow_to_pandas is None:
+        arrow_to_pandas = {}
+    else:
+        arrow_to_pandas = arrow_to_pandas.copy()
+
     df = table.to_pandas(
         types_mapper=_determine_type_mapper(
-            user_types_mapper=user_types_mapper, dtype_backend=dtype_backend
+            user_types_mapper=arrow_to_pandas.pop("types_mapper", None),
+            dtype_backend=dtype_backend,
         ),
-        use_threads=False,
-        self_destruct=True,
+        use_threads=arrow_to_pandas.get("use_threads", False),
+        self_destruct=arrow_to_pandas.get("self_destruct", True),
+        **arrow_to_pandas,
     )
     return df
 
