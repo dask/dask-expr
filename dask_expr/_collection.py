@@ -400,6 +400,9 @@ class FrameBase(DaskMethodsMixin):
             other = other.copy()
         return new_collection(self.expr.__getitem__(other))
 
+    def __dask_tokenize__(self):
+        return type(self).__name__, self._expr._name
+
     def __bool__(self):
         raise ValueError(
             f"The truth value of a {self.__class__.__name__} is ambiguous. "

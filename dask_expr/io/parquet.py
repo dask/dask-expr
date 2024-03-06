@@ -625,7 +625,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             return header
         return super()._tree_repr_argument_construction(i, op, header)
 
-    @property
+    @cached_property
     def _meta(self):
         meta = self._dataset_info["base_meta"]
         columns = _convert_to_list(self.operand("columns"))
@@ -745,17 +745,12 @@ class ReadParquetPyarrowFS(ReadParquet):
         stats = [_STATS_CACHE[tokenize(finfo)] for finfo in files_to_consider]
         return _combine_stats(stats)
 
-    def load_statistics(self, files=None, fragments=None, scheduler=None):
+    def load_statistics(self, files=None, fragments=None):
         if files is None:
             files = self._dataset_info["all_files"]
         if fragments is None:
             fragments = self.fragments_unsorted
-        token_stats = flatten(
-            dask.compute(
-                _collect_statistics_plan(files, fragments),
-                scheduler=scheduler,
-            )
-        )
+        token_stats = flatten(dask.compute(_collect_statistics_plan(files, fragments)))
         for token, stats in token_stats:
             _STATS_CACHE[token] = stats
 
@@ -788,11 +783,7 @@ class ReadParquetPyarrowFS(ReadParquet):
             ixs.append(sort_ix)
             finfos_sampled.append(finfos[sort_ix])
             frags_samples.append(frags[sort_ix])
-        # Note: Providing get explicitly avoids a warning that is raised if a
-        # distributed client is in context
-        from dask.local import get_sync
-
-        self.load_statistics(finfos_sampled, frags_samples, scheduler=get_sync)
+        self.load_statistics(finfos_sampled, frags_samples)
         return ixs
 
     @cached_property
@@ -1738,13 +1729,13 @@ def _aggregate_statistics_to_file(stats):
 
 @dask.delayed
 def _gather_statistics(frags):
+    @dask.delayed
     def _collect_statistics(token_fragment):
         return token_fragment[0], _extract_stats(token_fragment[1].metadata.to_dict())
 
-    from concurrent.futures import ThreadPoolExecutor
-
-    with ThreadPoolExecutor() as tpe:
-        return list(tpe.map(_collect_statistics, frags))
+    return dask.compute(
+        list(_collect_statistics(frag) for frag in frags), scheduler="threading"
+    )[0]
 
 
 def _collect_statistics_plan(file_infos, fragments):
