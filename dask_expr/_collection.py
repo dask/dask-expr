@@ -276,6 +276,7 @@ def _wrap_unary_expr_op(self, op=None):
     return new_collection(getattr(self.expr, op)())
 
 
+_WARN_ANNOTATIONS = True
 #
 # Collection classes
 #
@@ -290,7 +291,9 @@ class FrameBase(DaskMethodsMixin):
     __dask_optimize__ = staticmethod(lambda dsk, keys, **kwargs: dsk)
 
     def __init__(self, expr):
-        if annot := get_annotations():
+        global _WARN_ANNOTATIONS
+        if _WARN_ANNOTATIONS and (annot := get_annotations()):
+            _WARN_ANNOTATIONS = False
             warnings.warn(
                 f"Dask annotations {annot} detected. Annotations will be ignored when using query-planning."
             )
