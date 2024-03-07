@@ -177,7 +177,7 @@ class FusedParquetIO(FusedIO):
             )
             for frag, filter in frag_filters
         )
-        table = pa.concat_tables(tables, promote_options="permissive"))
+        table = pa.concat_tables(tables, promote_options="permissive")
         return ReadParquetPyarrowFS._table_to_pandas(table, *to_pandas_args)
 
     def _task(self, index: int):
