@@ -750,7 +750,7 @@ class ReadParquetPyarrowFS(ReadParquet):
         return _combine_stats(stats)
 
     @cached_property
-    def injective_mapping_columns(self):
+    def unique_partition_mapping_columns(self):
         # TODO This is a poor name
         if self.calculate_divisions:
             return {

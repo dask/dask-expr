@@ -92,7 +92,7 @@ class ShuffleBase(Expr):
         return [self.frame, self.partitioning_index]
 
     @property
-    def injective_mapping_columns(self):
+    def unique_partition_mapping_columns(self):
         return {self.partition_index}
 
     def _simplify_up(self, parent, dependents):
@@ -808,7 +808,7 @@ class SetIndex(BaseSetIndexSortValues):
     }
     _filter_passthrough = True
 
-    def injective_mapping_columns(self):
+    def unique_partition_mapping_columns(self):
         return {tuple(self.other.columns)}
 
     @property

@@ -407,7 +407,7 @@ class Expr(core.Expr):
         except Exception:
             raise
 
-    def injective_mapping_columns(self):
+    def unique_partition_mapping_columns(self):
         return set()
 
     @property

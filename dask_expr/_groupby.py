@@ -880,7 +880,8 @@ class GroupByApply(Expr, GroupByBase):
     @property
     def need_to_shuffle(self):
         if any(
-            set(self.by) >= set(cols) for cols in self.frame.injective_mapping_columns
+            set(self.by) >= set(cols)
+            for cols in self.frame.unique_partition_mapping_columns
         ):
             return False
 

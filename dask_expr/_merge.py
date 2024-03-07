@@ -153,7 +153,7 @@ class Merge(Expr):
         return f"Merge({self._name[-7:]})"
 
     @property
-    def injective_mapping_columns(self):
+    def unique_partition_mapping_columns(self):
         return {
             self.left_on,
             self.right_on,
