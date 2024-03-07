@@ -361,9 +361,13 @@ async def test_future_in_map_partitions(c, s, a, b):
 async def test_future_in_map_partitions(c, s, a, b):
     pdf = pd.DataFrame({"x": [1, 2, 3]})
     df = from_pandas(pdf, npartitions=2)
-    df = df.astype(np.csingle)
+    df2 = df.astype(np.csingle)
     with pytest.raises(TypeError, match="p2p does not support data of type"):
-        df.shuffle("x")
+        df2.shuffle("x")
+
+    df.columns = [1]
+    with pytest.raises(TypeError, match="p2p requires all column names to be str"):
+        df.shuffle(1)
 
 
 @gen_cluster(client=True)

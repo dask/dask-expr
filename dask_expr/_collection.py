@@ -789,6 +789,14 @@ Expr={expr}"""
 
             check_dtype_support(self._meta)
 
+            if any(not isinstance(c, str) for c in self._meta.columns):
+                unsupported = {
+                    c: type(c) for c in self._meta.columns if not isinstance(c, str)
+                }
+                raise TypeError(
+                    f"p2p requires all column names to be str, found: {unsupported}",
+                )
+
         # Returned shuffled result
         return new_collection(
             RearrangeByColumn(
