@@ -40,6 +40,7 @@ def analyze(
     expr: Expr, filename: str | None = None, format: str | None = None, **kwargs: Any
 ):
     import graphviz
+    from dask.dot import graphviz_to_file
     from distributed import get_client, wait
 
     from dask_expr import new_collection
@@ -72,9 +73,9 @@ def analyze(
         filename = f"analyze-{expr._name}"
 
     if format is None:
-        format = "png"
+        format = "svg"
 
-    g = graphviz.Digraph(expr._name, filename=filename, format=format)
+    g = graphviz.Digraph(expr._name)
     g.node_attr.update(shape="record")
     while stack:
         node = stack.pop()
@@ -90,8 +91,8 @@ def analyze(
                 continue
             seen.add(dep._name)
             stack.append(dep)
-
-    g.view()
+    graphviz_to_file(g, filename, format)
+    return g
 
 
 def _add_graphviz_node(info, graph):
@@ -121,27 +122,22 @@ def _statistics_to_graphviz(statistics: dict[str, dict[str, Any]]) -> str:
     )
 
 
+_FORMAT_FNS = {"nbytes": format_bytes, "nrows": "{:,.0f}".format}
+
+
 def _metric_to_graphviz(metric: str, statistics: dict[str, Any]):
+    format_fn = _FORMAT_FNS[metric]
     quantiles = (
-        "["
-        + ", ".join(
-            [
-                format_bytes(pctl) if metric == "nbytes" else str(int(pctl))
-                for pctl in statistics.pop("quantiles")
-            ]
-        )
-        + "]"
+        "[" + ", ".join([format_fn(pctl) for pctl in statistics.pop("quantiles")]) + "]"
     )
+    count = statistics["count"]
+    total = statistics["total"]
+
     return "<BR />".join(
         [
             f"<B>{metric}:</B>",
-            *(
-                f"{label}: {format_bytes(value)}"
-                if metric == "nbytes"
-                else f"{label}: {int(value)}"
-                for label, value in statistics.items()
-            ),
-            f"quantiles: {quantiles}",
+            f"{format_fn(total / count)} ({format_fn(total)} / {count:,})",
+            f"{quantiles}",
         ]
     )
 
@@ -157,9 +153,7 @@ def _statistics_info(statistics: ExpressionStatistics):
     for metric, digest in statistics._metric_digests.items():
         info[metric] = {
             "total": digest.total,
-            "mean": digest.mean,
-            "min": digest.sketch.min(),
-            "max": digest.sketch.max(),
+            "count": digest.count,
             "quantiles": [digest.sketch.quantile(q) for q in (0, 0.25, 0.5, 0.75, 1)],
         }
     return info
