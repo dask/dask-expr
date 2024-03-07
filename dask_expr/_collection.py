@@ -4482,7 +4482,7 @@ def from_array(arr, chunksize=50_000, columns=None, meta=None):
         original_columns=columns,
         meta=meta,
     )
-    if pyarrow_strings_enabled():
+    if pyarrow_strings_enabled() and arr.dtype.kind in "OU":
         result = expr.ArrowStringConversion(result)
     return new_collection(result)
 

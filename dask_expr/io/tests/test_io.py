@@ -394,8 +394,9 @@ def test_from_array():
             assert expr.columns == ["a"]
 
 
-def test_from_array_string_conersion():
-    arr = np.array(["a", "b", "c", "d"])
+@pytest.mark.parametrize("dtype", [object, str])
+def test_from_array_string_conersion(dtype):
+    arr = np.array(["a", "b", "c", "d"], dtype=dtype)
     result = from_array(arr, chunksize=2)
     assert result.dtype == "string"
     assert result.compute().dtype == "string"
