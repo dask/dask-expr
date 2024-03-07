@@ -358,7 +358,7 @@ async def test_future_in_map_partitions(c, s, a, b):
 
 
 @gen_cluster(client=True)
-async def test_future_in_map_partitions(c, s, a, b):
+async def test_shuffle_consistency_checks(c, s, a, b):
     pdf = pd.DataFrame({"x": [1, 2, 3]})
     df = from_pandas(pdf, npartitions=2)
     df2 = df.astype(np.csingle)
