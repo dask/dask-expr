@@ -4708,6 +4708,7 @@ def read_parquet(
                 filesystem=filesystem,
                 ignore_metadata_file=ignore_metadata_file,
                 arrow_to_pandas=arrow_to_pandas,
+                pyarrow_strings_enabled=pyarrow_strings_enabled(),
                 kwargs=kwargs,
                 _series=isinstance(columns, str),
             )

@@ -32,7 +32,6 @@ from dask.dataframe.io.parquet.core import (
 )
 from dask.dataframe.io.parquet.utils import _split_user_options
 from dask.dataframe.io.utils import _is_local_fs
-from dask.dataframe.utils import pyarrow_strings_enabled
 from dask.delayed import delayed
 from dask.utils import apply, funcname, natural_sort_key, parse_bytes, typename
 from fsspec.utils import stringify_path
@@ -505,7 +504,9 @@ def to_parquet(
     return out
 
 
-def _determine_type_mapper(*, user_types_mapper, dtype_backend):
+def _determine_type_mapper(
+    *, user_types_mapper, dtype_backend, pyarrow_strings_enabled
+):
     type_mappers = []
 
     def pyarrow_type_mapper(pyarrow_dtype):
@@ -521,7 +522,7 @@ def _determine_type_mapper(*, user_types_mapper, dtype_backend):
         type_mappers.append(user_types_mapper)
 
     # next in priority is converting strings
-    if pyarrow_strings_enabled():
+    if pyarrow_strings_enabled:
         type_mappers.append({pa.string(): pd.StringDtype("pyarrow")}.get)
         type_mappers.append({pa.date32(): pd.ArrowDtype(pa.date32())}.get)
         type_mappers.append({pa.date64(): pd.ArrowDtype(pa.date64())}.get)
@@ -661,6 +662,7 @@ class ReadParquetPyarrowFS(ReadParquet):
         "ignore_metadata_file",
         "calculate_divisions",
         "arrow_to_pandas",
+        "pyarrow_strings_enabled",
         "kwargs",
         "_partitions",
         "_series",
@@ -676,6 +678,7 @@ class ReadParquetPyarrowFS(ReadParquet):
         "ignore_metadata_file": True,
         "calculate_divisions": False,
         "arrow_to_pandas": None,
+        "pyarrow_strings_enabled": True,
         "kwargs": None,
         "_partitions": None,
         "_series": False,
@@ -963,6 +966,7 @@ class ReadParquetPyarrowFS(ReadParquet):
             self.index.name if self.index is not None else None,
             self.arrow_to_pandas,
             self.kwargs.get("dtype_backend"),
+            self.pyarrow_strings_enabled,
         )
 
     @property
@@ -989,6 +993,7 @@ def _fragment_to_pandas(
     index_name,
     arrow_to_pandas,
     dtype_backend,
+    pyarrow_strings_enabled,
 ):
     fragment = fragment_wrapper.fragment
     if isinstance(filters, list):
@@ -1027,6 +1032,7 @@ def _fragment_to_pandas(
         types_mapper=_determine_type_mapper(
             user_types_mapper=arrow_to_pandas.pop("types_mapper", None),
             dtype_backend=dtype_backend,
+            pyarrow_strings_enabled=pyarrow_strings_enabled,
         ),
         use_threads=arrow_to_pandas.get("use_threads", False),
         self_destruct=arrow_to_pandas.get("self_destruct", True),
