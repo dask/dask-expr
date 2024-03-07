@@ -1263,7 +1263,7 @@ class FrameBase(DaskMethodsMixin):
     @derived_from(pd.DataFrame)
     def sum(
         self,
-        axis=None,
+        axis=0,
         skipna=True,
         numeric_only=False,
         min_count=0,
@@ -1280,7 +1280,7 @@ class FrameBase(DaskMethodsMixin):
                 min_count=min_count,
             )
 
-        result = new_collection(self.expr.sum(skipna, numeric_only, split_every))
+        result = new_collection(self.expr.sum(skipna, numeric_only, split_every, axis))
         return self._apply_min_count(result, min_count)
 
     def _apply_min_count(self, result, min_count):
@@ -1302,7 +1302,7 @@ class FrameBase(DaskMethodsMixin):
     @derived_from(pd.DataFrame)
     def prod(
         self,
-        axis=None,
+        axis=0,
         skipna=True,
         numeric_only=False,
         min_count=0,
@@ -1318,7 +1318,7 @@ class FrameBase(DaskMethodsMixin):
                 axis=axis,
                 min_count=min_count,
             )
-        result = new_collection(self.expr.prod(skipna, numeric_only, split_every))
+        result = new_collection(self.expr.prod(skipna, numeric_only, split_every, axis))
         return self._apply_min_count(result, min_count)
 
     product = prod
