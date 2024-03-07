@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from dask_expr import Repartition, from_pandas, map_partitions, merge
@@ -354,6 +355,15 @@ async def test_future_in_map_partitions(c, s, a, b):
     result = await result
     expected = pd.DataFrame({"a": [4951, 4952, 4953, 4954]})
     pd.testing.assert_frame_equal(result, expected)
+
+
+@gen_cluster(client=True)
+async def test_future_in_map_partitions(c, s, a, b):
+    pdf = pd.DataFrame({"x": [1, 2, 3]})
+    df = from_pandas(pdf, npartitions=2)
+    df = df.astype(np.csingle)
+    with pytest.raises(TypeError, match="p2p does not support data of type"):
+        df.shuffle("x")
 
 
 @gen_cluster(client=True)
