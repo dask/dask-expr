@@ -891,9 +891,9 @@ class ReadParquetPyarrowFS(ReadParquet):
         dataset_info["dataset"] = dataset
         dataset_info["schema"] = dataset.schema
         dataset_info["base_meta"] = dataset.schema.empty_table().to_pandas()
-        self.operands[type(self)._parameters.index("_dataset_info_cache")] = (
-            dataset_info
-        )
+        self.operands[
+            type(self)._parameters.index("_dataset_info_cache")
+        ] = dataset_info
         return dataset_info
 
     @cached_property
@@ -1215,9 +1215,9 @@ class ReadParquetFSSpec(ReadParquet):
         dataset_info["all_columns"] = all_columns
         dataset_info["calculate_divisions"] = self.calculate_divisions
 
-        self.operands[type(self)._parameters.index("_dataset_info_cache")] = (
-            dataset_info
-        )
+        self.operands[
+            type(self)._parameters.index("_dataset_info_cache")
+        ] = dataset_info
         return dataset_info
 
     def _filtered_task(self, index: int):
