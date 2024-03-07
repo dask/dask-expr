@@ -394,6 +394,13 @@ def test_from_array():
             assert expr.columns == ["a"]
 
 
+def test_from_array_string_conersion():
+    arr = np.array(["a", "b", "c", "d"])
+    result = from_array(arr, chunksize=2)
+    assert result.dtype == "string"
+    assert result.compute().dtype == "string"
+
+
 def test_from_dask_array():
     import dask.array as da
 
