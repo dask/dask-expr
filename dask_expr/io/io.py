@@ -168,12 +168,6 @@ class FusedParquetIO(FusedIO):
     ):
         from dask_expr.io.parquet import ReadParquetPyarrowFS
 
-        # Note: Ideally we'd build a pyarrow fragment that points to multiple
-        # tables since pyarrow handles IO and CPU threading separately and we're
-        # just overcomitting threads here. However, this isn't exposed at time
-        # of writing
-        # TODO: We may want to use a gloal pool with sufficient threads since
-        # executing this task in a local executor could be a little too much
         tables = (
             ReadParquetPyarrowFS._fragment_to_table(
                 frag,
