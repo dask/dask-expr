@@ -407,6 +407,9 @@ class Expr(core.Expr):
         except Exception:
             raise
 
+    def injective_mapping_columns(self):
+        return set()
+
     @property
     def _projection_columns(self):
         return self.columns

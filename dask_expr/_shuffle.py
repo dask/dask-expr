@@ -91,6 +91,10 @@ class ShuffleBase(Expr):
     def _node_label_args(self):
         return [self.frame, self.partitioning_index]
 
+    @property
+    def injective_mapping_columns(self):
+        return {self.partition_index}
+
     def _simplify_up(self, parent, dependents):
         if isinstance(parent, Filter) and self._filter_passthrough_available(
             parent, dependents
@@ -803,6 +807,9 @@ class SetIndex(BaseSetIndexSortValues):
         "append": False,
     }
     _filter_passthrough = True
+
+    def injective_mapping_columns(self):
+        return {tuple(self.other.columns)}
 
     @property
     def _projection_columns(self):

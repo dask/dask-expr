@@ -5,7 +5,7 @@ import dask
 import numpy as np
 import pytest
 
-from dask_expr import from_pandas
+from dask_expr import from_pandas, read_parquet
 from dask_expr._groupby import Aggregation, GroupByUDFBlockwise
 from dask_expr._reductions import TreeReduce
 from dask_expr._shuffle import Shuffle, divisions_lru
@@ -962,3 +962,17 @@ def test_groupby_agg_meta_error(df, pdf):
     result = df.groupby(["x"]).agg({"y": ["median", "std"]})
     expected = pdf.groupby(["x"]).agg({"y": ["median", "std"]})
     assert_eq(result, expected)
+
+
+def test_groupby_implicit_divisions(tmpdir):
+    pdf1 = pd.DataFrame({"a": range(10), "bb": 1})
+
+    df1 = from_pandas(pdf1, npartitions=2)
+    df1.to_parquet(tmpdir / "df1.parquet")
+    df1 = read_parquet(
+        tmpdir / "df1.parquet", filesystem="pyarrow", calculate_divisions=True
+    )
+
+    result = df1.groupby("a").apply(lambda x: x + 1).optimize()
+    assert not list(result.find_operations(Shuffle))
+    assert len(result.compute()) == 10

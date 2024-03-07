@@ -879,6 +879,11 @@ class GroupByApply(Expr, GroupByBase):
 
     @property
     def need_to_shuffle(self):
+        if any(
+            set(self.by) >= set(cols) for cols in self.frame.injective_mapping_columns
+        ):
+            return False
+
         return any(div is None for div in self.frame.divisions) or not any(
             _contains_index_name(self.frame._meta.index.name, b) for b in self.by
         )
@@ -930,11 +935,13 @@ class GroupByApply(Expr, GroupByBase):
                 # so we can trigger a deep copy here to clear the references
                 # since we know more about the query than pandas does.
                 by = [
-                    b
-                    if not isinstance(b, Expr)
-                    else _DeepCopy(
-                        RenameSeries(
-                            Projection(df, f"_by_{i}"), index=self.by[i].columns[0]
+                    (
+                        b
+                        if not isinstance(b, Expr)
+                        else _DeepCopy(
+                            RenameSeries(
+                                Projection(df, f"_by_{i}"), index=self.by[i].columns[0]
+                            )
                         )
                     )
                     for i, b in enumerate(self.by)

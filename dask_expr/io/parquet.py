@@ -749,6 +749,19 @@ class ReadParquetPyarrowFS(ReadParquet):
         stats = [_STATS_CACHE[tokenize(finfo)] for finfo in files_to_consider]
         return _combine_stats(stats)
 
+    @cached_property
+    def injective_mapping_columns(self):
+        # TODO This is a poor name
+        if self.calculate_divisions:
+            return {
+                col
+                for col in self.columns
+                if _divisions_from_statistics(self.aggregated_statistics, col)[1]
+                is not None
+            }
+        else:
+            return set()
+
     def load_statistics(self, files=None, fragments=None):
         if files is None:
             files = self._dataset_info["all_files"]
