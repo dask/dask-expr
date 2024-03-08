@@ -423,7 +423,7 @@ class TaskShuffle(SimpleShuffle):
                 _filter = None
 
             shuffle_group_name = "group-" + name
-            split_name = "split-" + name
+            split_name = "split-" + name_input
 
             for global_part, part in enumerate(parts_out):
                 out = inputs[part]
