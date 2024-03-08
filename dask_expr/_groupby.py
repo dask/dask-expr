@@ -80,7 +80,7 @@ def _as_dict(key, value):
 
 
 def _adjust_split_out_for_group_keys(npartitions, by):
-    return math.ceil(npartitions / (20 / (len(by) - 1)))
+    return math.ceil(npartitions / (10 / (len(by) - 1)))
 
 
 class Aggregation:
@@ -662,6 +662,22 @@ class Corr(Cov):
 
 class GroupByReduction(Reduction, GroupByBase):
     _chunk_cls = GroupByChunk
+
+    def _tune_down(self):
+        if len(self.by) > 1 and self.operand("split_out") is None:
+            return self.substitute_parameters(
+                {
+                    "split_out": functools.partial(
+                        _adjust_split_out_for_group_keys, by=self.by
+                    )
+                }
+            )
+
+    @property
+    def split_out(self):
+        if self.operand("split_out") is None:
+            return 1
+        return super().split_out
 
     @property
     def _chunk_cls_args(self):
