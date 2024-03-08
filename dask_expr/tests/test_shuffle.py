@@ -693,9 +693,19 @@ def test_shuffle_no_assign(df, pdf):
 def test_respect_context_shuffle(df, pdf, func):
     with dask.config.set({"dataframe.shuffle.method": "tasks"}):
         q = getattr(df, func)("x")
-
     result = q.optimize(fuse=False)
     assert len([x for x in result.walk() if isinstance(x, TaskShuffle)]) > 0
+
+    q = getattr(df, func)("x")
+    with dask.config.set({"dataframe.shuffle.method": "tasks"}):
+        result = q.optimize(fuse=False)
+    assert len([x for x in result.walk() if isinstance(x, TaskShuffle)]) > 0
+
+    with dask.config.set({"dataframe.shuffle.method": "p2p"}):
+        q = getattr(df, func)("x")
+    with dask.config.set({"dataframe.shuffle.method": "tasks"}):
+        result = q.optimize(fuse=False)
+    assert len([x for x in result.walk() if isinstance(x, P2PShuffle)]) > 0
 
 
 @pytest.mark.parametrize("meth", ["shuffle", "sort_values"])
