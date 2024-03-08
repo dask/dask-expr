@@ -13,7 +13,7 @@ import dask.dataframe.methods as methods
 import numpy as np
 import pandas as pd
 import pyarrow as pa
-from dask import compute
+from dask import compute, get_annotations
 from dask.array import Array
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
 from dask.core import flatten
@@ -49,6 +49,7 @@ from dask.utils import (
     IndexCallable,
     M,
     derived_from,
+    get_default_shuffle_method,
     get_meta_library,
     key_split,
     maybe_pluralize,
@@ -276,6 +277,7 @@ def _wrap_unary_expr_op(self, op=None):
     return new_collection(getattr(self.expr, op)())
 
 
+_WARN_ANNOTATIONS = True
 #
 # Collection classes
 #
@@ -290,6 +292,12 @@ class FrameBase(DaskMethodsMixin):
     __dask_optimize__ = staticmethod(lambda dsk, keys, **kwargs: dsk)
 
     def __init__(self, expr):
+        global _WARN_ANNOTATIONS
+        if _WARN_ANNOTATIONS and (annot := get_annotations()):
+            _WARN_ANNOTATIONS = False
+            warnings.warn(
+                f"Dask annotations {annot} detected. Annotations will be ignored when using query-planning."
+            )
         self._expr = expr
 
     @property
@@ -774,6 +782,19 @@ Expr={expr}"""
                 )
         elif pd.api.types.is_list_like(on) and not is_dask_collection(on):
             on = list(on)
+
+        if (shuffle_method or get_default_shuffle_method()) == "p2p":
+            from distributed.shuffle._arrow import check_dtype_support
+
+            check_dtype_support(self._meta)
+
+            if any(not isinstance(c, str) for c in self._meta.columns):
+                unsupported = {
+                    c: type(c) for c in self._meta.columns if not isinstance(c, str)
+                }
+                raise TypeError(
+                    f"p2p requires all column names to be str, found: {unsupported}",
+                )
 
         # Returned shuffled result
         return new_collection(
@@ -4469,14 +4490,15 @@ def from_array(arr, chunksize=50_000, columns=None, meta=None):
 
     from dask_expr.io.io import FromArray
 
-    return new_collection(
-        FromArray(
-            arr,
-            chunksize=chunksize,
-            original_columns=columns,
-            meta=meta,
-        )
+    result = FromArray(
+        arr,
+        chunksize=chunksize,
+        original_columns=columns,
+        meta=meta,
     )
+    if pyarrow_strings_enabled() and arr.dtype.kind in "OU":
+        result = expr.ArrowStringConversion(result)
+    return new_collection(result)
 
 
 def from_graph(*args, **kwargs):

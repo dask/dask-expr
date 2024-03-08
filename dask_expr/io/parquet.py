@@ -164,6 +164,15 @@ class FragmentWrapper:
         self.unpack()
         return self._fragment
 
+    def __dask_tokenize__(self):
+        return type(self).__name__, normalize_token(
+            (
+                self.fragment,
+                self._fragment_packed,
+                self._file_size,
+            )
+        )
+
     def __reduce__(self):
         self.pack()
         return FragmentWrapper, (None, None, self._fragment_packed)
@@ -1662,7 +1671,9 @@ def _divisions_from_statistics(aggregated_stats, index_name):
             col_ix = ix
             break
     else:
-        raise ValueError(f"Index column {index_name} not found in statistics")
+        raise ValueError(
+            f"Index column {index_name} not found in statistics"  # noqa: E713
+        )
     last_max = None
     minmax = []
     for file_stats in aggregated_stats:
