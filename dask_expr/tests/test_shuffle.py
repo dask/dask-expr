@@ -8,7 +8,7 @@ from dask_expr import from_pandas, new_collection
 from dask_expr._expr import Assign, Blockwise, Filter
 from dask_expr._reductions import NFirst, NLast
 from dask_expr._repartition import RepartitionToFewer
-from dask_expr._shuffle import BaseSetIndexSortValues, TaskShuffle, divisions_lru
+from dask_expr._shuffle import BaseSetIndexSortValues, P2PShuffle, TaskShuffle, divisions_lru
 from dask_expr.io import FromPandas
 from dask_expr.tests._util import _backend_library, assert_eq, xfail_gpu
 
