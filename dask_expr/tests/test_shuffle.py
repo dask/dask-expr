@@ -689,6 +689,15 @@ def test_shuffle_no_assign(df, pdf):
     assert len([x for x in q.walk() if isinstance(x, Assign)]) == 0
 
 
+@pytest.mark.parametrize("func", ["set_index", "sort_values", "shuffle"])
+def test_respect_context_shuffle(df, pdf, func):
+    with dask.config.set({"dataframe.shuffle.method": "tasks"}):
+        q = getattr(df, func)("x")
+
+    result = q.optimize(fuse=False)
+    assert len([x for x in result.walk() if isinstance(x, TaskShuffle)]) > 0
+
+
 @pytest.mark.parametrize("meth", ["shuffle", "sort_values"])
 def test_shuffle_filter_pushdown(pdf, meth):
     pdf["z"] = 1
