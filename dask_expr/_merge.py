@@ -155,8 +155,8 @@ class Merge(Expr):
     @property
     def unique_partition_mapping_columns(self):
         return {
-            self.left_on,
-            self.right_on,
+            tuple(self.left_on) if isinstance(self.left_on, list) else self.left_on,
+            tuple(self.right_on) if isinstance(self.right_on, list) else self.right_on,
         }
 
     @property
@@ -316,6 +316,13 @@ class Merge(Expr):
             self.right_index or _contains_index_name(self.right, self.right_on)
         ) and self.right.known_divisions
 
+    def _on_condition_alread_partitioned(self, expr, on):
+        if not isinstance(on, list):
+            result = on in expr.unique_partition_mapping_columns
+        else:
+            result = tuple(on) in expr.unique_partition_mapping_columns
+        return result and expr.npartitions == self.npartitions
+
     def _lower(self):
         # Lower from an abstract expression
         left = self.left
@@ -325,6 +332,12 @@ class Merge(Expr):
         left_index = self.left_index
         right_index = self.right_index
         shuffle_method = self.shuffle_method
+
+        # TODO: capture index-merge as well
+        left_already_partitioned = self._on_condition_alread_partitioned(left, left_on)
+        right_already_partitioned = self._on_condition_alread_partitioned(
+            right, right_on
+        )
 
         # TODO:
         #  1. Add/leverage partition statistics
@@ -397,6 +410,8 @@ class Merge(Expr):
             shuffle_method == "p2p"
             or shuffle_method is None
             and get_default_shuffle_method() == "p2p"
+            and not left_already_partitioned
+            and not right_already_partitioned
         ):
             return HashJoinP2P(
                 left,
@@ -413,7 +428,7 @@ class Merge(Expr):
                 _npartitions=self.operand("_npartitions"),
             )
 
-        if shuffle_left_on:
+        if shuffle_left_on and not left_already_partitioned:
             # Shuffle left
             left = RearrangeByColumn(
                 left,
@@ -423,7 +438,7 @@ class Merge(Expr):
                 index_shuffle=left_index,
             )
 
-        if shuffle_right_on:
+        if shuffle_right_on and not right_already_partitioned:
             # Shuffle right
             right = RearrangeByColumn(
                 right,

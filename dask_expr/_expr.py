@@ -407,6 +407,7 @@ class Expr(core.Expr):
         except Exception:
             raise
 
+    @functools.cached_property
     def unique_partition_mapping_columns(self):
         return set()
 
@@ -459,6 +460,7 @@ class Blockwise(Expr):
     operation = None
     _keyword_only = []
     _projection_passthrough = False
+    _preserves_partitioning_information = False
 
     @functools.cached_property
     def _meta(self):
@@ -541,6 +543,12 @@ class Blockwise(Expr):
     def _simplify_up(self, parent, dependents):
         if self._projection_passthrough and isinstance(parent, Projection):
             return plain_column_projection(self, parent, dependents)
+
+    @functools.cached_property
+    def unique_partition_mapping_columns(self):
+        if self._preserves_partitioning_information:
+            return self.frame.unique_partition_mapping_columns
+        return set()
 
 
 class MapPartitions(Blockwise):
@@ -1042,6 +1050,7 @@ class _Align(Blockwise):
     _defaults = {"join": "outer", "fill_value": None, "axis": None}
     _keyword_only = ["join", "fill_value", "axis"]
     operation = M.align
+    _preserves_partitioning_information = True
 
     def _divisions(self):
         # Aligning, so take first frames divisions
@@ -1051,6 +1060,7 @@ class _Align(Blockwise):
 class AlignGetitem(Blockwise):
     _parameters = ["frame", "position"]
     operation = operator.getitem
+    _preserves_partitioning_information = True
 
     @functools.cached_property
     def _meta(self):
@@ -1072,6 +1082,7 @@ class ScalarToSeries(Blockwise):
 class DropnaSeries(Blockwise):
     _parameters = ["frame"]
     operation = M.dropna
+    _preserves_partitioning_information = True
 
 
 class DropnaFrame(Blockwise):
@@ -1079,6 +1090,7 @@ class DropnaFrame(Blockwise):
     _defaults = {"how": no_default, "subset": None, "thresh": no_default}
     _keyword_only = ["how", "subset", "thresh"]
     operation = M.dropna
+    _preserves_partitioning_information = True
 
     def _simplify_up(self, parent, dependents):
         if self.subset is not None:
@@ -1173,6 +1185,7 @@ class MemoryUsagePerPartition(Blockwise):
 class DropDuplicatesBlockwise(Blockwise):
     _parameters = ["frame"]
     operation = M.drop_duplicates
+    _preserves_partitioning_information = True
 
 
 class Elemwise(Blockwise):
@@ -1199,6 +1212,7 @@ class Elemwise(Blockwise):
 
 class RenameFrame(Elemwise):
     _parameters = ["frame", "columns"]
+    _preserves_partitioning_information = True
 
     @staticmethod
     def operation(df, columns):
@@ -1227,6 +1241,8 @@ class RenameFrame(Elemwise):
 
 
 class ColumnsSetter(RenameFrame):
+    _preserves_partitioning_information = True
+
     @staticmethod
     def operation(df, columns):
         return _rename(columns, df)
@@ -1236,6 +1252,7 @@ class _DeepCopy(Elemwise):
     _parameters = ["frame"]
     _projection_passthrough = True
     _filter_passthrough = True
+    _preserves_partitioning_information = True
 
     @staticmethod
     def operation(df):
@@ -1246,6 +1263,7 @@ class RenameSeries(Elemwise):
     _parameters = ["frame", "index", "sorted_index"]
     _defaults = {"sorted_index": False}
     _filter_passthrough = True
+    _preserves_partitioning_information = True
 
     @functools.cached_property
     def _meta(self):
@@ -1319,6 +1337,7 @@ class ArrowStringConversion(Elemwise):
     _filter_passthrough = True
     _parameters = ["frame"]
     operation = staticmethod(to_pyarrow_string)
+    _preserves_partitioning_information = True
 
 
 class Between(Elemwise):
@@ -1333,6 +1352,7 @@ class ToTimestamp(Elemwise):
     _defaults = {"freq": None, "how": "start"}
     operation = M.to_timestamp
     _filter_passthrough = True
+    _preserves_partitioning_information = True
 
     def _divisions(self):
         return tuple(
@@ -1493,6 +1513,7 @@ def _check_divisions(df, i, division_min, division_max, last):
 class EnforceRuntimeDivisions(Blockwise):
     _parameters = ["frame"]
     operation = staticmethod(_check_divisions)
+    _preserves_partitioning_information = True
 
     @functools.cached_property
     def _meta(self):
@@ -1527,6 +1548,7 @@ class RenameAxis(Elemwise):
     }
     _keyword_only = ["mapper", "index", "columns", "axis"]
     operation = M.rename_axis
+    _preserves_partitioning_information = True
 
 
 class NotNull(Elemwise):
@@ -1541,6 +1563,7 @@ class ToFrame(Elemwise):
     _keyword_only = ["name"]
     operation = M.to_frame
     _filter_passthrough = True
+    _preserves_partitioning_information = True
 
 
 class ToFrameIndex(Elemwise):
@@ -1549,11 +1572,13 @@ class ToFrameIndex(Elemwise):
     _keyword_only = ["name", "index"]
     operation = M.to_frame
     _filter_passthrough = True
+    _preserves_partitioning_information = True
 
 
 class ToSeriesIndex(ToFrameIndex):
     _defaults = {"name": no_default, "index": None}
     operation = M.to_series
+    _preserves_partitioning_information = True
 
 
 def pd_split(df, p, random_state=None, shuffle=False):
@@ -1726,6 +1751,7 @@ class Drop(Elemwise):
     _parameters = ["frame", "columns", "errors"]
     _defaults = {"errors": "raise"}
     operation = staticmethod(drop_by_shallow_copy)
+    _preserves_partitioning_information = True
 
     def _simplify_down(self):
         columns = [
@@ -1755,6 +1781,15 @@ class Assign(Elemwise):
 
     _parameters = ["frame"]
     operation = staticmethod(assign)
+
+    @functools.cached_property
+    def unique_partition_mapping_columns(self):
+        if not set(self.frame.columns).intersection(self.keys):
+            return self.frame.unique_partition_mapping_columns
+        else:
+            # TODO: This can be better, but we have tuples in there, so it might
+            # get weird
+            return set()
 
     @functools.cached_property
     def keys(self):
@@ -1870,6 +1905,7 @@ class Filter(Blockwise):
     _filter_passthrough = True
     _parameters = ["frame", "predicate"]
     operation = operator.getitem
+    _preserves_partitioning_information = True
 
     def _simplify_up(self, parent, dependents):
         if isinstance(self.predicate, Or):
@@ -1921,6 +1957,15 @@ class Projection(Elemwise):
 
     _parameters = ["frame", "columns"]
     operation = operator.getitem
+
+    @functools.cached_property
+    def unique_partition_mapping_columns(self):
+        columns = set(self.operand("columns"))
+        return {
+            c
+            for c in self.frame.unique_partition_mapping_columns
+            if c in columns or isinstance(c, tuple) and set(c).issubset(columns)
+        }
 
     @property
     def columns(self):
@@ -2014,6 +2059,7 @@ def _return_input(df, divisions=None):
 class ClearDivisions(Elemwise):
     _parameters = ["frame"]
     operation = staticmethod(_return_input)
+    _preserves_partitioning_information = True
 
     def _divisions(self):
         return (None,) * (self.frame.npartitions + 1)
@@ -2022,6 +2068,7 @@ class ClearDivisions(Elemwise):
 class SetDivisions(Elemwise):
     _parameters = ["frame", "divisions"]
     operation = staticmethod(_return_input)
+    _preserves_partitioning_information = True
 
     def _divisions(self):
         return self.operand("divisions")
@@ -2123,6 +2170,7 @@ class ResetIndex(Elemwise):
     _keyword_only = ["drop", "name"]
     operation = M.reset_index
     _filter_passthrough = True
+    _preserves_partitioning_information = True
 
     @functools.cached_property
     def _kwargs(self) -> dict:
@@ -2182,6 +2230,7 @@ class AddPrefixSeries(Elemwise):
     _parameters = ["frame", "prefix"]
     operation = M.add_prefix
     _filter_passthrough = True
+    _preserves_partitioning_information = True
 
     def _divisions(self):
         return tuple(self.prefix + str(division) for division in self.frame.divisions)
@@ -2190,6 +2239,7 @@ class AddPrefixSeries(Elemwise):
 class AddSuffixSeries(AddPrefixSeries):
     _parameters = ["frame", "suffix"]
     operation = M.add_suffix
+    _preserves_partitioning_information = True
 
     def _divisions(self):
         return tuple(str(division) + self.suffix for division in self.frame.divisions)
@@ -2198,6 +2248,15 @@ class AddSuffixSeries(AddPrefixSeries):
 class AddPrefix(Elemwise):
     _parameters = ["frame", "prefix"]
     operation = M.add_prefix
+
+    @functools.cached_property
+    def unique_partition_mapping_columns(self):
+        return {
+            f"{self.prefix}{c}"
+            if not isinstance(c, tuple)
+            else tuple(self.prefix + t for t in c)
+            for c in self.unique_partition_mapping_columns
+        }
 
     def _convert_columns(self, columns):
         len_prefix = len(self.prefix)
@@ -2221,6 +2280,15 @@ class AddSuffix(AddPrefix):
     _parameters = ["frame", "suffix"]
     operation = M.add_suffix
 
+    @functools.cached_property
+    def unique_partition_mapping_columns(self):
+        return {
+            f"{c}{self.suffix}"
+            if not isinstance(c, tuple)
+            else tuple(t + self.suffix for t in c)
+            for c in self.unique_partition_mapping_columns
+        }
+
     def _convert_columns(self, columns):
         len_suffix = len(self.suffix)
         return [col[:-len_suffix] for col in columns]
@@ -2229,6 +2297,7 @@ class AddSuffix(AddPrefix):
 class AssignIndex(Elemwise):
     _parameters = ["frame", "value"]
     operation = staticmethod(methods.assign_index)
+    _preserves_partitioning_information = True
 
     def _divisions(self):
         return self.value.divisions
@@ -2321,6 +2390,7 @@ class BlockwiseHead(Head, Blockwise):
     """
 
     _parameters = ["frame", "n", "npartitions", "safe"]
+    _preserves_partitioning_information = True
 
     def _simplify_down(self):
         return
@@ -2398,6 +2468,8 @@ class BlockwiseTail(Tail, Blockwise):
     Typically used after `Partitions(..., [-1])` to take
     the last `n` rows of an entire collection.
     """
+
+    _preserves_partitioning_information = True
 
     def _divisions(self):
         return self.frame.divisions

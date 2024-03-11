@@ -877,13 +877,29 @@ class GroupByApply(Expr, GroupByBase):
     def _shuffle_grp_func(self, shuffled=False):
         return self.grp_func
 
-    @property
+    @functools.cached_property
+    def unique_partition_mapping_columns(self):
+        if not self.need_to_shuffle:
+            columns = self._by_columns
+            result = {
+                c for c in columns if c in self.frame.unique_partition_mapping_columns
+            }
+            if tuple(columns) in self.frame.unique_partition_mapping_columns:
+                result.add(tuple(columns))
+            return result
+        elif not any(isinstance(b, Expr) for b in self.by):
+            return {tuple(self._by_columns)}
+        else:
+            return set()
+
+    @functools.cached_property
     def need_to_shuffle(self):
-        if any(
-            set(self.by) >= set(cols)
-            for cols in self.frame.unique_partition_mapping_columns
-        ):
-            return False
+        if not any(isinstance(b, Expr) for b in self.by):
+            if any(
+                set(self._by_columns) >= set(cols)
+                for cols in self.frame.unique_partition_mapping_columns
+            ):
+                return False
 
         return any(div is None for div in self.frame.divisions) or not any(
             _contains_index_name(self.frame._meta.index.name, b) for b in self.by

@@ -91,9 +91,20 @@ class ShuffleBase(Expr):
     def _node_label_args(self):
         return [self.frame, self.partitioning_index]
 
-    @property
+    @functools.cached_property
+    def _partitioning_index(self):
+        partitioning_index = self.partitioning_index
+        if isinstance(partitioning_index, (str, int)):
+            partitioning_index = [partitioning_index]
+        return partitioning_index
+
+    @functools.cached_property
     def unique_partition_mapping_columns(self):
-        return {self.partition_index}
+        return (
+            {tuple(self.partition_index)}
+            if isinstance(self._partitioning_index, list)
+            else set()
+        )
 
     def _simplify_up(self, parent, dependents):
         if isinstance(parent, Filter) and self._filter_passthrough_available(
@@ -104,10 +115,7 @@ class ShuffleBase(Expr):
             # Move the column projection to come
             # before the abstract Shuffle
             projection = determine_column_projection(self, parent, dependents)
-
-            partitioning_index = self.partitioning_index
-            if isinstance(partitioning_index, (str, int)):
-                partitioning_index = [partitioning_index]
+            partitioning_index = self._partitioning_index
 
             target = self.frame
             new_projection = [
@@ -808,6 +816,7 @@ class SetIndex(BaseSetIndexSortValues):
     }
     _filter_passthrough = True
 
+    @functools.cached_property
     def unique_partition_mapping_columns(self):
         return {tuple(self.other.columns)}
 
