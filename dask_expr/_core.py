@@ -362,8 +362,8 @@ class Expr:
                 break
             if new._name in seen:
                 raise RuntimeError(
-                    "Optimizer does not converge. Please report this issue on "
-                    "the dask issue tracker with a minimal reproducer."
+                    f"Optimizer does not converge. {expr!r} simplified to {new!r} which was already seen. "
+                    "Please report this issue on the dask issue tracker with a minimal reproducer."
                 )
             seen.add(new._name)
             expr = new
