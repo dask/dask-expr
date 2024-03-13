@@ -1452,6 +1452,10 @@ class TotalMemoryUsageFrame(MemoryUsageFrame):
     def reduction_combine(x, is_dataframe):
         return x
 
+    @staticmethod
+    def reduction_aggregate(x):
+        return x
+
 
 class IsMonotonicIncreasing(Reduction):
     @functools.cached_property
