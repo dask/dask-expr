@@ -19,6 +19,8 @@ V = TypeVar("V")
 
 DASK_VERSION = Version(dask.__version__)
 DASK_GT_20231201 = DASK_VERSION > Version("2023.12.1")
+PANDAS_VERSION = Version(pd.__version__)
+PANDAS_GE_300 = PANDAS_VERSION.major >= 3
 
 
 def _calc_maybe_new_divisions(df, periods, freq):
@@ -217,3 +219,8 @@ def _is_any_real_numeric_dtype(arr_or_dtype):
             and not is_complex_dtype(arr_or_dtype)
             and not is_bool_dtype(arr_or_dtype)
         )
+
+
+def get_specified_shuffle(shuffle_method):
+    # Take the config shuffle if given, otherwise defer evaluation until optimize
+    return shuffle_method or config.get("dataframe.shuffle.method", None)

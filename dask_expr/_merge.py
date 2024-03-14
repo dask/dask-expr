@@ -90,9 +90,7 @@ class Merge(Expr):
         )
 
     def _filter_passthrough_available(self, parent, dependents):
-        if is_filter_pushdown_available(self, parent, dependents) or isinstance(
-            parent.predicate, And
-        ):
+        if is_filter_pushdown_available(self, parent, dependents):
             predicate = parent.predicate
             # This protects against recursion, no need to separate ands if the first
             # condition violates the join direction
@@ -108,6 +106,13 @@ class Merge(Expr):
             elif len(predicate_columns) > 0:
                 return False
             return True
+        elif isinstance(parent.predicate, And):
+            # If we can make that transformation then we should do it to further
+            # align filters that sit on top of merges
+            new = Filter(self, parent.predicate.left)
+            return new._name in {
+                x()._name for x in dependents[self._name] if x() is not None
+            }
         return False
 
     def _predicate_columns(self, predicate):

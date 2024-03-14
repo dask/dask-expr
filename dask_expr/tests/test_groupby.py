@@ -8,7 +8,7 @@ import pytest
 from dask_expr import from_pandas, read_parquet
 from dask_expr._groupby import Aggregation, GroupByUDFBlockwise
 from dask_expr._reductions import TreeReduce
-from dask_expr._shuffle import DiskShuffle, Shuffle, divisions_lru
+from dask_expr._shuffle import DiskShuffle, Shuffle, TaskShuffle, divisions_lru
 from dask_expr.io import FromPandas
 from dask_expr.tests._util import _backend_library, assert_eq, xfail_gpu
 
@@ -356,12 +356,12 @@ def test_split_out_automatically():
     assert_eq(q, expected)
 
     q = df.groupby(["a", "b"]).sum()
-    assert q.optimize().npartitions == 25
+    assert q.optimize().npartitions == 50
     expected = pdf.groupby(["a", "b"]).sum()
     assert_eq(q, expected)
 
     q = df.groupby(["a", "b", "c"]).sum()
-    assert q.optimize().npartitions == 50
+    assert q.optimize().npartitions == 100
     expected = pdf.groupby(["a", "b", "c"]).sum()
     assert_eq(q, expected)
 
@@ -958,6 +958,32 @@ def test_groupby_size_drop_columns(df, pdf):
     assert result.simplify()._name == df[[]].groupby("x").size().simplify()._name
 
 
+def test_groupy_respect_shuffle_context(df, pdf):
+    def _check_task_shuffle(q):
+        result = q.optimize(fuse=False)
+        assert len([x for x in result.walk() if isinstance(x, TaskShuffle)]) > 0
+
+    with dask.config.set({"dataframe.shuffle.method": "tasks"}):
+        q = df.groupby("x").apply(lambda x: x)
+    _check_task_shuffle(q)
+
+    with dask.config.set({"dataframe.shuffle.method": "tasks"}):
+        q = df.groupby("x").transform(lambda x: x)
+    _check_task_shuffle(q)
+
+    with dask.config.set({"dataframe.shuffle.method": "tasks"}):
+        q = df.groupby("x").sum(split_out=True)
+    _check_task_shuffle(q)
+
+    with dask.config.set({"dataframe.shuffle.method": "tasks"}):
+        q = df.groupby("x").y.nunique(split_out=True)
+    _check_task_shuffle(q)
+
+    with dask.config.set({"dataframe.shuffle.method": "tasks"}):
+        q = df.groupby("x").median(split_out=True)
+    _check_task_shuffle(q)
+
+
 def test_groupby_agg_meta_error(df, pdf):
     result = df.groupby(["x"]).agg({"y": ["median", "std"]})
     expected = pdf.groupby(["x"]).agg({"y": ["median", "std"]})
@@ -994,3 +1020,9 @@ def test_groupby_avoid_shuffle():
     expected = pdf1.merge(pdf2)
     expected = expected.groupby("a").sum()
     assert_eq(q, expected, check_index=False)
+
+
+def test_groupby_aggregate_series_split_out(df, pdf):
+    result = df.groupby("x").y.agg("sum", split_out=2)
+    expected = pdf.groupby("x").y.agg("sum")
+    assert_eq(result, expected)

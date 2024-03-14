@@ -22,7 +22,6 @@ from dask.dataframe.groupby import (
     _build_agg_args,
     _cov_agg,
     _cov_chunk,
-    _cov_combine,
     _cum_agg_aligned,
     _cum_agg_filled,
     _cumcount_aggregate,
@@ -70,7 +69,12 @@ from dask_expr._expr import (
 )
 from dask_expr._reductions import ApplyConcatApply, Chunk, Reduction
 from dask_expr._shuffle import RearrangeByColumn
-from dask_expr._util import _convert_to_list, is_scalar
+from dask_expr._util import (
+    PANDAS_GE_300,
+    _convert_to_list,
+    get_specified_shuffle,
+    is_scalar,
+)
 
 
 def _as_dict(key, value):
@@ -80,7 +84,7 @@ def _as_dict(key, value):
 
 
 def _adjust_split_out_for_group_keys(npartitions, by):
-    return math.ceil(npartitions / (20 / (len(by) - 1)))
+    return math.ceil(npartitions / (10 / (len(by) - 1)))
 
 
 class Aggregation:
@@ -632,12 +636,15 @@ class Unique(SingleAggregation):
 
 class Cov(SingleAggregation):
     chunk = staticmethod(_cov_chunk)
-    combine = staticmethod(_cov_combine)
     std = False
 
     @classmethod
+    def combine(cls, g, levels):
+        return _concat(g)
+
+    @classmethod
     def aggregate(cls, inputs, **kwargs):
-        return _cov_agg(inputs[0], **kwargs)
+        return _cov_agg(_concat(inputs), **kwargs)
 
     @property
     def chunk_kwargs(self) -> dict:
@@ -662,6 +669,22 @@ class Corr(Cov):
 
 class GroupByReduction(Reduction, GroupByBase):
     _chunk_cls = GroupByChunk
+
+    def _tune_down(self):
+        if len(self.by) > 1 and self.operand("split_out") is None:
+            return self.substitute_parameters(
+                {
+                    "split_out": functools.partial(
+                        _adjust_split_out_for_group_keys, by=self.by
+                    )
+                }
+            )
+
+    @property
+    def split_out(self):
+        if self.operand("split_out") is None:
+            return 1
+        return super().split_out
 
     @property
     def _chunk_cls_args(self):
@@ -1506,7 +1529,9 @@ class GroupBy:
 
         self.obj = obj[projection] if projection is not None else obj
         self.sort = sort
-        self.observed = observed if observed is not None else False
+        self.observed = (
+            observed if observed is not None else False if not PANDAS_GE_300 else True
+        )
         self.dropna = dropna
         self.group_keys = group_keys
         self.by = (
@@ -1553,7 +1578,7 @@ class GroupBy:
                 split_every,
                 split_out,
                 self.sort,
-                shuffle_method,
+                get_specified_shuffle(shuffle_method),
                 *self.by,
             )
         )
@@ -1659,7 +1684,7 @@ class GroupBy:
         return len(set(post_group_columns) - set(numerics.columns)) == 0
 
     @derived_from(pd.core.groupby.GroupBy)
-    def mean(self, numeric_only=False, split_out=1, **kwargs):
+    def mean(self, numeric_only=False, split_out=None, **kwargs):
         if not numeric_only and not self._all_numeric():
             raise NotImplementedError(
                 "'numeric_only=False' is not implemented in Dask."
@@ -1704,7 +1729,7 @@ class GroupBy:
         self,
         ddof=1,
         split_every=None,
-        split_out=1,
+        split_out=None,
         numeric_only=False,
         shuffle_method=None,
     ):
@@ -1719,7 +1744,7 @@ class GroupBy:
 
     @derived_from(pd.DataFrame)
     def corr(
-        self, split_every=None, split_out=1, numeric_only=False, shuffle_method=None
+        self, split_every=None, split_out=None, numeric_only=False, shuffle_method=None
     ):
         numeric_kwargs = self._numeric_only_kwargs(numeric_only)
         return self._single_agg(
@@ -1757,7 +1782,7 @@ class GroupBy:
     def idxmin(
         self,
         split_every=None,
-        split_out=1,
+        split_out=None,
         skipna=True,
         numeric_only=False,
         shuffle_method=None,
@@ -1776,7 +1801,7 @@ class GroupBy:
     def idxmax(
         self,
         split_every=None,
-        split_out=1,
+        split_out=None,
         skipna=True,
         numeric_only=False,
         shuffle_method=None,
@@ -1792,7 +1817,7 @@ class GroupBy:
         )
 
     @derived_from(pd.core.groupby.SeriesGroupBy)
-    def head(self, n=5, split_every=None, split_out=1):
+    def head(self, n=5, split_every=None, split_out=None):
         chunk_kwargs = {"n": n}
         aggregate_kwargs = {
             "n": n,
@@ -1807,7 +1832,7 @@ class GroupBy:
         )
 
     @derived_from(pd.core.groupby.SeriesGroupBy)
-    def tail(self, n=5, split_every=None, split_out=1):
+    def tail(self, n=5, split_every=None, split_out=None):
         chunk_kwargs = {"n": n}
         aggregate_kwargs = {
             "n": n,
@@ -1826,7 +1851,7 @@ class GroupBy:
         self,
         ddof=1,
         split_every=None,
-        split_out=1,
+        split_out=None,
         numeric_only=False,
         shuffle_method=None,
     ):
@@ -1855,7 +1880,7 @@ class GroupBy:
         self,
         ddof=1,
         split_every=None,
-        split_out=1,
+        split_out=None,
         numeric_only=False,
         shuffle_method=None,
     ):
@@ -1881,7 +1906,7 @@ class GroupBy:
 
     @_aggregate_docstring(based_on="pd.core.groupby.DataFrameGroupBy.agg")
     def aggregate(
-        self, arg=None, split_every=8, split_out=1, shuffle_method=None, **kwargs
+        self, arg=None, split_every=8, split_out=None, shuffle_method=None, **kwargs
     ):
         if arg is None:
             raise NotImplementedError("arg=None not supported")
@@ -1963,7 +1988,7 @@ class GroupBy:
                 meta,
                 args,
                 kwargs,
-                shuffle_method,
+                get_specified_shuffle(shuffle_method),
                 *self.by,
             )
         )
@@ -1982,7 +2007,7 @@ class GroupBy:
                 meta,
                 args,
                 kwargs,
-                shuffle_method,
+                get_specified_shuffle(shuffle_method),
                 *self.by,
             )
         )
@@ -2040,8 +2065,6 @@ class GroupBy:
             Number of periods to shift.
         freq : Delayed, Scalar or str, optional
             Frequency string.
-        axis : axis to shift, default 0
-            Shift direction.
         fill_value : Scalar, Delayed or object, optional
             The scalar value to use for newly introduced missing values.
         $META
@@ -2056,6 +2079,8 @@ class GroupBy:
         >>> ddf = dask.datasets.timeseries(freq="1h")
         >>> result = ddf.groupby("name").shift(1, meta={"id": int, "x": float, "y": float})
         """
+        if "axis" in kwargs:
+            raise TypeError("axis is not supported in shift.")
         self._warn_if_no_meta(meta)
         kwargs = {"periods": periods, **kwargs}
         return self._transform_like_op(
@@ -2077,7 +2102,7 @@ class GroupBy:
                 no_default,
                 (),
                 {"numeric_only": numeric_only},
-                shuffle_method,
+                get_specified_shuffle(shuffle_method),
                 split_every,
                 *self.by,
             )
@@ -2184,7 +2209,12 @@ class SeriesGroupBy(GroupBy):
         return self._single_agg(Unique, **kwargs)
 
     def idxmin(
-        self, split_every=None, split_out=1, skipna=True, numeric_only=False, **kwargs
+        self,
+        split_every=None,
+        split_out=None,
+        skipna=True,
+        numeric_only=False,
+        **kwargs,
     ):
         # pandas doesn't support numeric_only here, which is odd
         return self._single_agg(
@@ -2195,7 +2225,12 @@ class SeriesGroupBy(GroupBy):
         )
 
     def idxmax(
-        self, split_every=None, split_out=1, skipna=True, numeric_only=False, **kwargs
+        self,
+        split_every=None,
+        split_out=None,
+        skipna=True,
+        numeric_only=False,
+        **kwargs,
     ):
         # pandas doesn't support numeric_only here, which is odd
         return self._single_agg(
@@ -2228,7 +2263,7 @@ class SeriesGroupBy(GroupBy):
                 split_every,
                 split_out,
                 self.sort,
-                shuffle_method,
+                get_specified_shuffle(shuffle_method),
                 *self.by,
             )
         )

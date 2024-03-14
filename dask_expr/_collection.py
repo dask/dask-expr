@@ -13,7 +13,7 @@ import dask.dataframe.methods as methods
 import numpy as np
 import pandas as pd
 import pyarrow as pa
-from dask import compute
+from dask import compute, get_annotations
 from dask.array import Array
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
 from dask.core import flatten
@@ -49,6 +49,7 @@ from dask.utils import (
     IndexCallable,
     M,
     derived_from,
+    get_default_shuffle_method,
     get_meta_library,
     key_split,
     maybe_pluralize,
@@ -95,6 +96,7 @@ from dask_expr._quantiles import RepartitionQuantiles
 from dask_expr._reductions import (
     Corr,
     Cov,
+    CustomReduction,
     DropDuplicates,
     IndexCount,
     IsMonotonicDecreasing,
@@ -126,6 +128,7 @@ from dask_expr._util import (
     _raise_if_object_series,
     _tokenize_deterministic,
     _validate_axis,
+    get_specified_shuffle,
     is_scalar,
 )
 from dask_expr.io import FromPandasDivisions, FromScalars
@@ -276,6 +279,7 @@ def _wrap_unary_expr_op(self, op=None):
     return new_collection(getattr(self.expr, op)())
 
 
+_WARN_ANNOTATIONS = True
 #
 # Collection classes
 #
@@ -290,6 +294,12 @@ class FrameBase(DaskMethodsMixin):
     __dask_optimize__ = staticmethod(lambda dsk, keys, **kwargs: dsk)
 
     def __init__(self, expr):
+        global _WARN_ANNOTATIONS
+        if _WARN_ANNOTATIONS and (annot := get_annotations()):
+            _WARN_ANNOTATIONS = False
+            warnings.warn(
+                f"Dask annotations {annot} detected. Annotations will be ignored when using query-planning."
+            )
         self._expr = expr
 
     @property
@@ -409,7 +419,7 @@ class FrameBase(DaskMethodsMixin):
 {data}
 Dask Name: {name}, {n_expr}
 Expr={expr}"""
-        if len(self.columns) == 0:
+        if not isinstance(self, Series) and not len(self.columns):
             data = data.partition("\n")[-1].replace("Index", "Divisions")
             _str_fmt = f"Empty {_str_fmt}"
         n_expr = len({e._name for e in self.expr.walk()})
@@ -775,6 +785,19 @@ Expr={expr}"""
         elif pd.api.types.is_list_like(on) and not is_dask_collection(on):
             on = list(on)
 
+        if (shuffle_method or get_default_shuffle_method()) == "p2p":
+            from distributed.shuffle._arrow import check_dtype_support
+
+            check_dtype_support(self._meta)
+
+            if any(not isinstance(c, str) for c in self._meta.columns):
+                unsupported = {
+                    c: type(c) for c in self._meta.columns if not isinstance(c, str)
+                }
+                raise TypeError(
+                    f"p2p requires all column names to be str, found: {unsupported}",
+                )
+
         # Returned shuffled result
         return new_collection(
             RearrangeByColumn(
@@ -782,7 +805,7 @@ Expr={expr}"""
                 on,
                 npartitions,
                 ignore_index,
-                shuffle_method,
+                get_specified_shuffle(shuffle_method),
                 options,
                 index_shuffle=on_index,
             )
@@ -1285,7 +1308,7 @@ Expr={expr}"""
     @derived_from(pd.DataFrame)
     def sum(
         self,
-        axis=None,
+        axis=0,
         skipna=True,
         numeric_only=False,
         min_count=0,
@@ -1302,7 +1325,7 @@ Expr={expr}"""
                 min_count=min_count,
             )
 
-        result = new_collection(self.expr.sum(skipna, numeric_only, split_every))
+        result = new_collection(self.expr.sum(skipna, numeric_only, split_every, axis))
         return self._apply_min_count(result, min_count)
 
     def _apply_min_count(self, result, min_count):
@@ -1324,7 +1347,7 @@ Expr={expr}"""
     @derived_from(pd.DataFrame)
     def prod(
         self,
-        axis=None,
+        axis=0,
         skipna=True,
         numeric_only=False,
         min_count=0,
@@ -1340,7 +1363,7 @@ Expr={expr}"""
                 axis=axis,
                 min_count=min_count,
             )
-        result = new_collection(self.expr.prod(skipna, numeric_only, split_every))
+        result = new_collection(self.expr.prod(skipna, numeric_only, split_every, axis))
         return self._apply_min_count(result, min_count)
 
     product = prod
@@ -1943,6 +1966,149 @@ Expr={expr}"""
         if axis == 1:
             return self.map_partitions(M.cummin, axis=axis, skipna=skipna)
         return new_collection(self.expr.cummin(skipna=skipna))
+
+    def reduction(
+        self,
+        chunk,
+        aggregate=None,
+        combine=None,
+        meta=no_default,
+        token=None,
+        split_every=None,
+        chunk_kwargs=None,
+        aggregate_kwargs=None,
+        combine_kwargs=None,
+        **kwargs,
+    ):
+        """Generic row-wise reductions.
+
+        Parameters
+        ----------
+        chunk : callable
+            Function to operate on each partition. Should return a
+            ``pandas.DataFrame``, ``pandas.Series``, or a scalar.
+        aggregate : callable, optional
+            Function to operate on the concatenated result of ``chunk``. If not
+            specified, defaults to ``chunk``. Used to do the final aggregation
+            in a tree reduction.
+
+            The input to ``aggregate`` depends on the output of ``chunk``.
+            If the output of ``chunk`` is a:
+
+            - scalar: Input is a Series, with one row per partition.
+            - Series: Input is a DataFrame, with one row per partition. Columns
+              are the rows in the output series.
+            - DataFrame: Input is a DataFrame, with one row per partition.
+              Columns are the columns in the output dataframes.
+
+            Should return a ``pandas.DataFrame``, ``pandas.Series``, or a
+            scalar.
+        combine : callable, optional
+            Function to operate on intermediate concatenated results of
+            ``chunk`` in a tree-reduction. If not provided, defaults to
+            ``aggregate``. The input/output requirements should match that of
+            ``aggregate`` described above.
+        $META
+        token : str, optional
+            The name to use for the output keys.
+        split_every : int, optional
+            Group partitions into groups of this size while performing a
+            tree-reduction. If set to False, no tree-reduction will be used,
+            and all intermediates will be concatenated and passed to
+            ``aggregate``. Default is 8.
+        chunk_kwargs : dict, optional
+            Keyword arguments to pass on to ``chunk`` only.
+        aggregate_kwargs : dict, optional
+            Keyword arguments to pass on to ``aggregate`` only.
+        combine_kwargs : dict, optional
+            Keyword arguments to pass on to ``combine`` only.
+        kwargs :
+            All remaining keywords will be passed to ``chunk``, ``combine``,
+            and ``aggregate``.
+
+        Examples
+        --------
+        >>> import pandas as pd
+        >>> import dask.dataframe as dd
+        >>> df = pd.DataFrame({'x': range(50), 'y': range(50, 100)})
+        >>> ddf = dd.from_pandas(df, npartitions=4)
+
+        Count the number of rows in a DataFrame. To do this, count the number
+        of rows in each partition, then sum the results:
+
+        >>> res = ddf.reduction(lambda x: x.count(),
+        ...                     aggregate=lambda x: x.sum())
+        >>> res.compute()
+        x    50
+        y    50
+        dtype: int64
+
+        Count the number of rows in a Series with elements greater than or
+        equal to a value (provided via a keyword).
+
+        >>> def count_greater(x, value=0):
+        ...     return (x >= value).sum()
+        >>> res = ddf.x.reduction(count_greater, aggregate=lambda x: x.sum(),
+        ...                       chunk_kwargs={'value': 25})
+        >>> res.compute()
+        25
+
+        Aggregate both the sum and count of a Series at the same time:
+
+        >>> def sum_and_count(x):
+        ...     return pd.Series({'count': x.count(), 'sum': x.sum()},
+        ...                      index=['count', 'sum'])
+        >>> res = ddf.x.reduction(sum_and_count, aggregate=lambda x: x.sum())
+        >>> res.compute()
+        count      50
+        sum      1225
+        dtype: int64
+
+        Doing the same, but for a DataFrame. Here ``chunk`` returns a
+        DataFrame, meaning the input to ``aggregate`` is a DataFrame with an
+        index with non-unique entries for both 'x' and 'y'. We groupby the
+        index, and sum each group to get the final result.
+
+        >>> def sum_and_count(x):
+        ...     return pd.DataFrame({'count': x.count(), 'sum': x.sum()},
+        ...                         columns=['count', 'sum'])
+        >>> res = ddf.reduction(sum_and_count,
+        ...                     aggregate=lambda x: x.groupby(level=0).sum())
+        >>> res.compute()
+           count   sum
+        x     50  1225
+        y     50  3725
+        """
+        if split_every is not None and split_every < 2:
+            raise ValueError("split_every must be at least 2")
+
+        if combine is None:
+            if combine_kwargs:
+                raise ValueError("`combine_kwargs` provided with no `combine`")
+
+        chunk_kwargs = chunk_kwargs.copy() if chunk_kwargs else {}
+        chunk_kwargs.update(kwargs)
+        chunk_kwargs["func"] = chunk
+
+        combine_kwargs = combine_kwargs.copy() if combine_kwargs else {}
+        combine_kwargs.update(kwargs)
+        combine_kwargs["func"] = combine or aggregate or chunk
+
+        aggregate_kwargs = aggregate_kwargs.copy() if aggregate_kwargs else {}
+        aggregate_kwargs.update(kwargs)
+        aggregate_kwargs["func"] = aggregate or chunk
+
+        return new_collection(
+            CustomReduction(
+                self,
+                meta,
+                chunk_kwargs,
+                aggregate_kwargs,
+                combine_kwargs,
+                split_every,
+                token,
+            )
+        )
 
     def memory_usage_per_partition(self, index: bool = True, deep: bool = False):
         """Return the memory usage of each partition
@@ -3143,7 +3309,7 @@ class DataFrame(FrameBase):
                 npartitions=npartitions,
                 upsample=upsample,
                 partition_size=partition_size,
-                shuffle_method=shuffle_method,
+                shuffle_method=get_specified_shuffle(shuffle_method),
                 append=append,
                 options=options,
             )
@@ -3219,7 +3385,7 @@ class DataFrame(FrameBase):
                 sort_function_kwargs,
                 upsample,
                 ignore_index,
-                shuffle_method,
+                get_specified_shuffle(shuffle_method),
                 options=options,
             )
         )
@@ -4469,14 +4635,15 @@ def from_array(arr, chunksize=50_000, columns=None, meta=None):
 
     from dask_expr.io.io import FromArray
 
-    return new_collection(
-        FromArray(
-            arr,
-            chunksize=chunksize,
-            original_columns=columns,
-            meta=meta,
-        )
+    result = FromArray(
+        arr,
+        chunksize=chunksize,
+        original_columns=columns,
+        meta=meta,
     )
+    if pyarrow_strings_enabled() and arr.dtype.kind in "OU":
+        result = expr.ArrowStringConversion(result)
+    return new_collection(result)
 
 
 def from_graph(*args, **kwargs):
@@ -4868,7 +5035,7 @@ def merge(
             right_index=right_index,
             suffixes=suffixes,
             indicator=indicator,
-            shuffle_method=shuffle_method,
+            shuffle_method=get_specified_shuffle(shuffle_method),
             _npartitions=npartitions,
             broadcast=broadcast,
         )
