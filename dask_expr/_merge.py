@@ -107,7 +107,7 @@ class Merge(Expr):
                 return False
             return True
         elif isinstance(parent.predicate, And):
-            # If we can make that transformation than we should do it to further
+            # If we can make that transformation then we should do it to further
             # align filters that sit on top of merges
             new = Filter(self, parent.predicate.left)
             return new._name in {
