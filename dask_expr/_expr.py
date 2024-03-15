@@ -2255,7 +2255,7 @@ class AddPrefix(Elemwise):
             f"{self.prefix}{c}"
             if not isinstance(c, tuple)
             else tuple(self.prefix + t for t in c)
-            for c in self.unique_partition_mapping_columns
+            for c in self.frame.unique_partition_mapping_columns
         }
 
     def _convert_columns(self, columns):
@@ -2286,7 +2286,7 @@ class AddSuffix(AddPrefix):
             f"{c}{self.suffix}"
             if not isinstance(c, tuple)
             else tuple(t + self.suffix for t in c)
-            for c in self.unique_partition_mapping_columns
+            for c in self.frame.unique_partition_mapping_columns
         }
 
     def _convert_columns(self, columns):

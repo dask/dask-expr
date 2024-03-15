@@ -69,7 +69,7 @@ class Repartition(Expr):
             and self.operand("new_partitions") is not None
             and self.npartitions <= self.frame.npartitions
         ):
-            return self.frame.ununique_partition_mapping_columns
+            return self.frame.unique_partition_mapping_columns
         else:
             return set()
 
