@@ -1,5 +1,6 @@
 import glob
 import os
+from pathlib import Path
 
 import dask.array as da
 import dask.dataframe as dd
@@ -29,14 +30,14 @@ from dask_expr.tests._util import _backend_library
 pd = _backend_library()
 
 
-def _make_file(dir, format="parquet", df=None):
+def _make_file(dir, format="parquet", df=None, **kwargs):
     fn = os.path.join(str(dir), f"myfile.{format}")
     if df is None:
         df = pd.DataFrame({c: range(10) for c in "abcde"})
     if format == "csv":
-        df.to_csv(fn)
+        df.to_csv(fn, **kwargs)
     elif format == "parquet":
-        df.to_parquet(fn)
+        df.to_parquet(fn, **kwargs)
     else:
         ValueError(f"{format} not a supported format")
     return fn
@@ -285,6 +286,33 @@ def test_combine_similar_no_projection_on_one_branch(tmpdir):
 
     pdf["xx"] = pdf.x != 0
     assert_eq(df, pdf)
+
+
+@pytest.mark.parametrize(
+    "fmt, func, kwargs",
+    [
+        ("parquet", read_parquet, {}),
+        ("csv", read_csv, {"index": False}),
+    ],
+)
+def test_chdir_different_files(tmpdir, fmt, func, kwargs):
+    cwd = os.getcwd()
+
+    try:
+        pdf = pd.DataFrame({"x": [0, 1, 2, 3] * 4, "y": range(16)})
+        os.chdir(tmpdir)
+        _make_file(tmpdir, format=fmt, df=pdf, **kwargs)
+        df = func(f"myfile.{fmt}")
+
+        new_dir = Path(tmpdir).joinpath("new_dir")
+        new_dir.mkdir()
+        os.chdir(new_dir)
+        pdf2 = pd.DataFrame({"x": [0, 100, 200, 300] * 4, "y": range(16)})
+        _make_file(new_dir, format=fmt, df=pdf2, **kwargs)
+        df2 = func(f"myfile.{fmt}")
+        assert_eq(df.sum() + df2.sum(), pd.Series([2424, 240], index=["x", "y"]))
+    finally:
+        os.chdir(cwd)
 
 
 @pytest.mark.parametrize("meta", [True, False])

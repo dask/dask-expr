@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import functools
 import inspect
+import os
 import warnings
 from collections.abc import Callable, Hashable, Mapping
 from numbers import Integral, Number
@@ -4752,6 +4753,7 @@ def read_csv(
             storage_options=storage_options,
             kwargs=kwargs,
             header=header,
+            _cwd=_get_cwd(path, kwargs),
         )
     )
 
@@ -4777,6 +4779,7 @@ def read_table(
             storage_options=storage_options,
             kwargs=kwargs,
             header=header,
+            _cwd=_get_cwd(path, kwargs),
         )
     )
 
@@ -4802,8 +4805,23 @@ def read_fwf(
             storage_options=storage_options,
             kwargs=kwargs,
             header=header,
+            _cwd=_get_cwd(path, kwargs),
         )
     )
+
+
+def _get_protocol(urlpath):
+    if "://" in urlpath:
+        protocol, _ = urlpath.split("://", 1)
+        if len(protocol) > 1:
+            # excludes Windows paths
+            return protocol
+    return None
+
+
+def _get_cwd(path, kwargs):
+    protocol = kwargs.pop("protocol", None) or _get_protocol(path) or "file"
+    return os.getcwd() if protocol == "file" else None
 
 
 def read_parquet(
@@ -4915,6 +4933,7 @@ def read_parquet(
             filesystem=filesystem,
             engine=_set_parquet_engine(engine),
             kwargs=kwargs,
+            _cwd=_get_cwd(path, kwargs),
             _series=isinstance(columns, str),
         )
     )
