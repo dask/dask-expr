@@ -323,7 +323,10 @@ class Merge(Expr):
 
     def _on_condition_alread_partitioned(self, expr, on):
         if not isinstance(on, list):
-            result = on in expr.unique_partition_mapping_columns
+            result = (
+                on in expr.unique_partition_mapping_columns
+                or (on,) in expr.unique_partition_mapping_columns
+            )
         else:
             result = tuple(on) in expr.unique_partition_mapping_columns
         return result and expr.npartitions == self.npartitions

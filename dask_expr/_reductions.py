@@ -459,8 +459,9 @@ class ApplyConcatApply(Expr):
 
     @functools.cached_property
     def need_to_shuffle(self):
+        split_by = self.split_by or self.frame.columns
         if any(
-            set(self.split_by) >= set(cols)
+            set(split_by) >= (set(cols) if isinstance(cols, tuple) else {cols})
             for cols in self.frame.unique_partition_mapping_columns
         ):
             return False
@@ -519,6 +520,8 @@ class ApplyConcatApply(Expr):
                 from dask_expr import Repartition
 
                 return Repartition(chunked, new_partitions=self.split_out)
+            if self.ndim < chunked.ndim:
+                chunked = chunked[chunked.columns[0]]
             return chunked
 
         # Lower into ShuffleReduce

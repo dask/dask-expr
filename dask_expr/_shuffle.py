@@ -101,7 +101,7 @@ class ShuffleBase(Expr):
     @functools.cached_property
     def unique_partition_mapping_columns(self):
         return (
-            {tuple(self.partition_index)}
+            {tuple(self._partitioning_index)}
             if isinstance(self._partitioning_index, list)
             else set()
         )
@@ -1262,6 +1262,7 @@ class SetIndexBlockwise(Blockwise):
     _defaults = {"append": False, "new_divisions": None, "drop": True}
     _keyword_only = ["drop", "new_divisions", "append"]
     _is_length_preserving = True
+    _preserves_partitioning_information = True
 
     @staticmethod
     def operation(df, *args, new_divisions, **kwargs):

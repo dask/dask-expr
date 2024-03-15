@@ -1,3 +1,6 @@
+import numpy as np
+import pytest
+
 from dask_expr import from_pandas, read_parquet
 from dask_expr._shuffle import DiskShuffle, Shuffle
 from dask_expr.tests._util import _backend_library, assert_eq
@@ -36,6 +39,75 @@ def test_groupby_avoid_shuffle():
     expected = pdf1.merge(pdf2)
     expected = expected.groupby("a").sum()
     assert_eq(q, expected, check_index=False)
+
+
+@pytest.mark.parametrize(
+    "func",
+    [
+        lambda x: x.replace(1, 5),
+        lambda x: x.fillna(100),
+        lambda x: np.log(x),
+        lambda x: x.combine_first(x),
+        lambda x: x.query("a > 2"),
+        lambda x: x.b.isin([1]),
+        lambda x: x.eval("z=a+b"),
+        lambda x: x.assign(z=x.a + x.b),
+        lambda x: x + x,
+    ],
+)
+def test_shuffle_when_necessary(func):
+    pdf = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6] * 100, "b": 1, "c": 2})
+
+    df = from_pandas(pdf, npartitions=4)
+    q = df.groupby("a").sum(split_out=True).reset_index()
+    q = func(q)
+    assert q.optimize().unique_partition_mapping_columns == set()
+    expected = pdf.groupby("a").sum().reset_index()
+    expected = func(expected)
+    assert_eq(q, expected, check_index=False)
+
+
+@pytest.mark.parametrize(
+    "func",
+    [
+        lambda x: x["a"],
+        lambda x: x[x.a > 5],
+        lambda x: x.drop(columns=["a"]),
+        lambda x: x.drop_duplicates(),
+        lambda x: x.dropna(),
+        lambda x: x.rename(columns={"a": "x"}),
+    ],
+)
+def test_avoid_shuffle_when_possible(func):
+    pdf = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6] * 100, "b": 1, "c": 2})
+
+    df = from_pandas(pdf, npartitions=4)
+    q = df.groupby("a").sum(split_out=True).reset_index()
+    q = func(q)
+    assert q.unique_partition_mapping_columns == {("a",)}
+    expected = pdf.groupby("a").sum().reset_index()
+    expected = func(expected)
+    assert_eq(q, expected, check_index=False)
+
+
+def test_repartition():
+    pdf = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6] * 100, "b": 1, "c": 2})
+
+    df = from_pandas(pdf, npartitions=4)
+    q = df.groupby("a").sum(split_out=True).reset_index()
+    q = q.repartition(npartitions=3)
+    assert q.unique_partition_mapping_columns == {("a",)}
+
+    q = q.repartition(npartitions=5)
+    assert q.unique_partition_mapping_columns == set()
+
+
+def test_shuffle():
+    pdf = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6] * 100, "b": 1, "c": 2})
+
+    df = from_pandas(pdf, npartitions=4)
+    q = df.shuffle("a")
+    assert q.unique_partition_mapping_columns == {("a",)}
 
 
 def test_merge_avoid_shuffle():

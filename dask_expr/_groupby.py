@@ -184,6 +184,8 @@ class GroupByBase:
 
 
 class GroupByChunk(Chunk, GroupByBase):
+    _preserves_partitioning_information = True
+
     @functools.cached_property
     def _args(self) -> list:
         return [self.frame] + self.by

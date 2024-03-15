@@ -2194,10 +2194,11 @@ class ResetIndex(Elemwise):
             predicate = None
             if not set(flatten(parents, list)).issubset(set(self.frame.columns)):
                 # one of the filters is the Index
-                self._filter_passthrough_available(parent, dependents)
-                name = self.operand("name")
-                if name is no_default:
+                name = self.operand("name") or self.frame._meta.index.name
+                if name is no_default and self.frame._meta.index.name is None:
                     name = "index"
+                elif self.frame._meta.index.name is not None:
+                    name = self.frame._meta.index.name
                 # replace the projection of the former index with the actual index
                 subs = Projection(self, name)
                 predicate = parent.predicate.substitute(subs, Index(self.frame))
@@ -2223,7 +2224,12 @@ class ResetIndex(Elemwise):
                 ):
                     return type(self)(self.frame, True, self.name)
                 return
-            return plain_column_projection(self, parent, dependents)
+            result = plain_column_projection(self, parent, dependents)
+            if result is not None and not set(result.columns) == set(
+                result.frame.columns
+            ):
+                result = result.substitute_parameters({"drop": True})
+            return result
 
 
 class AddPrefixSeries(Elemwise):
@@ -3704,6 +3710,9 @@ def plain_column_projection(expr, parent, dependents, additional_columns=None):
     )
     if isinstance(column_union, list):
         column_union = [col for col in expr.frame.columns if col in column_union]
+    elif column_union not in expr.frame.columns:
+        # we are accesing the index
+        column_union = []
     if column_union == expr.frame.columns:
         return
     result = type(expr)(expr.frame[column_union], *expr.operands[1:])
