@@ -264,7 +264,7 @@ class Concat(Expr):
                 self.interleave_partitions,
                 *frames,
             )
-            if result.columns == columns:
+            if result.columns == _convert_to_list(parent.operand("columns")):
                 if result.ndim == parent.ndim:
                     return result
                 elif result.ndim < parent.ndim:
