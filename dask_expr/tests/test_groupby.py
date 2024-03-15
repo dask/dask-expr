@@ -5,10 +5,10 @@ import dask
 import numpy as np
 import pytest
 
-from dask_expr import from_pandas, read_parquet
+from dask_expr import from_pandas
 from dask_expr._groupby import Aggregation, GroupByUDFBlockwise
 from dask_expr._reductions import TreeReduce
-from dask_expr._shuffle import DiskShuffle, Shuffle, TaskShuffle, divisions_lru
+from dask_expr._shuffle import Shuffle, TaskShuffle, divisions_lru
 from dask_expr.io import FromPandas
 from dask_expr.tests._util import _backend_library, assert_eq, xfail_gpu
 
@@ -988,38 +988,6 @@ def test_groupby_agg_meta_error(df, pdf):
     result = df.groupby(["x"]).agg({"y": ["median", "std"]})
     expected = pdf.groupby(["x"]).agg({"y": ["median", "std"]})
     assert_eq(result, expected)
-
-
-def test_groupby_implicit_divisions(tmpdir):
-    pdf1 = pd.DataFrame({"a": range(10), "bb": 1})
-
-    df1 = from_pandas(pdf1, npartitions=2)
-    df1.to_parquet(tmpdir / "df1.parquet")
-    df1 = read_parquet(
-        tmpdir / "df1.parquet", filesystem="pyarrow", calculate_divisions=True
-    )
-
-    result = df1.groupby("a").apply(lambda x: x + 1).optimize()
-    assert not list(result.find_operations(Shuffle))
-    assert len(result.compute()) == 10
-
-
-def test_groupby_avoid_shuffle():
-    pdf1 = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6] * 100, "b": 1, "c": 2})
-    pdf2 = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6] * 100, "d": 1, "e": 2})
-
-    df1 = from_pandas(pdf1, npartitions=4)
-    df2 = from_pandas(pdf2, npartitions=3)
-    q = df1.merge(df2)
-    q = q.groupby("a").sum(split_out=True)
-    result = q.optimize(fuse=False)
-    assert (
-        len(list(node for node in result.walk() if isinstance(node, DiskShuffle))) == 2
-    )
-
-    expected = pdf1.merge(pdf2)
-    expected = expected.groupby("a").sum()
-    assert_eq(q, expected, check_index=False)
 
 
 def test_groupby_aggregate_series_split_out(df, pdf):

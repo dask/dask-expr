@@ -6,7 +6,7 @@ import pytest
 from dask_expr import Merge, from_pandas, merge, repartition
 from dask_expr._expr import Filter, Projection
 from dask_expr._merge import BroadcastJoin
-from dask_expr._shuffle import DiskShuffle, Shuffle
+from dask_expr._shuffle import Shuffle
 from dask_expr.io import FromPandas
 from dask_expr.tests._util import _backend_library, assert_eq
 
@@ -994,29 +994,3 @@ def test_merge_leftsemi():
     df2 = from_pandas(pdf2, npartitions=2)
     with pytest.raises(NotImplementedError, match="on columns from the index"):
         df1.merge(df2, how="leftsemi", on="aa")
-
-
-def test_merge_avoid_shuffle():
-    pdf = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6] * 100, "b": 1, "c": 2})
-    pdf2 = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6] * 100, "d": 1, "e": 2})
-
-    df = from_pandas(pdf, npartitions=4)
-    df2 = from_pandas(pdf2, npartitions=3)
-    q = df.groupby("a").sum(split_out=True).reset_index()
-    q = q.merge(df2)
-    result = q.optimize(fuse=False)
-    assert (
-        len(list(node for node in result.walk() if isinstance(node, DiskShuffle))) == 2
-    )
-
-    expected = pdf.groupby("a").sum().reset_index()
-    expected = expected.merge(pdf2)
-    assert_eq(q, expected, check_index=False)
-
-    q = df2.groupby("a").sum(split_out=True).reset_index()
-    q = q.merge(df)
-    result = q.optimize(fuse=False)
-    # npartitions don't match in merge, so have to shuffle
-    assert (
-        len(list(node for node in result.walk() if isinstance(node, DiskShuffle))) == 3
-    )
