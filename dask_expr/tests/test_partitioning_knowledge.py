@@ -51,7 +51,6 @@ def test_groupby_avoid_shuffle():
         lambda x: x.query("a > 2"),
         lambda x: x.b.isin([1]),
         lambda x: x.eval("z=a+b"),
-        lambda x: x.assign(z=x.a + x.b),
         lambda x: x + x,
     ],
 )
@@ -61,7 +60,7 @@ def test_shuffle_when_necessary(func):
     df = from_pandas(pdf, npartitions=4)
     q = df.groupby("a").sum(split_out=True).reset_index()
     q = func(q)
-    assert q.optimize().unique_partition_mapping_columns == set()
+    assert q.unique_partition_mapping_columns == set()
     expected = pdf.groupby("a").sum().reset_index()
     expected = func(expected)
     assert_eq(q, expected, check_index=False)
@@ -76,6 +75,8 @@ def test_shuffle_when_necessary(func):
         lambda x: x.drop_duplicates(),
         lambda x: x.dropna(),
         lambda x: x.rename(columns={"a": "x"}),
+        lambda x: x.assign(z=x.a + x.b),
+        lambda x: x.assign(b=x.a + x.b),
     ],
 )
 def test_avoid_shuffle_when_possible(func):

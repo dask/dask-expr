@@ -1784,12 +1784,14 @@ class Assign(Elemwise):
 
     @functools.cached_property
     def unique_partition_mapping_columns(self):
-        if not set(self.frame.columns).intersection(self.keys):
-            return self.frame.unique_partition_mapping_columns
-        else:
-            # TODO: This can be better, but we have tuples in there, so it might
-            # get weird
-            return set()
+        keys = set(self.keys)
+        return {
+            col
+            for col in self.frame.unique_partition_mapping_columns
+            if not isinstance(col, tuple)
+            and col not in keys
+            or not set(col).intersection(keys)
+        }
 
     @functools.cached_property
     def keys(self):
