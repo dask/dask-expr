@@ -1261,9 +1261,9 @@ Expr={expr}"""
             FutureWarning,
             "`to_dask_dataframe` is deprecated, please use `to_legacy_collection`.",
         )
-        return self.to_legacy(*args, **kwargs)
+        return self.to_legacy_collection(*args, **kwargs)
 
-    def to_legacy(self, optimize: bool = True, **optimize_kwargs) -> _Frame:
+    def to_legacy_collection(self, optimize: bool = True, **optimize_kwargs) -> _Frame:
         """Convert to a legacy dask-dataframe collection
 
         Parameters
