@@ -15,7 +15,7 @@ from dask.utils import is_arraylike, is_series_like
 from pandas.api.types import is_bool_dtype
 from pandas.errors import IndexingError
 
-from dask_expr._collection import Series, from_dask_dataframe, new_collection
+from dask_expr._collection import Series, from_legacy_collection, new_collection
 from dask_expr._expr import Blockwise, MaybeAlignPartitions, Projection, are_co_aligned
 from dask_expr._util import is_scalar
 
@@ -121,8 +121,8 @@ class LocIndexer(Indexer):
         return new_collection(Loc(frame, iindexer))
 
     def _loc_array(self, iindexer, cindexer):
-        iindexer_series = from_dask_dataframe(
-            iindexer.to_dask_dataframe("_", self.obj.index.to_dask_dataframe())
+        iindexer_series = from_legacy_collection(
+            iindexer.to_legacy_collection("_", self.obj.index.to_legacy_collection())
         )
         return self._loc_series(iindexer_series, cindexer, check_alignment=False)
 
