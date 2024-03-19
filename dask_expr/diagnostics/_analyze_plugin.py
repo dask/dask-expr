@@ -47,6 +47,7 @@ class AnalyzePlugin(SchedulerPlugin):
             None,
             dumps(worker_plugin),
             name=worker_plugin.name,
+            idempotent=True,
         )
 
     async def get_statistics(self, id: str):
