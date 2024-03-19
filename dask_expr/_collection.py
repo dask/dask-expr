@@ -1258,8 +1258,8 @@ Expr={expr}"""
             Key-word arguments to pass through to `optimize`.
         """
         warnings.warn(
-            FutureWarning,
             "`to_dask_dataframe` is deprecated, please use `to_legacy_collection`.",
+            FutureWarning,
         )
         return self.to_legacy_collection(*args, **kwargs)
 
@@ -4734,8 +4734,8 @@ def from_dask_dataframe(*args, **kwargs) -> FrameBase:
         Whether to optimize the graph before conversion.
     """
     warnings.warn(
-        FutureWarning,
         "`from_dask_dataframe` is deprecated, please use `from_legacy_collection`.",
+        FutureWarning,
     )
     return from_legacy_collection(*args, **kwargs)
 

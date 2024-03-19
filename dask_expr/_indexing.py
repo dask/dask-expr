@@ -122,7 +122,7 @@ class LocIndexer(Indexer):
 
     def _loc_array(self, iindexer, cindexer):
         iindexer_series = from_legacy_collection(
-            iindexer.to_legacy_collection("_", self.obj.index.to_legacy_collection())
+            iindexer.to_dask_dataframe("_", self.obj.index.to_legacy_collection())
         )
         return self._loc_series(iindexer_series, cindexer, check_alignment=False)
 
