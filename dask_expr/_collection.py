@@ -160,7 +160,7 @@ def _wrap_expr_op(self, other, op=None):
         other = from_dask_array(
             other, index=self.index.to_dask_dataframe(), columns=self.columns
         )
-        if self.ndim == 1:
+        if self.ndim == 1 and len(self.columns):
             other = other[self.columns[0]]
 
     if (
@@ -451,6 +451,12 @@ Expr={expr}"""
             out = out.repartition(npartitions=1)
         out = out.optimize(fuse=fuse)
         return DaskMethodsMixin.compute(out, **kwargs)
+
+    def analyze(self, filename: str | None = None, format: str | None = None) -> None:
+        out = self
+        if not isinstance(out, Scalar):
+            out = out.repartition(npartitions=1)
+        return out.expr.analyze(filename=filename, format=format)
 
     def explain(self, stage: OptimizerStage = "fused", format: str | None = None):
         out = self
@@ -2518,9 +2524,6 @@ class DataFrame(FrameBase):
             "`len(df.index) == 0` or `len(df.columns) == 0`"
         )
 
-    def keys(self):
-        return self.columns
-
     @derived_from(pd.DataFrame)
     def items(self):
         for i, name in enumerate(self.columns):
@@ -3924,9 +3927,6 @@ class Series(FrameBase):
         """Number of bytes"""
         return new_collection(self.expr.nbytes)
 
-    def keys(self):
-        return self.index
-
     def __array_ufunc__(self, numpy_ufunc, method, *inputs, **kwargs):
         out = kwargs.get("out", ())
         for x in inputs + out:
@@ -4726,7 +4726,8 @@ def from_dask_array(x, columns=None, index=None, meta=None):
 
     if isinstance(index, FrameBase):
         index = index.to_dask_dataframe()
-
+    if columns is not None and not len(columns):
+        columns = None
     df = from_dask_array(x, columns=columns, index=index, meta=meta)
     return from_dask_dataframe(df, optimize=True)
 
