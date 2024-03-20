@@ -49,14 +49,13 @@ jobs:
           export VERSION_SUFFIX=a`date +%y%m%d`
 
           # conda search for the latest dask-core pre-release
-          arr=($(conda search --override-channels -c conda-forge -c dask/label/dev dask-core | tail -n 1))
+          arr=($(conda search --override-channels -c dask/label/dev dask-core | tail -n 1))
 
-          # extract latest dask-core version
+          # extract dask-core pre-release version / build
           export DASK_CORE_VERSION=${arr[1]}
 
           # distributed pre-release build
           conda mambabuild ci/recipe \
-                           --channel conda-forge \
                            --channel dask/label/dev \
                            --no-anaconda-upload \
                            --output-folder .
