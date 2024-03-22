@@ -20,6 +20,7 @@ from dask_expr import (
     DataFrame,
     Series,
     expr,
+    from_dict,
     from_pandas,
     is_scalar,
     isna,
@@ -2545,28 +2546,21 @@ def test_drop_columns_with_common_prefix():
     assert "prefix" in ddf.optimize().columns
 
 
-def test_series_repr():
+def test_to_datetime_repr():
     # https://github.com/dask/dask/issues/11016
-    import dask.dataframe as dd
 
-    df = dd.from_dict(
+    df = from_dict(
         {
-            "a": [1, 2, 3],
             "dt": [
                 "2023-01-04T00:00:00",
                 "2023-04-02T00:00:00",
                 "2023-01-01T00:00:00",
-            ],
+            ]
         },
         npartitions=1,
     )
+    to_datetime_repr = repr(to_datetime(df["dt"], format="%Y-%m-%dT%H:%M:%S"))
+    assert isinstance(to_datetime_repr, str)
 
-    assert isinstance(
-        repr(
-            dd.to_datetime(
-                df["dt"],
-                format="%Y-%m-%dT%H:%M:%S",
-            )
-        ),
-        str,
-    )
+    assert "Expr=ToDatetime(frame=df['dt']" in to_datetime_repr
+    assert "%Y-%m-%dT%H:%M:%S" in to_datetime_repr
