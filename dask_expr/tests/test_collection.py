@@ -2543,3 +2543,30 @@ def test_drop_columns_with_common_prefix():
 
     ddf = ddf.drop("prefix_foo", axis=1)
     assert "prefix" in ddf.optimize().columns
+
+
+def test_series_repr():
+    # https://github.com/dask/dask/issues/11016
+    import dask.dataframe as dd
+
+    df = dd.from_dict(
+        {
+            "a": [1, 2, 3],
+            "dt": [
+                "2023-01-04T00:00:00",
+                "2023-04-02T00:00:00",
+                "2023-01-01T00:00:00",
+            ],
+        },
+        npartitions=1,
+    )
+
+    assert isinstance(
+        repr(
+            dd.to_datetime(
+                df["dt"],
+                format="%Y-%m-%dT%H:%M:%S",
+            )
+        ),
+        str,
+    )

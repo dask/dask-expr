@@ -68,11 +68,11 @@ class Expr:
         return None
 
     def __str__(self):
-        s = ", ".join(
-            str(param) + "=" + str(operand)
-            for param, operand in zip(self._parameters, self.operands)
-            if isinstance(operand, Expr) or operand != self._defaults.get(param)
-        )
+        to_include = []
+        for param, operand in zip(self._parameters, self.operands):
+            if isinstance(operand, Expr) or operand is not self._defaults.get(param):
+                to_include.append(f"{param!r}={operand!r}")
+        s = ", ".join(to_include)
         return f"{type(self).__name__}({s})"
 
     def __repr__(self):
