@@ -67,12 +67,18 @@ class Expr:
     def _tune_up(self, parent):
         return None
 
-    def __str__(self):
+    def _operands_for_repr(self):
         to_include = []
         for param, operand in zip(self._parameters, self.operands):
-            if isinstance(operand, Expr) or operand is not self._defaults.get(param):
-                to_include.append(f"{param!r}={operand!r}")
-        s = ", ".join(to_include)
+            if isinstance(operand, Expr) or (
+                not isinstance(operand, (pd.Series, pd.DataFrame))
+                and operand != self._defaults.get(param)
+            ):
+                to_include.append(f"{param}={operand!r}")
+        return to_include
+
+    def __str__(self):
+        s = ", ".join(self._operands_for_repr())
         return f"{type(self).__name__}({s})"
 
     def __repr__(self):
