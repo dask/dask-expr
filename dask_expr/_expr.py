@@ -1725,9 +1725,10 @@ class Drop(Elemwise):
     operation = staticmethod(drop_by_shallow_copy)
 
     def _simplify_down(self):
-        columns = [
-            col for col in self.frame.columns if col not in self.operand("columns")
-        ]
+        col_op = self.operand("columns")
+        if not isinstance(col_op, list):
+            col_op = [col_op]
+        columns = [col for col in self.frame.columns if col not in col_op]
         return Projection(self.frame, columns)
 
 
@@ -3530,7 +3531,7 @@ class Fused(Blockwise):
 
     @functools.cached_property
     def _name(self):
-        return f"{str(self)}-{_tokenize_deterministic(self.exprs)}"
+        return f"{str(self)}-{_tokenize_deterministic(*self.operands)}"
 
     def _divisions(self):
         return self.exprs[0]._divisions()
