@@ -1,6 +1,6 @@
 import pandas as pd
 
-from dask_expr import from_legacy_collection
+from dask_expr import from_legacy_dataframe
 
 
 def read_json(
@@ -37,7 +37,7 @@ def read_json(
         path_converter=path_converter,
         **kwargs,
     )
-    return from_legacy_collection(df)
+    return from_legacy_dataframe(df)
 
 
 def to_json(
@@ -57,7 +57,7 @@ def to_json(
     from dask.dataframe.io.json import to_json
 
     return to_json(
-        df.to_legacy_collection(),
+        df.to_legacy_dataframe(),
         url_path,
         orient=orient,
         lines=lines,

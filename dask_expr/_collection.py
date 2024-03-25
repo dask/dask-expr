@@ -158,7 +158,7 @@ def _wrap_expr_op(self, other, op=None):
         other = other.expr
     elif isinstance(other, da.Array):
         other = from_dask_array(
-            other, index=self.index.to_legacy_collection(), columns=self.columns
+            other, index=self.index.to_legacy_dataframe(), columns=self.columns
         )
         if self.ndim == 1 and len(self.columns):
             other = other[self.columns[0]]
@@ -1248,7 +1248,7 @@ Expr={expr}"""
     def to_dask_dataframe(self, *args, **kwargs) -> _Frame:
         """Convert to a legacy dask-dataframe collection
 
-        WARNING: This API is deprecated. Please use `to_legacy_collection`.
+        WARNING: This API is deprecated. Please use `to_legacy_dataframe`.
 
         Parameters
         ----------
@@ -1257,13 +1257,11 @@ Expr={expr}"""
         **optimize_kwargs
             Key-word arguments to pass through to `optimize`.
         """
-        warnings.warn(
-            "`to_dask_dataframe` is deprecated, please use `to_legacy_collection`.",
-            FutureWarning,
-        )
-        return self.to_legacy_collection(*args, **kwargs)
+        # TODO: Deprecate `to_dask_dataframe`
+        # See: https://github.com/dask/dask-expr/issues/905
+        return self.to_legacy_dataframe(*args, **kwargs)
 
-    def to_legacy_collection(self, optimize: bool = True, **optimize_kwargs) -> _Frame:
+    def to_legacy_dataframe(self, optimize: bool = True, **optimize_kwargs) -> _Frame:
         """Convert to a legacy dask-dataframe collection
 
         Parameters
@@ -1304,7 +1302,7 @@ Expr={expr}"""
         -------
         A Dask Array
         """
-        return self.to_legacy_collection(optimize, **optimize_kwargs).to_dask_array(
+        return self.to_legacy_dataframe(optimize, **optimize_kwargs).to_dask_array(
             lengths=lengths, meta=meta
         )
 
@@ -2321,7 +2319,7 @@ Expr={expr}"""
         if lengths is True:
             lengths = tuple(self.map_partitions(len).compute())
 
-        frame = self.to_legacy_collection()
+        frame = self.to_legacy_dataframe()
         records = to_records(frame)
 
         chunks = frame._validate_chunks(records, lengths)
@@ -2358,7 +2356,7 @@ Expr={expr}"""
         --------
         dask_expr.from_delayed
         """
-        return self.to_legacy_collection().to_delayed(optimize_graph=optimize_graph)
+        return self.to_legacy_dataframe().to_delayed(optimize_graph=optimize_graph)
 
     def to_backend(self, backend: str | None = None, **kwargs):
         """Move to a new DataFrame backend
@@ -2663,7 +2661,7 @@ class DataFrame(FrameBase):
                         f"({v.npartitions} != {result.npartitions})"
                     )
                 v = from_dask_array(
-                    v, index=result.index.to_legacy_collection(), meta=result._meta
+                    v, index=result.index.to_legacy_dataframe(), meta=result._meta
                 )
             else:
                 raise TypeError(f"Column assignment doesn't support type {type(v)}")
@@ -4728,21 +4726,19 @@ def from_dict(
 def from_dask_dataframe(*args, **kwargs) -> FrameBase:
     """Create a dask-expr collection from a legacy dask-dataframe collection
 
-    WARNING: This API is deprecated. Please use `from_legacy_collection`.
+    WARNING: This API is deprecated. Please use `from_legacy_dataframe`.
 
     Parameters
     ----------
     optimize
         Whether to optimize the graph before conversion.
     """
-    warnings.warn(
-        "`from_dask_dataframe` is deprecated, please use `from_legacy_collection`.",
-        FutureWarning,
-    )
-    return from_legacy_collection(*args, **kwargs)
+    # TODO: Deprecate `from_dask_dataframe`
+    # See: https://github.com/dask/dask-expr/issues/905
+    return from_legacy_dataframe(*args, **kwargs)
 
 
-def from_legacy_collection(ddf: _Frame, optimize: bool = True) -> FrameBase:
+def from_legacy_dataframe(ddf: _Frame, optimize: bool = True) -> FrameBase:
     """Create a dask-expr collection from a legacy dask-dataframe collection
 
     Parameters
@@ -4762,11 +4758,11 @@ def from_dask_array(x, columns=None, index=None, meta=None):
     from dask.dataframe.io import from_dask_array
 
     if isinstance(index, FrameBase):
-        index = index.to_legacy_collection()
+        index = index.to_legacy_dataframe()
     if columns is not None and not len(columns):
         columns = None
     df = from_dask_array(x, columns=columns, index=index, meta=meta)
-    return from_legacy_collection(df, optimize=True)
+    return from_legacy_dataframe(df, optimize=True)
 
 
 def read_csv(

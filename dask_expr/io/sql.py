@@ -1,11 +1,11 @@
-from dask_expr import from_legacy_collection
+from dask_expr import from_legacy_dataframe
 
 
 def read_sql(sql, con, index_col, **kwargs):
     from dask.dataframe.io.sql import read_sql
 
     df = read_sql(sql, con, index_col, **kwargs)
-    return from_legacy_collection(df)
+    return from_legacy_dataframe(df)
 
 
 def read_sql_table(
@@ -40,7 +40,7 @@ def read_sql_table(
         engine_kwargs=engine_kwargs,
         **kwargs,
     )
-    return from_legacy_collection(df)
+    return from_legacy_dataframe(df)
 
 
 def read_sql_query(
@@ -71,7 +71,7 @@ def read_sql_query(
         engine_kwargs=engine_kwargs,
         **kwargs,
     )
-    return from_legacy_collection(df)
+    return from_legacy_dataframe(df)
 
 
 def to_sql(
@@ -92,7 +92,7 @@ def to_sql(
     from dask.dataframe.io.sql import to_sql as _to_sql
 
     return _to_sql(
-        df.to_legacy_collection(),
+        df.to_legacy_dataframe(),
         name=name,
         uri=uri,
         schema=schema,
