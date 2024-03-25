@@ -10,6 +10,7 @@ from operator import add
 import dask
 import dask.array as da
 import numpy as np
+import pandas as pd
 import pytest
 from dask.dataframe._compat import PANDAS_GE_210, PANDAS_GE_220
 from dask.dataframe.utils import UNKNOWN_CATEGORIES
@@ -19,6 +20,7 @@ from dask_expr import (
     DataFrame,
     Series,
     expr,
+    from_dict,
     from_pandas,
     is_scalar,
     isna,
@@ -147,6 +149,15 @@ def test_setitem(pdf, df):
 def test_set_index_blockwise_culling(df, pdf):
     result = df.set_index("x").partitions[0]
     assert_eq(result, pdf.set_index("x").head(10))
+
+
+def test_set_index_with_divisions_already_known():
+    ddf = timeseries(start="2021-01-01", end="2021-01-07", freq="1h").reset_index()
+    pdf = ddf.compute()
+    divisions = pd.date_range(start="2021-01-01", end="2021-01-07", freq="1D")
+
+    ddf2 = ddf.set_index("timestamp", sorted=True, divisions=divisions.tolist())
+    assert_eq(ddf2, pdf.set_index("timestamp"))
 
 
 @xfail_gpu("https://github.com/rapidsai/cudf/issues/10271")
@@ -2533,3 +2544,32 @@ def test_warn_annotations():
     # Don't warn a second time
     with dask.annotate(retries=3):
         from_pandas(pd.DataFrame({"a": [1, 2, 3]}), npartitions=2)
+
+
+def test_drop_columns_with_common_prefix():
+    ddf = from_pandas(
+        pd.DataFrame({"prefix": [1, 2, 3], "prefix_foo": [4, 5, 6]}), npartitions=1
+    )
+
+    ddf = ddf.drop("prefix_foo", axis=1)
+    assert "prefix" in ddf.optimize().columns
+
+
+def test_to_datetime_repr():
+    # https://github.com/dask/dask/issues/11016
+
+    df = from_dict(
+        {
+            "dt": [
+                "2023-01-04T00:00:00",
+                "2023-04-02T00:00:00",
+                "2023-01-01T00:00:00",
+            ]
+        },
+        npartitions=1,
+    )
+    to_datetime_repr = repr(to_datetime(df["dt"], format="%Y-%m-%dT%H:%M:%S"))
+    assert isinstance(to_datetime_repr, str)
+
+    assert "Expr=ToDatetime(frame=df['dt']" in to_datetime_repr
+    assert "%Y-%m-%dT%H:%M:%S" in to_datetime_repr
