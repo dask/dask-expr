@@ -633,10 +633,8 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
 
     @cached_property
     def _name(self):
-        return (
-            funcname(type(self)).lower()
-            + "-"
-            + _tokenize_deterministic(self.checksum, *self.operands[:-1])
+        return "read_parquet-" + _tokenize_deterministic(
+            funcname(type(self)), self.checksum, *self.operands[:-1]
         )
 
     @property
