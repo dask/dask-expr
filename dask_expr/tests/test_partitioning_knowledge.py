@@ -170,7 +170,6 @@ def test_shuffle_after_only_blockwise_merge():
     result = df.merge(df2).optimize(fuse=False)
     result = result.groupby("a").sum(split_out=True)
     result = result.optimize(fuse=False)
-    result.pprint()
     assert (
         len(list(node for node in result.walk() if isinstance(node, DiskShuffle))) == 1
     )
@@ -178,7 +177,6 @@ def test_shuffle_after_only_blockwise_merge():
     result = df.merge(df2)
     result = result.groupby("a").sum(split_out=True)
     result = result.optimize(fuse=False)
-    result.pprint()
     assert (
         len(list(node for node in result.walk() if isinstance(node, DiskShuffle))) == 1
     )
