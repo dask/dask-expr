@@ -138,3 +138,17 @@ def test_merge_avoid_shuffle():
     assert (
         len(list(node for node in result.walk() if isinstance(node, DiskShuffle))) == 3
     )
+
+
+def test_merge_shuffle_if_different_order():
+    pdf = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6] * 100, "b": 1, "c": 2})
+    pdf2 = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6] * 100, "b": 1, "e": 2})
+
+    df = from_pandas(pdf, npartitions=4)
+    df2 = from_pandas(pdf2, npartitions=3)
+    q = df.groupby(["a", "b"]).sum(split_out=True).reset_index()
+    q = q.merge(df2, on=["b", "a"])
+    result = q.optimize(fuse=False)
+    assert (
+        len(list(node for node in result.walk() if isinstance(node, DiskShuffle))) == 3
+    )
