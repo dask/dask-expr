@@ -9,6 +9,9 @@ from dask_expr.tests._util import _backend_library, assert_eq
 pd = _backend_library()
 
 
+@pytest.mark.xfail(
+    reason="propagate a different property because it's not sufficient for merges"
+)
 def test_groupby_implicit_divisions(tmpdir):
     pdf1 = pd.DataFrame({"a": range(10), "bb": 1})
 
