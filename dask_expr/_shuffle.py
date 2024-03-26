@@ -335,14 +335,6 @@ class SimpleShuffle(PartitionsFiltered, Shuffle):
     def _meta(self):
         return self.frame._meta
 
-    @functools.cached_property
-    def unique_partition_mapping_columns(self):
-        return (
-            {tuple(self.original_partitioning_index)}
-            if isinstance(self.original_partitioning_index, list)
-            else set()
-        )
-
     @staticmethod
     def _shuffle_group(df, _filter, *args):
         """Filter the output of `shuffle_group`"""
