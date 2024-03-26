@@ -152,3 +152,33 @@ def test_merge_shuffle_if_different_order():
     assert (
         len(list(node for node in result.walk() if isinstance(node, DiskShuffle))) == 3
     )
+
+
+def test_shuffle_after_only_blockwise_merge():
+    df = pd.DataFrame(
+        {"a": np.random.randint(1, 100, (10,)), "b": np.random.randint(1, 100, (10,))}
+    )
+
+    df = from_pandas(df, npartitions=4)
+
+    df2 = pd.DataFrame(
+        {"a": np.random.randint(1, 100, (10,)), "c": np.random.randint(1, 100, (10,))}
+    )
+
+    df2 = from_pandas(df2, npartitions=1)
+
+    result = df.merge(df2).optimize(fuse=False)
+    result = result.groupby("a").sum(split_out=True)
+    result = result.optimize(fuse=False)
+    result.pprint()
+    assert (
+        len(list(node for node in result.walk() if isinstance(node, DiskShuffle))) == 1
+    )
+
+    result = df.merge(df2)
+    result = result.groupby("a").sum(split_out=True)
+    result = result.optimize(fuse=False)
+    result.pprint()
+    assert (
+        len(list(node for node in result.walk() if isinstance(node, DiskShuffle))) == 1
+    )

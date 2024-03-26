@@ -159,6 +159,11 @@ class Merge(Expr):
 
     @property
     def unique_partition_mapping_columns(self):
+        if self._is_single_partition_broadcast:
+            result = self.left.unique_partition_mapping_columns.copy()
+            result.update(self.right.unique_partition_mapping_columns)
+            return result
+
         return {
             tuple(self.left_on) if isinstance(self.left_on, list) else self.left_on,
             tuple(self.right_on) if isinstance(self.right_on, list) else self.right_on,
@@ -837,6 +842,12 @@ class BlockwiseMerge(Merge, Blockwise):
     """
 
     is_broadcast_join = False
+
+    @functools.cached_property
+    def unique_partition_mapping_columns(self):
+        result = self.left.unique_partition_mapping_columns.copy()
+        result.update(self.right.unique_partition_mapping_columns)
+        return result
 
     def _divisions(self):
         if self.left.npartitions == self.right.npartitions:
