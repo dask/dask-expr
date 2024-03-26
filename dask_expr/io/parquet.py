@@ -783,16 +783,7 @@ class ReadParquetPyarrowFS(ReadParquet):
 
     @cached_property
     def unique_partition_mapping_columns(self):
-        # TODO This is a poor name
-        if self.calculate_divisions:
-            return {
-                col
-                for col in self.columns
-                if _divisions_from_statistics(self.aggregated_statistics, col)[1]
-                is not None
-            }
-        else:
-            return set()
+        return set()
 
     def load_statistics(self, files=None, fragments=None):
         if files is None:
