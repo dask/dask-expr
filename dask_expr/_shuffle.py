@@ -719,6 +719,7 @@ class AssignPartitioningIndex(Blockwise):
         "index_shuffle",
     ]
     _defaults = {"cast_dtype": None, "index_shuffle": False}
+    _preserves_partitioning_information = True
 
     @staticmethod
     def operation(df, index, name: str, npartitions: int, cast_dtype, index_shuffle):
