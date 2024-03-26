@@ -905,13 +905,7 @@ class GroupByApply(Expr, GroupByBase):
     @functools.cached_property
     def unique_partition_mapping_columns(self):
         if not self.need_to_shuffle:
-            columns = self._by_columns
-            result = {
-                c for c in columns if c in self.frame.unique_partition_mapping_columns
-            }
-            if tuple(columns) in self.frame.unique_partition_mapping_columns:
-                result.add(tuple(columns))
-            return result
+            return self.frame.unique_partition_mapping_columns
         elif not any(isinstance(b, Expr) for b in self.by):
             return {tuple(self._by_columns)}
         else:
