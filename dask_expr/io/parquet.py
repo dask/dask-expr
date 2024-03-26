@@ -781,10 +781,6 @@ class ReadParquetPyarrowFS(ReadParquet):
         stats = [_STATS_CACHE[tokenize(finfo)] for finfo in files_to_consider]
         return _combine_stats(stats)
 
-    @cached_property
-    def unique_partition_mapping_columns(self):
-        return set()
-
     def load_statistics(self, files=None, fragments=None):
         if files is None:
             files = self._dataset_info["all_files"]
