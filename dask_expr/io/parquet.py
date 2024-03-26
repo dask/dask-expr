@@ -460,7 +460,7 @@ def to_parquet(
     # Engine-specific initialization steps to write the dataset.
     # Possibly create parquet metadata, and load existing stuff if appending
     i_offset, fmd, metadata_file_exists, extra_write_kwargs = engine.initialize_write(
-        df.to_dask_dataframe(),
+        df.to_legacy_dataframe(),
         fs,
         path,
         append=append,
@@ -594,7 +594,9 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             if set(columns) == set(self.columns):
                 return
             columns = [col for col in self.columns if col in columns]
-            return self.substitute_parameters({"columns": columns, "_series": False})
+            return Index(
+                self.substitute_parameters({"columns": columns, "_series": False})
+            )
 
         if isinstance(parent, Projection):
             return super()._simplify_up(parent, dependents)
@@ -632,11 +634,17 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             return _convert_to_list(columns_operand)
 
     @cached_property
+    def _funcname(self):
+        return "read_parquet"
+
+    @cached_property
     def _name(self):
         return (
-            funcname(type(self)).lower()
+            self._funcname
             + "-"
-            + _tokenize_deterministic(self.checksum, *self.operands[:-1])
+            + _tokenize_deterministic(
+                funcname(type(self)), self.checksum, *self.operands[:-1]
+            )
         )
 
     @property
@@ -668,7 +676,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
     def _fusion_compression_factor(self):
         if self.operand("columns") is None:
             return 1
-        nr_original_columns = len(self._dataset_info["schema"].names) - 1
+        nr_original_columns = max(len(self._dataset_info["schema"].names) - 1, 1)
         return max(
             len(_convert_to_list(self.operand("columns"))) / nr_original_columns, 0.001
         )

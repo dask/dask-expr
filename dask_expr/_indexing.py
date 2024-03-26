@@ -2,6 +2,7 @@ import functools
 from typing import Callable
 
 import numpy as np
+import pandas as pd
 from dask.array import Array
 from dask.dataframe import methods
 from dask.dataframe.dispatch import meta_nonempty
@@ -15,7 +16,7 @@ from dask.utils import is_arraylike, is_series_like
 from pandas.api.types import is_bool_dtype
 from pandas.errors import IndexingError
 
-from dask_expr._collection import Series, from_dask_dataframe, new_collection
+from dask_expr._collection import Series, from_legacy_dataframe, new_collection
 from dask_expr._expr import Blockwise, MaybeAlignPartitions, Projection, are_co_aligned
 from dask_expr._util import is_scalar
 
@@ -59,9 +60,9 @@ class LocIndexer(Indexer):
 
             iindexer = key[0]
             cindexer = key[1]
-
-            if isinstance(cindexer, slice):
-                cindexer = list(self.obj._meta.loc[:, cindexer].columns)
+            pd_loc = self.obj._meta.loc[:, cindexer]
+            if isinstance(pd_loc, pd.DataFrame):
+                cindexer = list(pd_loc.columns)
         else:
             iindexer = key
             cindexer = None
@@ -121,8 +122,8 @@ class LocIndexer(Indexer):
         return new_collection(Loc(frame, iindexer))
 
     def _loc_array(self, iindexer, cindexer):
-        iindexer_series = from_dask_dataframe(
-            iindexer.to_dask_dataframe("_", self.obj.index.to_dask_dataframe())
+        iindexer_series = from_legacy_dataframe(
+            iindexer.to_dask_dataframe("_", self.obj.index.to_legacy_dataframe())
         )
         return self._loc_series(iindexer_series, cindexer, check_alignment=False)
 

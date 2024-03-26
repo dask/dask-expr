@@ -1754,9 +1754,10 @@ class Drop(Elemwise):
     _preserves_partitioning_information = True
 
     def _simplify_down(self):
-        columns = [
-            col for col in self.frame.columns if col not in self.operand("columns")
-        ]
+        col_op = self.operand("columns")
+        if not isinstance(col_op, list):
+            col_op = [col_op]
+        columns = [col for col in self.frame.columns if col not in col_op]
         return Projection(self.frame, columns)
 
 
