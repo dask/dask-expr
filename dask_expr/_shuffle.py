@@ -75,12 +75,14 @@ class ShuffleBase(Expr):
         "method",
         "options",
         "index_shuffle",
+        "original_partitioning_index",
     ]
     _defaults = {
         "ignore_index": False,
         "method": None,
         "options": None,
         "index_shuffle": None,
+        "original_partitioning_index": None,
     }
     _is_length_preserving = True
     _filter_passthrough = True
@@ -100,11 +102,8 @@ class ShuffleBase(Expr):
 
     @functools.cached_property
     def unique_partition_mapping_columns(self):
-        return (
-            {tuple(self._partitioning_index)}
-            if isinstance(self._partitioning_index, list)
-            else set()
-        )
+        idx = self.original_partitioning_index or self._partitioning_index
+        return {tuple(idx)} if isinstance(idx, list) else set()
 
     def _simplify_up(self, parent, dependents):
         if isinstance(parent, Filter) and self._filter_passthrough_available(
@@ -209,6 +208,7 @@ class Shuffle(ShuffleBase):
             self.npartitions_out,
             self.ignore_index,
             self.options,
+            self.original_partitioning_index,
         ]
         if method == "p2p":
             return P2PShuffle(frame, *ops)
@@ -306,6 +306,7 @@ class RearrangeByColumn(ShuffleBase):
             ignore_index,
             self.method,
             options,
+            original_partitioning_index=self._partitioning_index,
         )
         if frame.ndim == 1:
             # Reduce back to series
@@ -324,14 +325,23 @@ class SimpleShuffle(PartitionsFiltered, Shuffle):
         "npartitions_out",
         "ignore_index",
         "options",
+        "original_partitioning_index",
         "_partitions",
     ]
 
-    _defaults = {"_partitions": None}
+    _defaults = {"_partitions": None, "original_partitioning_index": None}
 
     @functools.cached_property
     def _meta(self):
         return self.frame._meta
+
+    @functools.cached_property
+    def unique_partition_mapping_columns(self):
+        return (
+            {tuple(self.original_partitioning_index)}
+            if isinstance(self.original_partitioning_index, list)
+            else set()
+        )
 
     @staticmethod
     def _shuffle_group(df, _filter, *args):

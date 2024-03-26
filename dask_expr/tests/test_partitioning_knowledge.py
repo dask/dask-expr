@@ -180,3 +180,25 @@ def test_shuffle_after_only_blockwise_merge():
     assert (
         len(list(node for node in result.walk() if isinstance(node, DiskShuffle))) == 1
     )
+
+
+def test_avoid_shuffle_on_top_of_lowered_shuffle():
+    df = pd.DataFrame(
+        {"a": np.random.randint(1, 100, (10,)), "b": np.random.randint(1, 100, (10,))}
+    )
+
+    df = from_pandas(df, npartitions=4)
+
+    df2 = pd.DataFrame(
+        {"a": np.random.randint(1, 100, (10,)), "c": np.random.randint(1, 100, (10,))}
+    )
+
+    df2 = from_pandas(df2, npartitions=3)
+
+    # ensure that the lowered shuffle still has the information available
+    result = df.merge(df2).optimize(fuse=False)
+    result = result.groupby("a").sum(split_out=True)
+    result = result.optimize(fuse=False)
+    assert (
+        len(list(node for node in result.walk() if isinstance(node, DiskShuffle))) == 2
+    )
