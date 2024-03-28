@@ -2,6 +2,7 @@ import functools
 import math
 import operator
 
+import numpy as np
 from dask.dataframe.dispatch import make_meta, meta_nonempty
 from dask.dataframe.multi import (
     _concat_wrapper,
@@ -35,6 +36,7 @@ from dask_expr._repartition import Repartition
 from dask_expr._shuffle import (
     RearrangeByColumn,
     _contains_index_name,
+    _is_numeric_cast_type,
     _select_columns_or_index,
 )
 from dask_expr._util import _convert_to_list, _tokenize_deterministic, is_scalar
@@ -808,9 +810,16 @@ def create_assign_index_merge_transfer():
         if isinstance(index, (str, list, tuple)):
             # Assume column selection from df
             index = [index] if isinstance(index, str) else list(index)
-            index = partitioning_index(df[index], npartitions)
-        else:
-            index = partitioning_index(index, npartitions)
+            index = df[index]
+
+        dtypes = {}
+        for col, dtype in index.dtypes.items():
+            if _is_numeric_cast_type(dtype):
+                dtypes[col] = np.float64
+        if dtypes:
+            index = index.astype(dtypes)
+
+        index = partitioning_index(index, npartitions)
         df = df.assign(**{name: index})
         meta = meta.assign(**{name: 0})
         return merge_transfer(
