@@ -88,7 +88,10 @@ def test_avoid_shuffle_when_possible(func):
     df = from_pandas(pdf, npartitions=4)
     q = df.groupby("a").sum(split_out=True).reset_index()
     q = func(q)
-    assert q.unique_partition_mapping_columns == {("a",)}
+    if "x" in q.columns:
+        assert q.unique_partition_mapping_columns == {("x",)}
+    else:
+        assert q.unique_partition_mapping_columns == {("a",)}
     expected = pdf.groupby("a").sum().reset_index()
     expected = func(expected)
     assert_eq(q, expected, check_index=False)

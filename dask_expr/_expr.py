@@ -1212,7 +1212,20 @@ class Elemwise(Blockwise):
 
 class RenameFrame(Elemwise):
     _parameters = ["frame", "columns"]
-    _preserves_partitioning_information = True
+
+    @functools.cached_property
+    def unique_partition_mapping_columns(self):
+        result = set()
+        columns = self.operand("columns")
+        for elem in self.frame.unique_partition_mapping_columns:
+            if isinstance(elem, tuple):
+                subset = self.frame._meta[list(elem)].rename(columns=columns)
+                result.add(tuple(list(subset.columns)))
+            else:
+                # scalar
+                subset = self.frame._meta[[elem]]
+                result.add(subset.columns[0])
+        return result
 
     @staticmethod
     def operation(df, columns):
