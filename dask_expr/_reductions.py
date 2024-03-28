@@ -516,13 +516,21 @@ class ApplyConcatApply(Expr):
             )
         elif not self.need_to_shuffle:
             # Repartition and return
-            if self.split_out is not True and self.split_out < chunked.npartitions:
+            result = Aggregate(
+                chunked,
+                type(self),
+                aggregate,
+                aggregate_kwargs,
+                *self.aggregate_args,
+            )
+
+            if self.split_out is not True and self.split_out < result.npartitions:
                 from dask_expr import Repartition
 
-                return Repartition(chunked, new_partitions=self.split_out)
-            if self.ndim < chunked.ndim:
-                chunked = chunked[chunked.columns[0]]
-            return chunked
+                return Repartition(result, new_partitions=self.split_out)
+            if self.ndim < result.ndim:
+                result = result[result.columns[0]]
+            return result
 
         # Lower into ShuffleReduce
         return ShuffleReduce(
