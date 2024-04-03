@@ -251,6 +251,7 @@ class RearrangeByColumn(ShuffleBase):
             partitioning_index,
             "_partitions",
             npartitions_out,
+            frame._meta,
             index_shuffle,
         )
 
@@ -661,23 +662,31 @@ class AssignPartitioningIndex(Blockwise):
         "partitioning_index",
         "index_name",
         "npartitions_out",
+        "meta",
         "index_shuffle",
     ]
     _defaults = {"index_shuffle": False}
 
     @staticmethod
-    def operation(df, index, name: str, npartitions: int, index_shuffle: bool):
+    def operation(df, index, name: str, npartitions: int, meta, index_shuffle: bool):
         """Construct a hash-based partitioning index"""
-        if hasattr(index, "ndim"):
-            if index.ndim == 1:
-                index = index.to_frame()
-        elif index_shuffle:
-            index = df.index.to_frame()
-        else:
-            index = _select_columns_or_index(df, index)
+
+        def _get_index(idx, obj):
+            if hasattr(idx, "ndim"):
+                if idx.ndim == 1:
+                    idx = idx.to_frame()
+            elif index_shuffle:
+                idx = obj.index.to_frame()
+            else:
+                idx = _select_columns_or_index(obj, idx)
+            return idx
+
+        # meta and df dtypes can deviate, this is why we do the cast here
+        meta_index = _get_index(index, meta)
+        index = _get_index(index, df)
 
         dtypes = {}
-        for col, dtype in index.dtypes.items():
+        for col, dtype in meta_index.dtypes.items():
             if _is_numeric_cast_type(dtype):
                 dtypes[col] = np.float64
         if dtypes:
