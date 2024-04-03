@@ -817,7 +817,7 @@ def create_assign_index_merge_transfer():
             if _is_numeric_cast_type(dtype):
                 dtypes[col] = np.float64
         if dtypes:
-            index = index.astype(dtypes)
+            index = index.astype(dtypes, errors="ignore")
 
         index = partitioning_index(index, npartitions)
         df = df.assign(**{name: index})
