@@ -1,5 +1,29 @@
 ## Dask-expr
 
+# v1.0.10
+
+- Make `setattr` work (:pr:`1011`) `Patrick Hoefler`_
+- Adjust version number in changes `Patrick Hoefler`_
+
+# v1.0.9
+
+- Add support for named aggregations in `groupby(...).aggregate()` (:pr:`1009`) `Patrick Hoefler`_
+
+# v1.0.7
+
+- Fix meta calculation in `drop_duplicates` to preserve dtypes (:pr:`1007`) `Patrick Hoefler`_
+
+# v1.0.6
+
+- Fix pyarrow fs reads for list of directories (:pr:`1006`) `Patrick Hoefler`_
+- Register json and orc APIs for "pandas" dispatch (:pr:`1004`) `Richard (Rick) Zamora`_
+- Rename overloaded `to/from_dask_dataframe` API (:pr:`987`) `Richard (Rick) Zamora`_
+- Fix zero division error when reading index from parquet (:pr:`1000`) `Patrick Hoefler`_
+- Start building and publishing conda nightlies (:pr:`986`) `Charles Blackmon-Luca`_
+- Set divisions with divisions already known (:pr:`997`) `Florian Jetter`_
+- Nicer read_parquet prefix (:pr:`998`) `Florian Jetter`_
+- Reduce coverage target a little bit (:pr:`999`) `Patrick Hoefler`_
+
 # v1.0.5
 
 - Ensure that repr doesn't raise if an operand is a pandas object (:pr:`996`) `Florian Jetter`_
