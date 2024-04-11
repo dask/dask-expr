@@ -819,10 +819,6 @@ class SetIndex(BaseSetIndexSortValues):
     }
     _filter_passthrough = True
 
-    @functools.cached_property
-    def unique_partition_mapping_columns(self):
-        return {tuple(self.other.columns)}
-
     @property
     def _projection_columns(self):
         return self.columns + (
