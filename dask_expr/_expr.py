@@ -1979,7 +1979,8 @@ class Projection(Elemwise):
 
     @functools.cached_property
     def unique_partition_mapping_columns(self):
-        columns = set(self.operand("columns"))
+        col_op = self.operand("columns")
+        columns = set(col_op) if isinstance(col_op, list) else {col_op}
         return {
             c
             for c in self.frame.unique_partition_mapping_columns
