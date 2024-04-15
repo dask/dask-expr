@@ -1001,17 +1001,16 @@ class ReadParquetPyarrowFS(ReadParquet):
 
     @property
     def _fusion_compression_factor(self):
-        if self.operand("columns") is None:
-            return 1
         approx_stats = self.approx_statistics()
         total_uncompressed = 0
         after_projection = 0
-        col_op = self.operand("columns")
+        col_op = self.operand("columns") or self.columns
         for col in approx_stats["columns"]:
             total_uncompressed += col["total_uncompressed_size"]
             if col["path_in_schema"] in col_op:
                 after_projection += col["total_uncompressed_size"]
 
+        total_uncompressed = max(total_uncompressed, 100_000_000)
         return max(after_projection / total_uncompressed, 0.001)
 
     def _filtered_task(self, index: int):
