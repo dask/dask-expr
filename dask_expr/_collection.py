@@ -538,6 +538,14 @@ Expr={expr}"""
         return out.expr.explain(stage, format)
 
     def pprint(self):
+        """Outputs a string representation of the DataFrame.
+
+        The expression is returned as is. Please run optimize manually if necessary.
+
+        Returns
+        -------
+            None, the representation is put into stdout.
+        """
         return self.expr.pprint()
 
     @property
