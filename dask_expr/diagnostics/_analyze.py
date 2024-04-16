@@ -14,7 +14,7 @@ from dask_expr.diagnostics._analyze_plugin import (
     Statistics,
     get_worker_plugin,
 )
-from dask_expr.diagnostics._explain import _explain_info
+from dask_expr.diagnostics._explain import _add_graphviz_edges, _explain_info
 from dask_expr.io.io import FusedIO
 
 
@@ -31,9 +31,6 @@ def inject_analyze(expr: Expr, id: str, injected: dict) -> Expr:
             new = operand
         new_operands.append(new)
     return Analyze(type(expr)(*new_operands), id, expr._name)
-
-
-from dask_expr.diagnostics._explain import _add_graphviz_edges, _explain_info
 
 
 def analyze(
