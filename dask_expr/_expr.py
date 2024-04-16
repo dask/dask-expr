@@ -1362,6 +1362,9 @@ class Isin(Elemwise):
     def _meta(self):
         return make_meta(meta_nonempty(self.frame._meta).isin([1]))
 
+    def _broadcast_dep(self, dep: Expr):
+        return dep.npartitions == 1
+
 
 class Clip(Elemwise):
     _projection_passthrough = True
