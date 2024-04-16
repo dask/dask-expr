@@ -86,7 +86,7 @@ def _as_dict(key, value):
 
 def _adjust_split_out_for_group_keys(npartitions, by):
     if len(by) == 1:
-        return math.ceil(npartitions / 10)
+        return math.ceil(npartitions / 15)
     return math.ceil(npartitions / (10 / (len(by) - 1)))
 
 
