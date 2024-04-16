@@ -7,7 +7,7 @@ from dask.sizeof import sizeof
 from dask.utils import format_bytes
 
 from dask_expr._expr import Blockwise, Expr
-from dask_expr._util import _tokenize_deterministic
+from dask_expr._util import _tokenize_deterministic, is_scalar
 from dask_expr.diagnostics._analyze_plugin import (
     AnalyzePlugin,
     ExpressionStatistics,
@@ -79,7 +79,6 @@ def analyze(
     g.node_attr.update(shape="record")
     while stack:
         node = stack.pop()
-        info = _explain_info(node)
         info = _analyze_info(node, statistics._expr_statistics[node._name])
         _add_graphviz_node(info, g)
         _add_graphviz_edges(info, g)
@@ -168,7 +167,8 @@ def collect_statistics(frame, analysis_id, expr_name):
     else:
         size = sizeof(frame)
 
-    worker_plugin.add(analysis_id, expr_name, "nrows", len(frame))
+    len_frame = len(frame) if not is_scalar(frame) else 1
+    worker_plugin.add(analysis_id, expr_name, "nrows", len_frame)
     worker_plugin.add(analysis_id, expr_name, "nbytes", size)
     return frame
 
