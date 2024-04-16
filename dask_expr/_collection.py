@@ -13,7 +13,7 @@ import dask.dataframe.methods as methods
 import numpy as np
 import pandas as pd
 import pyarrow as pa
-from dask import compute, get_annotations
+from dask import compute, config, get_annotations
 from dask.array import Array
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
 from dask.core import flatten
@@ -4798,6 +4798,7 @@ def read_csv(
 ):
     from dask_expr.io.csv import ReadCSV
 
+    dataframe_backend = config.get("dataframe.backend", "pandas")
     if not isinstance(path, str):
         path = stringify_path(path)
     return new_collection(
@@ -4808,6 +4809,7 @@ def read_csv(
             storage_options=storage_options,
             kwargs=kwargs,
             header=header,
+            dataframe_backend=dataframe_backend,
         )
     )
 
