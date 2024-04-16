@@ -1010,7 +1010,7 @@ class ReadParquetPyarrowFS(ReadParquet):
             if col["path_in_schema"] in col_op:
                 after_projection += col["total_uncompressed_size"]
 
-        total_uncompressed = max(total_uncompressed, 100_000_000)
+        total_uncompressed = max(total_uncompressed, 75_000_000)
         return max(after_projection / total_uncompressed, 0.001)
 
     def _filtered_task(self, index: int):
