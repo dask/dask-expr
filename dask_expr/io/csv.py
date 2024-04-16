@@ -8,7 +8,6 @@ from dask_expr.io.io import BlockwiseIO, PartitionsFiltered
 class ReadCSV(PartitionsFiltered, BlockwiseIO):
     _parameters = [
         "filename",
-        "dataframe_backend",
         "columns",
         "header",
         "dtype_backend",
@@ -16,6 +15,7 @@ class ReadCSV(PartitionsFiltered, BlockwiseIO):
         "storage_options",
         "kwargs",
         "_series",
+        "dataframe_backend",
     ]
     _defaults = {
         "columns": None,
@@ -25,6 +25,7 @@ class ReadCSV(PartitionsFiltered, BlockwiseIO):
         "_partitions": None,
         "storage_options": None,
         "_series": False,
+        "dataframe_backend": "pandas",
     }
     _absorb_projections = True
 
