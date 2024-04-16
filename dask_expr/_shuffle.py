@@ -75,12 +75,14 @@ class ShuffleBase(Expr):
         "method",
         "options",
         "index_shuffle",
+        "original_partitioning_index",
     ]
     _defaults = {
         "ignore_index": False,
         "method": None,
         "options": None,
         "index_shuffle": None,
+        "original_partitioning_index": None,
     }
     _is_length_preserving = True
     _filter_passthrough = True
@@ -91,6 +93,18 @@ class ShuffleBase(Expr):
     def _node_label_args(self):
         return [self.frame, self.partitioning_index]
 
+    @functools.cached_property
+    def _partitioning_index(self):
+        partitioning_index = self.partitioning_index
+        if isinstance(partitioning_index, (str, int)):
+            partitioning_index = [partitioning_index]
+        return partitioning_index
+
+    @functools.cached_property
+    def unique_partition_mapping_columns_from_shuffle(self):
+        idx = self.original_partitioning_index or self._partitioning_index
+        return {tuple(idx)} if isinstance(idx, list) else set()
+
     def _simplify_up(self, parent, dependents):
         if isinstance(parent, Filter) and self._filter_passthrough_available(
             parent, dependents
@@ -100,10 +114,7 @@ class ShuffleBase(Expr):
             # Move the column projection to come
             # before the abstract Shuffle
             projection = determine_column_projection(self, parent, dependents)
-
-            partitioning_index = self.partitioning_index
-            if isinstance(partitioning_index, (str, int)):
-                partitioning_index = [partitioning_index]
+            partitioning_index = self._partitioning_index
 
             target = self.frame
             new_projection = [
@@ -197,6 +208,7 @@ class Shuffle(ShuffleBase):
             self.npartitions_out,
             self.ignore_index,
             self.options,
+            self.original_partitioning_index,
         ]
         if method == "p2p":
             return P2PShuffle(frame, *ops)
@@ -238,43 +250,12 @@ class RearrangeByColumn(ShuffleBase):
                 f"{type(partitioning_index)} not a supported type for partitioning_index"
             )
 
-        drop_columns = []
-        dtypes = False
-        if isinstance(partitioning_index, Expr):
-            if partitioning_index.ndim == 1:
-                dtypes = (
-                    np.float64
-                    if _is_numeric_cast_type(partitioning_index._meta.dtype)
-                    else None
-                )
-            else:
-                dtypes = {}
-                for col, dtype in partitioning_index.dtypes.items():
-                    if _is_numeric_cast_type(dtype):
-                        dtypes[col] = np.float64
-        elif index_shuffle:
-            dtypes = (
-                np.float64 if _is_numeric_cast_type(frame.index._meta.dtype) else None
-            )
-        else:
+        if not isinstance(partitioning_index, Expr) and not index_shuffle:
             cs = [col for col in partitioning_index if col not in frame.columns]
             if len(cs) == 1:
                 frame = Assign(frame, "_partitions_0", frame.index)
                 partitioning_index = partitioning_index.copy()
-                idx = partitioning_index.index(cs[0])
-                partitioning_index[idx] = "_partitions_0"
-                drop_columns = ["_partitions_0"]
-
-        if dtypes is False:
-            dtypes = {}
-            cols = [
-                c for c in frame.columns if c in _convert_to_list(partitioning_index)
-            ]
-            for col, dtype in frame[cols].dtypes.items():
-                if _is_numeric_cast_type(dtype):
-                    dtypes[col] = np.float64
-            if not dtypes:
-                dtypes = None
+                partitioning_index[partitioning_index.index(cs[0])] = "_partitions_0"
 
         # Assign new "_partitions" column
         index_added = AssignPartitioningIndex(
@@ -282,7 +263,7 @@ class RearrangeByColumn(ShuffleBase):
             partitioning_index,
             "_partitions",
             npartitions_out,
-            dtypes,
+            frame._meta,
             index_shuffle,
         )
 
@@ -294,6 +275,7 @@ class RearrangeByColumn(ShuffleBase):
             ignore_index,
             self.method,
             options,
+            original_partitioning_index=self._partitioning_index,
         )
         if frame.ndim == 1:
             # Reduce back to series
@@ -301,7 +283,7 @@ class RearrangeByColumn(ShuffleBase):
 
         # Drop "_partitions" column and return
         return shuffled[
-            [c for c in shuffled.columns if c not in ["_partitions"] + drop_columns]
+            [c for c in shuffled.columns if c not in ["_partitions", "_partitions_0"]]
         ]
 
 
@@ -312,10 +294,11 @@ class SimpleShuffle(PartitionsFiltered, Shuffle):
         "npartitions_out",
         "ignore_index",
         "options",
+        "original_partitioning_index",
         "_partitions",
     ]
 
-    _defaults = {"_partitions": None}
+    _defaults = {"_partitions": None, "original_partitioning_index": None}
 
     @functools.cached_property
     def _meta(self):
@@ -684,8 +667,8 @@ class AssignPartitioningIndex(Blockwise):
         New column name to assign.
     npartitions_out: int
         Number of partitions after repartitioning is finished.
-    cast_dtype : dict, optional
-        The dtypes that we want to use for the hashing columns
+    index_shuffle : bool, default False
+        Whether we are using solely the index for the shuffle
     """
 
     _parameters = [
@@ -693,28 +676,39 @@ class AssignPartitioningIndex(Blockwise):
         "partitioning_index",
         "index_name",
         "npartitions_out",
-        "cast_dtype",
+        "meta",
         "index_shuffle",
     ]
+
     _defaults = {"cast_dtype": None, "index_shuffle": False}
+    _preserves_partitioning_information = True
 
     @staticmethod
-    def operation(df, index, name: str, npartitions: int, cast_dtype, index_shuffle):
+    def operation(df, index, name: str, npartitions: int, meta, index_shuffle: bool):
         """Construct a hash-based partitioning index"""
-        if hasattr(index, "ndim"):
-            if index.ndim == 1:
-                index = index.to_frame()
-        elif index_shuffle:
-            index = df.index.to_frame()
-        else:
-            index = _select_columns_or_index(df, index)
 
-        if isinstance(index, (str, list, tuple)):
-            # Assume column selection from df
-            index = [index] if isinstance(index, str) else list(index)
-            index = partitioning_index(df[index], npartitions, cast_dtype)
-        else:
-            index = partitioning_index(index, npartitions, cast_dtype)
+        def _get_index(idx, obj):
+            if hasattr(idx, "ndim"):
+                if idx.ndim == 1:
+                    idx = idx.to_frame()
+            elif index_shuffle:
+                idx = obj.index.to_frame()
+            else:
+                idx = _select_columns_or_index(obj, idx)
+            return idx
+
+        # meta and df dtypes can deviate, this is why we do the cast here
+        meta_index = _get_index(index, meta)
+        index = _get_index(index, df)
+
+        dtypes = {}
+        for col, dtype in meta_index.dtypes.items():
+            if _is_numeric_cast_type(dtype):
+                dtypes[col] = np.float64
+        if dtypes:
+            index = index.astype(dtypes, errors="ignore")
+
+        index = partitioning_index(index, npartitions)
         if df.ndim == 1:
             df = df.to_frame()
         return df.assign(**{name: index})
@@ -904,6 +898,7 @@ class SetIndex(BaseSetIndexSortValues):
                 self, parent, dependents, additional_columns=addition_columns
             )
             columns = _convert_to_list(columns)
+            columns = [c for c in self.frame.columns if c in columns]
             if self.frame.columns == columns:
                 return
             return type(parent)(
@@ -1246,6 +1241,7 @@ class SetIndexBlockwise(Blockwise):
     _defaults = {"append": False, "new_divisions": None, "drop": True}
     _keyword_only = ["drop", "new_divisions", "append"]
     _is_length_preserving = True
+    _preserves_partitioning_information = True
 
     @staticmethod
     def operation(df, *args, new_divisions, **kwargs):
