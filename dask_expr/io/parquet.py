@@ -821,6 +821,8 @@ class ReadParquetPyarrowFS(ReadParquet):
         ixs = []
         for i in range(0, nfrags, stepsize):
             sort_ix = finfo_argsort[i]
+            # TODO: This is crude but the most conservative estimate
+            sort_ix = sort_ix if sort_ix < nfrags else 0
             ixs.append(sort_ix)
             finfos_sampled.append(finfos[sort_ix])
             frags_samples.append(frags[sort_ix])
@@ -1010,7 +1012,10 @@ class ReadParquetPyarrowFS(ReadParquet):
             if col["path_in_schema"] in col_op:
                 after_projection += col["total_uncompressed_size"]
 
-        total_uncompressed = max(total_uncompressed, 75_000_000)
+        min_size = (
+            dask.config.get("dataframe.parquet.minimum-partition-size") or 75_000_000
+        )
+        total_uncompressed = max(total_uncompressed, min_size)
         return max(after_projection / total_uncompressed, 0.001)
 
     def _filtered_task(self, index: int):
