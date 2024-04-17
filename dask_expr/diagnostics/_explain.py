@@ -86,7 +86,7 @@ def _explain_details(expr: Expr):
         details["path"] = expr.path
     elif isinstance(expr, Projection):
         columns = expr.operand("columns")
-        details["nr_columns"] = len(columns) if isinstance(columns, list) else "Series"
+        details["ncolumns"] = len(columns) if isinstance(columns, list) else "Series"
 
     return details
 
