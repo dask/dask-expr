@@ -738,7 +738,11 @@ Expr={expr}"""
         else:
             bad_types = (FrameBase,)
         if isinstance(values, bad_types):
-            if values.ndim == 1 and values.npartitions == 1:
+            if (
+                isinstance(values, FrameBase)
+                and values.ndim == 1
+                and values.npartitions == 1
+            ):
                 # Can broadcast
                 return new_collection(expr.Isin(self, values=values))
             raise NotImplementedError("Passing a %r to `isin`" % typename(type(values)))
