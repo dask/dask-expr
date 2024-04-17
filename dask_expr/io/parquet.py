@@ -1012,9 +1012,7 @@ class ReadParquetPyarrowFS(ReadParquet):
             if col["path_in_schema"] in col_op:
                 after_projection += col["total_uncompressed_size"]
 
-        min_size = (
-            dask.config.get("dataframe.parquet.minimum-partition-size") or 75_000_000
-        )
+        min_size = dask.config.get("dataframe.parquet.minimum-partition-size")
         total_uncompressed = max(total_uncompressed, min_size)
         return max(after_projection / total_uncompressed, 0.001)
 
