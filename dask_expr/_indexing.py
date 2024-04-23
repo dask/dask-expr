@@ -202,11 +202,13 @@ class LocElement(LocBase):
 
 class LocList(LocBase):
     def _lower(self):
-        if self.frame.npartitions == 1:
+        parts = _get_partitions(self.frame, self.iindexer)
+        parts = sorted(parts.keys())
+        if len(parts) == 0:
+            parts = [0]
+        if self.frame.npartitions == len(parts):
             return
-
-        part = _get_partitions(self.frame, self.iindexer)
-        return type(self)(Partitions(self.frame, part), self.iindexer, self.cindexer)
+        return type(self)(Partitions(self.frame, parts), self.iindexer, self.cindexer)
 
     @functools.cached_property
     def _layer_information(self):
