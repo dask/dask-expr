@@ -1,3 +1,4 @@
+import dask
 import numpy as np
 import pytest
 from dask import delayed
@@ -46,3 +47,14 @@ def test_from_delayed_dask():
         assert_eq(s, df.a)
         assert list(s.map_partitions(my_len).compute()) == [1, 2, 3, 4]
         assert ddf.known_divisions == (divisions is not None)
+
+
+@dask.delayed
+def _load(x):
+    return pd.DataFrame({"x": x, "y": [1, 2, 3]})
+
+
+def test_from_delayed_fusion():
+    df = from_delayed([_load(x) for x in range(10)], meta={"x": "int64", "y": "int64"})
+    result = df.map_partitions(lambda x: None, meta={}).optimize().dask
+    assert len(result) == 30
