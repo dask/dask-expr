@@ -1108,10 +1108,6 @@ class SetPartition(SetIndex):
         "options",  # Shuffle method options
     ]
 
-    @functools.cached_property
-    def npartitions(self):
-        return super().npartitions
-
     def _lower(self):
         divisions = self.other._meta._constructor(self._divisions())
         partitions = _SetPartitionsPreSetIndex(self.other, divisions)
