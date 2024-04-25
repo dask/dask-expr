@@ -4021,4 +4021,5 @@ from dask_expr._reductions import (
     TreeReduce,
     Var,
 )
-from dask_expr.io import IO, BlockwiseIO, FromArray, FromDelayed, FromPandas
+from dask_expr.io import IO, BlockwiseIO, FromArray, FromPandas
+from dask_expr.io._delayed import FromDelayed
