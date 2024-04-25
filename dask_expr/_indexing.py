@@ -300,6 +300,14 @@ class LocSlice(LocBase):
             + (div_stop,)
         )
 
+    def _lower(self):
+        start = _get_partitions(self.frame, self.iindexer.start)
+        stop = _get_partitions(self.frame, self.iindexer.stop)
+        parts = list(range(start, stop + 1))
+        if self.frame.npartitions == len(parts):
+            return
+        return type(self)(Partitions(self.frame, parts), self.iindexer, self.cindexer)
+
     def _layer(self) -> dict:
         if self.stop == self.start:
             return {
