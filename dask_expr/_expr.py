@@ -1622,6 +1622,7 @@ class ToFrame(Elemwise):
             return set(self.columns)
         return unique_mapping
 
+
 class ToFrameIndex(Elemwise):
     _parameters = ["frame", "index", "name"]
     _defaults = {"name": no_default, "index": True}
