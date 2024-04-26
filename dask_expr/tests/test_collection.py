@@ -2596,3 +2596,9 @@ def test_to_datetime_repr():
 
     assert "Expr=ToDatetime(frame=df['dt']" in to_datetime_repr
     assert "%Y-%m-%dT%H:%M:%S" in to_datetime_repr
+
+
+def test_shape_integer(df):
+    result = df.shape[0].compute()
+    assert isinstance(result, int)
+    assert result == 100
