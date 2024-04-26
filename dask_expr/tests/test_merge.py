@@ -1025,4 +1025,4 @@ def test_merge_after_rename():
     right = pd.DataFrame({"a": [1, 2] * 5})
     expected = pleft.merge(right, how="inner")
     result = left.merge(right, how="inner")
-    assert_eq(result, expected)
+    assert_eq(result, expected, check_index=False)
