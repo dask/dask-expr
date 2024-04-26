@@ -1613,8 +1613,14 @@ class ToFrame(Elemwise):
     _keyword_only = ["name"]
     operation = M.to_frame
     _filter_passthrough = True
-    _preserves_partitioning_information = True
 
+    @functools.cached_property
+    def unique_partition_mapping_columns_from_shuffle(self):
+        unique_mapping = self.frame.unique_partition_mapping_columns_from_shuffle
+        if set(self.frame.columns) == unique_mapping:
+            # Account for default name conversion
+            return set(self.columns)
+        return unique_mapping
 
 class ToFrameIndex(Elemwise):
     _parameters = ["frame", "index", "name"]
