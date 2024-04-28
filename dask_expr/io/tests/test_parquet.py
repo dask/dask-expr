@@ -66,8 +66,9 @@ def test_parquet_missing_stats(tmpdir, filesystem):
     assert_eq(result, expected, check_index=False)
 
 
-def test_parquet_all_na_column(tmpdir, filesystem):
-    pdf = pd.DataFrame({"a": np.nan, "b": [1, 2, 3] * 100})
+@pytest.mark.parametrize("val", [np.nan, 1])
+def test_parquet_all_na_column(tmpdir, filesystem, val):
+    pdf = pd.DataFrame({"a": [np.nan] * 299 + [val], "b": [1, 2, 3] * 100})
     _make_file(tmpdir, df=pdf, filename="bla.parquet", row_group_size=100)
     result = read_parquet(tmpdir, filesystem=filesystem)
     assert_eq(result, pdf)

@@ -1798,12 +1798,17 @@ def _aggregate_columns(cols, agg_cols):
     return [_agg_dicts(c, agg_cols) for c in combine]
 
 
+def _get_min_max_value(x, func):
+    x = list(filter(None, x))
+    return func(x) if len(x) > 0 else None
+
+
 def _aggregate_statistics_to_file(stats):
     """Aggregate RG information to file level."""
 
     agg_stats = {
-        "min": lambda x: min(set(x)),
-        "max": lambda x: max(set(x)),
+        "min": lambda x: _get_min_max_value(x, min),
+        "max": lambda x: _get_min_max_value(x, max),
     }
     agg_cols = {
         "total_compressed_size": sum,
