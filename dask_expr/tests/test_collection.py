@@ -2188,7 +2188,7 @@ def test_filter_pushdown(df, pdf):
 
 def test_shape(df, pdf):
     result = df.shape
-    assert result[0]._name == (df.size / 2)._name
+    assert result[0]._name == (df.size // 2)._name
     assert assert_eq(result[0], pdf.shape[0])
     assert result[1] == pdf.shape[1]
 
@@ -2600,3 +2600,9 @@ def test_to_datetime_repr():
 
 def test_drop_set(df, pdf):
     assert_eq(df.drop(columns={"x"}), pdf.drop(columns={"x"}))
+
+    
+def test_shape_integer(df):
+    result = df.shape[0].compute()
+    assert isinstance(result, int)
+    assert result == 100
