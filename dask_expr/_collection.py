@@ -4887,10 +4887,9 @@ def from_legacy_dataframe(ddf: _Frame, optimize: bool = True) -> FrameBase:
 def from_dask_array(x, columns=None, index=None, meta=None):
     from dask.dataframe.io import from_dask_array
 
-    columns = _convert_to_list(columns)
     if isinstance(index, FrameBase):
         index = index.to_legacy_dataframe()
-    if columns is not None and not len(columns):
+    if columns is not None and isinstance(columns, list) and not len(columns):
         columns = None
     df = from_dask_array(x, columns=columns, index=index, meta=meta)
     return from_legacy_dataframe(df, optimize=True)

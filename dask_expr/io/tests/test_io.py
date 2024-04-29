@@ -432,9 +432,9 @@ def test_from_dask_array():
 def test_from_dask_array_scalar_columns(columns):
     import dask.array as da
 
-    arr = da.ones((20, 1), chunks=(2, 1))
+    arr = da.ones((20,), chunks=(2,))
     df = from_dask_array(arr, columns=columns)
-    pdf = pd.DataFrame(arr.compute(), columns=[columns])
+    pdf = pd.Series(arr.compute(), name=columns)
     assert_eq(df, pdf)
 
 
