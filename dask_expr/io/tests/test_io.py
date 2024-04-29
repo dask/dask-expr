@@ -428,6 +428,16 @@ def test_from_dask_array():
     assert_eq(df, pdf)
 
 
+@pytest.mark.parametrize("columns", [1, "aa"])
+def test_from_dask_array_scalar_columns(columns):
+    import dask.array as da
+
+    arr = da.ones((20, 1), chunks=(2, 1))
+    df = from_dask_array(arr, columns=columns)
+    pdf = pd.DataFrame(arr.compute(), columns=[columns])
+    assert_eq(df, pdf)
+
+
 def test_from_dict():
     data = {"a": [1, 2, 3, 4], "B": [10, 11, 12, 13]}
     result = from_dict(data, npartitions=2)
