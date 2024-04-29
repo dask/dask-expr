@@ -1799,7 +1799,7 @@ def _aggregate_columns(cols, agg_cols):
 
 
 def _get_min_max_value(x, func):
-    x = list(filter(None, x))
+    x = [y for y in x if y is not None]
     return func(x) if len(x) > 0 else None
 
 
