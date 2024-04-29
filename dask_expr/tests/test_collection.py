@@ -2596,3 +2596,7 @@ def test_to_datetime_repr():
 
     assert "Expr=ToDatetime(frame=df['dt']" in to_datetime_repr
     assert "%Y-%m-%dT%H:%M:%S" in to_datetime_repr
+
+
+def test_drop_set(df, pdf):
+    assert_eq(df.drop(columns={"x"}), pdf.drop(columns={"x"}))
