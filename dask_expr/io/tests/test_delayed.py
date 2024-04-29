@@ -55,6 +55,12 @@ def _load(x):
 
 
 def test_from_delayed_fusion():
+    func = lambda x: None
     df = from_delayed([_load(x) for x in range(10)], meta={"x": "int64", "y": "int64"})
-    result = df.map_partitions(lambda x: None, meta={}).optimize().dask
-    assert len(result) == 30
+    result = df.map_partitions(func, meta={}).optimize().dask
+    expected = df.map_partitions(func, meta={}).optimize(fuse=False).dask
+    assert result.keys() == expected.keys()
+
+    result = df.map_partitions(func, meta={}).optimize().dask
+    expected = df.map_partitions(func, meta={}).lower_completely().dask
+    assert result.keys() == expected.keys()
