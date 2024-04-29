@@ -61,6 +61,5 @@ def test_from_delayed_fusion():
     expected = df.map_partitions(func, meta={}).optimize(fuse=False).dask
     assert result.keys() == expected.keys()
 
-    result = df.map_partitions(func, meta={}).optimize().dask
     expected = df.map_partitions(func, meta={}).lower_completely().dask
     assert result.keys() == expected.keys()
