@@ -1,11 +1,19 @@
+import dask
 import numpy as np
 import pytest
 from dask import delayed
 
-from dask_expr import from_delayed
+from dask_expr import from_delayed, from_dict
 from dask_expr.tests._util import _backend_library, assert_eq
 
 pd = _backend_library()
+
+
+def test_from_delayed_optimizing():
+    parts = from_dict({"a": np.arange(300)}, npartitions=30).to_delayed()
+    result = from_delayed(parts[0], meta=pd.DataFrame({"a": pd.Series(dtype=np.int64)}))
+    assert len(result.optimize().dask) == 2
+    assert_eq(result, pd.DataFrame({"a": pd.Series(np.arange(10))}))
 
 
 @pytest.mark.parametrize("prefix", [None, "foo"])
@@ -46,3 +54,19 @@ def test_from_delayed_dask():
         assert_eq(s, df.a)
         assert list(s.map_partitions(my_len).compute()) == [1, 2, 3, 4]
         assert ddf.known_divisions == (divisions is not None)
+
+
+@dask.delayed
+def _load(x):
+    return pd.DataFrame({"x": x, "y": [1, 2, 3]})
+
+
+def test_from_delayed_fusion():
+    func = lambda x: None
+    df = from_delayed([_load(x) for x in range(10)], meta={"x": "int64", "y": "int64"})
+    result = df.map_partitions(func, meta={}).optimize().dask
+    expected = df.map_partitions(func, meta={}).optimize(fuse=False).dask
+    assert result.keys() == expected.keys()
+
+    expected = df.map_partitions(func, meta={}).lower_completely().dask
+    assert result.keys() == expected.keys()

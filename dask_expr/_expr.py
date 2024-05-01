@@ -1819,7 +1819,7 @@ class Drop(Elemwise):
 
     def _simplify_down(self):
         col_op = self.operand("columns")
-        if not isinstance(col_op, list):
+        if is_scalar(col_op):
             col_op = [col_op]
         columns = [col for col in self.frame.columns if col not in col_op]
         return Projection(self.frame, columns)
@@ -2947,7 +2947,7 @@ class _DelayedExpr(Expr):
         return self.obj.key
 
     def _layer(self) -> dict:
-        dc = self.obj.dask.to_dict().copy()
+        dc = self.obj.__dask_optimize__(self.obj.dask, self.obj.key).to_dict().copy()
         dc[(self.obj.key, 0)] = dc[self.obj.key]
         dc.pop(self.obj.key)
         return dc
@@ -3087,7 +3087,9 @@ def are_co_aligned(*exprs):
 
 
 def is_valid_blockwise_op(expr):
-    return isinstance(expr, Blockwise) and not isinstance(expr, (FromPandas, FromArray))
+    return isinstance(expr, Blockwise) and not isinstance(
+        expr, (FromPandas, FromArray, FromDelayed)
+    )
 
 
 def optimize_blockwise_fusion(expr):
@@ -4034,3 +4036,4 @@ from dask_expr._reductions import (
     Var,
 )
 from dask_expr.io import IO, BlockwiseIO, FromArray, FromPandas
+from dask_expr.io._delayed import FromDelayed
