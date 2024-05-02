@@ -5787,6 +5787,31 @@ def repartition(df, divisions, force=False):
 
 
 def pivot_table(df, index, columns, values, aggfunc="mean"):
+    """
+    Create a spreadsheet-style pivot table as a DataFrame. Target ``columns``
+    must have category dtype to infer result's ``columns``.
+    ``index``, ``columns``, and ``aggfunc`` must be all scalar.
+    ``values`` can be scalar or list-like.
+
+    Parameters
+    ----------
+    df : DataFrame
+    index : scalar
+        column to be index
+    columns : scalar
+        column to be columns
+    values : scalar or list(scalar)
+        column(s) to aggregate
+    aggfunc : {'mean', 'sum', 'count', 'first', 'last'}, default 'mean'
+
+    Returns
+    -------
+    table : DataFrame
+
+    See Also
+    --------
+    pandas.DataFrame.pivot_table
+    """
     if not is_scalar(index) or index not in df._meta.columns:
         raise ValueError("'index' must be the name of an existing column")
     if not is_scalar(columns) or columns not in df._meta.columns:
