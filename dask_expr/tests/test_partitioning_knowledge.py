@@ -205,3 +205,29 @@ def test_avoid_shuffle_on_top_of_lowered_shuffle():
     assert (
         len(list(node for node in result.walk() if isinstance(node, DiskShuffle))) == 2
     )
+
+
+def test_merge_to_frame():
+    pdf = pd.DataFrame(
+        {"a": np.random.randint(1, 100, (10,)), "b": np.random.randint(1, 100, (10,))}
+    )
+
+    df = from_pandas(pdf, npartitions=4)
+
+    pdf2 = pd.DataFrame(
+        {"a": np.random.randint(1, 100, (10,)), "c": np.random.randint(1, 100, (10,))}
+    )
+
+    df2 = from_pandas(pdf2, npartitions=3)
+    res = df.merge(df2)
+    result = res.a.to_frame()
+    assert result.unique_partition_mapping_columns_from_shuffle == {("a",)}
+    assert_eq(result, pdf.merge(pdf2).a.to_frame())
+
+    result = res.a.to_frame(name="x")
+    assert result.unique_partition_mapping_columns_from_shuffle == {("x",)}
+    assert_eq(result, pdf.merge(pdf2).a.to_frame(name="x"))
+
+    result = res.index.to_frame()
+    assert result.unique_partition_mapping_columns_from_shuffle == set()
+    assert_eq(result, pdf.merge(pdf2).index.to_frame())
