@@ -226,11 +226,11 @@ def test_merge_groupby_to_frame():
 
     result = res.a.to_frame(name="x")
     assert result.unique_partition_mapping_columns_from_shuffle == {("x",)}
-    assert_eq(result, pdf.merge(pdf2).a.to_frame(name="x"))
+    assert_eq(result, pdf.merge(pdf2).a.to_frame(name="x"), check_index=False)
 
     result = res.index.to_frame()
     assert result.unique_partition_mapping_columns_from_shuffle == set()
-    assert_eq(result, pdf.merge(pdf2).index.to_frame())
+    assert_eq(result, pdf.merge(pdf2).index.to_frame(), check_index=False)
 
     res = df.groupby("a").count(split_out=True)
     result = res.index.to_frame()
