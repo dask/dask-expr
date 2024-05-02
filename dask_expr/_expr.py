@@ -2114,6 +2114,16 @@ class Index(Elemwise):
             "index",
         )
 
+    @functools.cached_property
+    def unique_partition_mapping_columns_from_shuffle(self):
+        name = self.frame._meta.index.name
+        if name in self.frame.unique_partition_mapping_columns_from_shuffle:
+            return {name}
+        elif (name,) in self.frame.unique_partition_mapping_columns_from_shuffle:
+            return {(name,)}
+        else:
+            return set()
+
 
 def _return_input(df, divisions=None):
     return df

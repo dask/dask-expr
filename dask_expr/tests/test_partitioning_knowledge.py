@@ -207,7 +207,7 @@ def test_avoid_shuffle_on_top_of_lowered_shuffle():
     )
 
 
-def test_merge_to_frame():
+def test_merge_groupby_to_frame():
     pdf = pd.DataFrame(
         {"a": np.random.randint(1, 100, (10,)), "b": np.random.randint(1, 100, (10,))}
     )
@@ -222,7 +222,7 @@ def test_merge_to_frame():
     res = df.merge(df2)
     result = res.a.to_frame()
     assert result.unique_partition_mapping_columns_from_shuffle == {("a",)}
-    assert_eq(result, pdf.merge(pdf2).a.to_frame())
+    assert_eq(result, pdf.merge(pdf2).a.to_frame(), check_index=False)
 
     result = res.a.to_frame(name="x")
     assert result.unique_partition_mapping_columns_from_shuffle == {("x",)}
@@ -231,3 +231,12 @@ def test_merge_to_frame():
     result = res.index.to_frame()
     assert result.unique_partition_mapping_columns_from_shuffle == set()
     assert_eq(result, pdf.merge(pdf2).index.to_frame())
+
+    res = df.groupby("a").count(split_out=True)
+    result = res.index.to_frame()
+    assert result.unique_partition_mapping_columns_from_shuffle == {("a",)}
+    assert_eq(result, pdf.groupby("a").count().index.to_frame())
+
+    result = res.index.to_frame(name="x")
+    assert result.unique_partition_mapping_columns_from_shuffle == {("x",)}
+    assert_eq(result, pdf.groupby("a").count().index.to_frame(name="x"))
