@@ -2621,6 +2621,9 @@ def test_shape_integer(df):
     ],
 )
 def test_melt(kwargs):
+    # Duplicates `dask.dataframe.tests.test_multi.py::test_melt`,
+    # but fails without `clear_divisions=True` in `melt` logic
+    # (upstream test is less thorough).
     pdf = pd.DataFrame(
         {
             "obj": list("abcd") * 5,
