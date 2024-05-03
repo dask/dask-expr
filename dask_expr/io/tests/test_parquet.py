@@ -561,20 +561,13 @@ async def test_parquet_distriuted(c, s, a, b, tmpdir, filesystem):
     assert_eq(await c.gather(c.compute(df.optimize())), pdf)
 
 
-@pytest.mark.filterwarnings("error")
-def test_parquet_distriuted2(tmpdir, filesystem):
-    from distributed import Client, LocalCluster
+def test_pickle_size(tmpdir, filesystem):
+    pdf = pd.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
+    [_make_file(tmpdir, df=pdf, filename=f"{x}.parquet") for x in range(10)]
+    df = read_parquet(tmpdir, filesystem=filesystem)
+    from distributed.protocol import dumps
 
-    with LocalCluster(processes=False, n_workers=2) as cluster:
-        with Client(cluster) as client:  # noqa: F841
-            pdf = pd.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
-            [_make_file(tmpdir, df=pdf, filename=f"{x}.parquet") for x in range(10)]
-            df = read_parquet(
-                tmpdir,
-                filesystem=filesystem,
-            )
-            res = df.compute()
-            assert res is not None
+    assert len(b"".join(dumps(df.optimize().dask))) <= 8300
 
 
 def test_index_only_from_parquet(tmpdir):
