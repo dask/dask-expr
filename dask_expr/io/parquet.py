@@ -346,7 +346,7 @@ def to_parquet(
         Either a string like ``"snappy"`` or a dictionary mapping column names
         to compressors like ``{"name": "gzip", "values": "snappy"}``. Defaults
         to ``"snappy"``.
-    write_index : boolean, default True
+    write_index : bool, default True
         Whether or not to write the index. Defaults to True.
     append : bool, default False
         If False (default), construct data-set from scratch. If True, add new
