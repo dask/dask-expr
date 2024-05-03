@@ -5461,6 +5461,98 @@ def concat(
     interleave_partitions=False,
     **kwargs,
 ):
+    """Concatenate DataFrames along rows.
+
+    - When axis=0 (default), concatenate DataFrames row-wise:
+
+      - If all divisions are known and ordered, concatenate DataFrames keeping
+        divisions. When divisions are not ordered, specifying
+        interleave_partition=True allows concatenate divisions each by each.
+
+      - If any of division is unknown, concatenate DataFrames resetting its
+        division to unknown (None)
+
+    - When axis=1, concatenate DataFrames column-wise:
+
+      - Allowed if all divisions are known.
+
+      - If any of division is unknown, it raises ValueError.
+
+    Parameters
+    ----------
+    dfs : list
+        List of dask.DataFrames to be concatenated
+    axis : {0, 1, 'index', 'columns'}, default 0
+        The axis to concatenate along
+    join : {'inner', 'outer'}, default 'outer'
+        How to handle indexes on other axis
+    interleave_partitions : bool, default False
+        Whether to concatenate DataFrames ignoring its order. If True, every
+        divisions are concatenated each by each.
+    ignore_unknown_divisions : bool, default False
+        By default a warning is raised if any input has unknown divisions.
+        Set to True to disable this warning.
+    ignore_order : bool, default False
+        Whether to ignore order when doing the union of categoricals.
+
+    Notes
+    -----
+    This differs in from ``pd.concat`` in the when concatenating Categoricals
+    with different categories. Pandas currently coerces those to objects
+    before concatenating. Coercing to objects is very expensive for large
+    arrays, so dask preserves the Categoricals by taking the union of
+    the categories.
+
+    Examples
+    --------
+    If all divisions are known and ordered, divisions are kept.
+
+    >>> import dask.dataframe as dd
+    >>> a                                               # doctest: +SKIP
+    dd.DataFrame<x, divisions=(1, 3, 5)>
+    >>> b                                               # doctest: +SKIP
+    dd.DataFrame<y, divisions=(6, 8, 10)>
+    >>> dd.concat([a, b])                               # doctest: +SKIP
+    dd.DataFrame<concat-..., divisions=(1, 3, 6, 8, 10)>
+
+    Unable to concatenate if divisions are not ordered.
+
+    >>> a                                               # doctest: +SKIP
+    dd.DataFrame<x, divisions=(1, 3, 5)>
+    >>> b                                               # doctest: +SKIP
+    dd.DataFrame<y, divisions=(2, 3, 6)>
+    >>> dd.concat([a, b])                               # doctest: +SKIP
+    ValueError: All inputs have known divisions which cannot be concatenated
+    in order. Specify interleave_partitions=True to ignore order
+
+    Specify interleave_partitions=True to ignore the division order.
+
+    >>> dd.concat([a, b], interleave_partitions=True)   # doctest: +SKIP
+    dd.DataFrame<concat-..., divisions=(1, 2, 3, 5, 6)>
+
+    If any of division is unknown, the result division will be unknown
+
+    >>> a                                               # doctest: +SKIP
+    dd.DataFrame<x, divisions=(None, None)>
+    >>> b                                               # doctest: +SKIP
+    dd.DataFrame<y, divisions=(1, 4, 10)>
+    >>> dd.concat([a, b])                               # doctest: +SKIP
+    dd.DataFrame<concat-..., divisions=(None, None, None, None)>
+
+    By default concatenating with unknown divisions will raise a warning.
+    Set ``ignore_unknown_divisions=True`` to disable this:
+
+    >>> dd.concat([a, b], ignore_unknown_divisions=True)# doctest: +SKIP
+    dd.DataFrame<concat-..., divisions=(None, None, None, None)>
+
+    Different categoricals are unioned
+
+    >>> dd.concat([
+    ...     dd.from_pandas(pd.Series(['a', 'b'], dtype='category'), 1),
+    ...     dd.from_pandas(pd.Series(['a', 'c'], dtype='category'), 1),
+    ... ], interleave_partitions=True).dtype
+    CategoricalDtype(categories=['a', 'b', 'c'], ordered=False, categories_dtype=object)
+    """
     if not isinstance(dfs, list):
         raise TypeError("dfs must be a list of DataFrames/Series objects")
     if len(dfs) == 0:
@@ -5511,6 +5603,7 @@ def melt(
     )
 
 
+@wraps(pd.merge)
 def merge(
     left,
     right,
@@ -5594,6 +5687,7 @@ def merge(
     )
 
 
+@wraps(pd.merge_asof)
 def merge_asof(
     left,
     right,
