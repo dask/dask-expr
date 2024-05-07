@@ -386,7 +386,12 @@ class Expr:
     def _simplify_up(self, parent, dependents):
         return
 
-    def lower_once(self):
+    def lower_once(self, cache=None):
+        # Check for a chached result
+        cache = {} if cache is None else cache
+        if self._name in cache:
+            return self._instances[cache[self._name]]
+
         expr = self
 
         # Lower this node
@@ -401,7 +406,7 @@ class Expr:
         changed = False
         for operand in out.operands:
             if isinstance(operand, Expr):
-                new = operand.lower_once()
+                new = operand.lower_once(cache)
                 if new._name != operand._name:
                     changed = True
             else:
@@ -411,6 +416,8 @@ class Expr:
         if changed:
             out = type(out)(*new_operands)
 
+        # Cache the result and return
+        cache[self._name] = out._name
         return out
 
     def lower_completely(self) -> Expr:
@@ -432,8 +439,9 @@ class Expr:
         """
         # Lower until nothing changes
         expr = self
+        cache = {}
         while True:
-            new = expr.lower_once()
+            new = expr.lower_once(cache)
             if new._name == expr._name:
                 break
             expr = new
