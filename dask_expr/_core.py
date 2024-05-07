@@ -386,11 +386,12 @@ class Expr:
     def _simplify_up(self, parent, dependents):
         return
 
-    def lower_once(self, cache=None):
+    def lower_once(self, *, cache=None):
         # Check for a chached result
-        cache = {} if cache is None else cache
-        if self._name in cache:
+        try:
             return cache[self._name]
+        except KeyError:
+            pass
 
         expr = self
 
@@ -406,7 +407,7 @@ class Expr:
         changed = False
         for operand in out.operands:
             if isinstance(operand, Expr):
-                new = operand.lower_once(cache)
+                new = operand.lower_once(cache=cache)
                 if new._name != operand._name:
                     changed = True
             else:
@@ -417,8 +418,7 @@ class Expr:
             out = type(out)(*new_operands)
 
         # Cache the result and return
-        cache[self._name] = out
-        return out
+        return cache.setdefault(self._name, out)
 
     def lower_completely(self) -> Expr:
         """Lower an expression completely
@@ -441,7 +441,7 @@ class Expr:
         expr = self
         cache = {}
         while True:
-            new = expr.lower_once(cache)
+            new = expr.lower_once(cache=cache)
             if new._name == expr._name:
                 break
             expr = new
