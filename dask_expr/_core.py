@@ -390,7 +390,7 @@ class Expr:
         # Check for a chached result
         cache = {} if cache is None else cache
         if self._name in cache:
-            return self._instances[cache[self._name]]
+            return cache[self._name]
 
         expr = self
 
@@ -417,7 +417,7 @@ class Expr:
             out = type(out)(*new_operands)
 
         # Cache the result and return
-        cache[self._name] = out._name
+        cache[self._name] = out
         return out
 
     def lower_completely(self) -> Expr:
