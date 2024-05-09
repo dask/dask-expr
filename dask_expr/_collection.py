@@ -566,8 +566,8 @@ Expr={expr}"""
     def simplify(self):
         return new_collection(self.expr.simplify())
 
-    def lower_once(self):
-        return new_collection(self.expr.lower_once())
+    def lower_once(self, lowered: dict):
+        return new_collection(self.expr.lower_once(lowered))
 
     def optimize(self, fuse: bool = True):
         """Optimizes the DataFrame.
