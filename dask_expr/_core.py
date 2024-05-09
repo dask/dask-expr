@@ -386,7 +386,7 @@ class Expr:
     def _simplify_up(self, parent, dependents):
         return
 
-    def lower_once(self, *, lowered=None):
+    def lower_once(self, lowered: dict):
         # Check for a chached result
         try:
             return lowered[self._name]
@@ -407,7 +407,7 @@ class Expr:
         changed = False
         for operand in out.operands:
             if isinstance(operand, Expr):
-                new = operand.lower_once(lowered=lowered)
+                new = operand.lower_once(lowered)
                 if new._name != operand._name:
                     changed = True
             else:
@@ -441,7 +441,7 @@ class Expr:
         expr = self
         lowered = {}
         while True:
-            new = expr.lower_once(lowered=lowered)
+            new = expr.lower_once(lowered)
             if new._name == expr._name:
                 break
             expr = new
