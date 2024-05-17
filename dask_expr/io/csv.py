@@ -73,11 +73,11 @@ class ReadCSV(PartitionsFiltered, BlockwiseIO):
                     )._meta
                     columns = [list(meta.columns)[0]]
 
-            if kwargs.get("usecols", None) is not None and columns is not None:
-                columns = [col for col in columns if col in kwargs.get("usecols")]
-                kwargs.pop("usecols")
-            elif kwargs.get("usecols", None):
-                columns = kwargs.pop("usecols")
+            usecols = kwargs.pop("usecols", None)
+            if usecols is not None and columns is not None:
+                columns = [col for col in columns if col in usecols]
+            elif usecols:
+                columns = usecols
 
             return self.operation(
                 self.filename,
