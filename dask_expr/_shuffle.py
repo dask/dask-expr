@@ -1306,7 +1306,7 @@ def _calculate_divisions(
     if is_index_like(other._meta):
         other = ToSeriesIndex(other)
 
-    if is_categorical_dtype(other._meta):
+    if is_categorical_dtype(other._meta.dtype):
         other = new_collection(other).cat.as_ordered()._expr
 
     try:
