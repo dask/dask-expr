@@ -102,7 +102,7 @@ class Merge(Expr):
             if predicate_columns is None:
                 return False
             if predicate_columns.issubset(self.left.columns):
-                return self.how in ("left", "inner", "leftsemi")
+                return self.how in ("left", "inner", "leftsemi", "leftanti")
             elif predicate_columns.issubset(self.right.columns):
                 return self.how in ("right", "inner")
             elif len(predicate_columns) > 0:
@@ -242,7 +242,7 @@ class Merge(Expr):
             elif (
                 use_left
                 and self.right.npartitions == 1
-                and self.how in ("inner", "left", "leftsemi")
+                and self.how in ("inner", "left", "leftsemi", "leftanti")
             ):
                 return self.left.divisions
             else:
@@ -283,7 +283,7 @@ class Merge(Expr):
         s_method = self.shuffle_method or get_default_shuffle_method()
         if (
             s_method in ("tasks", "p2p")
-            and self.how in ("inner", "left", "right", "leftsemi")
+            and self.how in ("inner", "left", "right", "leftsemi", "leftanti")
             and self.how != broadcast_side
             and broadcast is not False
         ):
@@ -301,7 +301,7 @@ class Merge(Expr):
             or self.left.npartitions == 1
             and self.how in ("right", "inner")
             or self.right.npartitions == 1
-            and self.how in ("left", "inner", "leftsemi")
+            and self.how in ("left", "inner", "leftsemi", "leftanti")
         )
 
     @functools.cached_property
@@ -776,7 +776,7 @@ class BroadcastJoin(Merge, PartitionsFiltered):
                     ),
                     (bcast_name, j),
                 ]
-                if self.broadcast_side in ("left", "leftsemi"):
+                if self.broadcast_side in ("left", "leftsemi", "leftanti"):
                     _merge_args.reverse()
 
                 inter_key = (inter_name, part_out, j)
