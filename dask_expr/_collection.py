@@ -2818,7 +2818,7 @@ class DataFrame(FrameBase):
         Parameters
         ----------
         right: dask.dataframe.DataFrame
-        how : {'left', 'right', 'outer', 'inner', 'leftsemi'}, default: 'inner'
+        how : {'left', 'right', 'outer', 'inner', 'leftsemi', 'leftanti'}, default: 'inner'
             How to handle the operation of the two objects:
 
             - left: use calling frame's index (or column if on is specified)
@@ -2830,6 +2830,9 @@ class DataFrame(FrameBase):
               on is specified) with other frame's index, preserving the order
               of the calling's one
             - leftsemi: Choose all rows in left where the join keys can be found
+              in right. Won't duplicate rows if the keys are duplicated in right.
+              Drops all columns from right. Only supported with 'cudf' backend.
+            - leftanti: Choose all rows in left where the join keys cannot be found
               in right. Won't duplicate rows if the keys are duplicated in right.
               Drops all columns from right.
 
@@ -5628,11 +5631,12 @@ def merge(
     if on and not left_on and not right_on:
         left_on = right_on = on
 
-    supported_how = ("left", "right", "outer", "inner", "leftsemi")
+    supported_how = ("left", "right", "outer", "inner", "leftsemi", "leftanti")
     if how not in supported_how:
         raise ValueError(
             f"dask.dataframe.merge does not support how='{how}'."
             f"Options are: {supported_how}."
+            "Note that 'leftanti' is only an dask_cudf option."
         )
 
     if how == "leftsemi":
