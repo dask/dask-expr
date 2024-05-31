@@ -1,5 +1,6 @@
 import datetime
 
+import numpy as np
 import pytest
 from dask.dataframe._compat import PANDAS_GE_200
 
@@ -110,9 +111,6 @@ def test_map_overlap_raises():
 
     with pytest.raises(NotImplementedError, match="is less than"):
         df.map_overlap(func, before=0, after=5).compute()
-
-    with pytest.raises(NotImplementedError, match="is less than"):
-        df.map_overlap(func, before="5D", after=0).compute()
 
     with pytest.raises(NotImplementedError, match="is less than"):
         df.map_overlap(func, before=0, after="5D").compute()
@@ -320,3 +318,35 @@ def test_map_overlap_multiple_dataframes(
     )
     sol = shifted_sum(pdf.x, before_shifted_sum, after_shifted_sum, pdf.x * 2)
     assert_eq(res, sol)
+
+
+def test_map_partitions_propagates_index_metadata():
+    index = pd.Series(list("abcde"), name="myindex")
+    df = pd.DataFrame(
+        {"A": np.arange(5, dtype=np.int32), "B": np.arange(10, 15, dtype=np.int32)},
+        index=index,
+    )
+    ddf = from_pandas(df, npartitions=2)
+    res = ddf.map_partitions(
+        lambda df: df.assign(C=df.A + df.B),
+        meta=[("A", "i4"), ("B", "i4"), ("C", "i4")],
+    )
+    sol = df.assign(C=df.A + df.B)
+    assert_eq(res, sol)
+
+    res = ddf.map_partitions(lambda df: df.rename_axis("newindex"))
+    sol = df.rename_axis("newindex")
+    assert_eq(res, sol)
+
+
+def test_token_given(df, pdf):
+    def my_func(df):
+        return df + 1
+
+    result = df.map_partitions(my_func, token="token_given")
+    assert result._name.split("-")[0] == "token_given"
+    assert_eq(result, pdf + 1)
+
+    result = df.map_partitions(my_func)
+    assert result._name.split("-")[0] == "my_func"
+    assert_eq(result, pdf + 1)

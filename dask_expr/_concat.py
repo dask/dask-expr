@@ -2,6 +2,7 @@ import functools
 import warnings
 
 import pandas as pd
+from dask.core import flatten
 from dask.dataframe import methods
 from dask.dataframe.dispatch import make_meta, meta_nonempty
 from dask.dataframe.multi import concat_and_check
@@ -14,9 +15,11 @@ from dask_expr._expr import (
     Blockwise,
     Expr,
     Projection,
+    ToFrame,
     are_co_aligned,
     determine_column_projection,
 )
+from dask_expr._util import _convert_to_list
 
 
 class Concat(Expr):
@@ -42,11 +45,7 @@ class Concat(Expr):
             "frames="
             + str(self.dependencies())
             + ", "
-            + ", ".join(
-                str(param) + "=" + str(operand)
-                for param, operand in zip(self._parameters, self.operands)
-                if operand != self._defaults.get(param)
-            )
+            + ", ".join(self._operands_for_repr())
         )
         return f"{type(self).__name__}({s})"
 
@@ -76,10 +75,14 @@ class Concat(Expr):
         dfs = self._frames
 
         if self.axis == 1:
-            if (
-                not self._are_co_alinged_or_single_partition
-                and self._all_known_divisions
-            ):
+            if self._are_co_alinged_or_single_partition:
+                if {df.npartitions for df in self._frames} == {1}:
+                    divisions = set(
+                        flatten([e.divisions for e in dfs], container=tuple)
+                    )
+                    return min(divisions), max(divisions)
+                return dfs[0].divisions
+            elif self._all_known_divisions:
                 divisions = list(unique(merge_sorted(*[df.divisions for df in dfs])))
                 if len(divisions) == 1:  # single value for index
                     divisions = (divisions[0], divisions[0])
@@ -125,7 +128,7 @@ class Concat(Expr):
 
     @functools.cached_property
     def _are_co_alinged_or_single_partition(self):
-        return are_co_aligned(*self._frames, allow_broadcast=False) or {
+        return are_co_aligned(*self._frames) or {
             df.npartitions for df in self._frames
         } == {1}
 
@@ -230,6 +233,7 @@ class Concat(Expr):
                 return e.columns if e.ndim == 2 else [e.name]
 
             columns = determine_column_projection(self, parent, dependents)
+            columns = _convert_to_list(columns)
             columns_frame = [
                 [col for col in get_columns_or_name(frame) if col in columns]
                 for frame in self._frames
@@ -241,24 +245,30 @@ class Concat(Expr):
                 return
 
             frames = [
-                frame[cols]
-                if sorted(cols) != sorted(get_columns_or_name(frame))
-                else frame
+                (
+                    frame[cols]
+                    if sorted(cols) != sorted(get_columns_or_name(frame))
+                    else frame
+                )
                 for frame, cols in zip(self._frames, columns_frame)
                 if len(cols) > 0
             ]
-            return type(parent)(
-                type(self)(
-                    self.join,
-                    self.ignore_order,
-                    self._kwargs,
-                    self.axis,
-                    self.ignore_unknown_divisions,
-                    self.interleave_partitions,
-                    *frames,
-                ),
-                *parent.operands[1:],
+            result = type(self)(
+                self.join,
+                self.ignore_order,
+                self._kwargs,
+                self.axis,
+                self.ignore_unknown_divisions,
+                self.interleave_partitions,
+                *frames,
             )
+            if result.columns == _convert_to_list(parent.operand("columns")):
+                if result.ndim == parent.ndim:
+                    return result
+                elif result.ndim < parent.ndim:
+                    return ToFrame(result)
+
+            return type(parent)(result, *parent.operands[1:])
 
 
 class StackPartition(Concat):

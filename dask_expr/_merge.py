@@ -2,6 +2,7 @@ import functools
 import math
 import operator
 
+import numpy as np
 from dask.dataframe.dispatch import make_meta, meta_nonempty
 from dask.dataframe.multi import (
     _concat_wrapper,
@@ -13,16 +14,31 @@ from dask.dataframe.shuffle import partitioning_index
 from dask.utils import apply, get_default_shuffle_method
 from toolz import merge_sorted, unique
 
-from dask_expr._expr import (
+from dask_expr._expr import (  # noqa: F401
+    And,
+    Binop,
     Blockwise,
+    DropDuplicatesBlockwise,
+    Elemwise,
     Expr,
+    Filter,
     Index,
+    Isin,
     PartitionsFiltered,
     Projection,
+    Unaryop,
+    _DelayedExpr,
+    are_co_aligned,
     determine_column_projection,
+    is_filter_pushdown_available,
 )
 from dask_expr._repartition import Repartition
-from dask_expr._shuffle import Shuffle, _contains_index_name, _select_columns_or_index
+from dask_expr._shuffle import (
+    RearrangeByColumn,
+    _contains_index_name,
+    _is_numeric_cast_type,
+    _select_columns_or_index,
+)
 from dask_expr._util import _convert_to_list, _tokenize_deterministic, is_scalar
 
 _HASH_COLUMN_NAME = "__hash_partition"
@@ -69,8 +85,91 @@ class Merge(Expr):
         "broadcast": None,
     }
 
+    @property
+    def _filter_passthrough(self):
+        raise NotImplementedError(
+            "please use _filter_passthrough_available to make this decision"
+        )
+
+    def _filter_passthrough_available(self, parent, dependents):
+        if is_filter_pushdown_available(self, parent, dependents):
+            predicate = parent.predicate
+            # This protects against recursion, no need to separate ands if the first
+            # condition violates the join direction
+            while isinstance(predicate, And):
+                predicate = predicate.left
+            predicate_columns = self._predicate_columns(predicate)
+            if predicate_columns is None:
+                return False
+            if predicate_columns.issubset(self.left.columns):
+                return self.how in ("left", "inner", "leftsemi")
+            elif predicate_columns.issubset(self.right.columns):
+                return self.how in ("right", "inner")
+            elif len(predicate_columns) > 0:
+                return False
+            return True
+        elif isinstance(parent.predicate, And):
+            # If we can make that transformation then we should do it to further
+            # align filters that sit on top of merges
+            new = Filter(self, parent.predicate.left)
+            return new._name in {
+                x()._name for x in dependents[self._name] if x() is not None
+            }
+        return False
+
+    def _predicate_columns(self, predicate):
+        if isinstance(predicate, (Projection, Unaryop, Isin)):
+            return self._get_original_predicate_columns(predicate)
+        elif isinstance(predicate, Binop):
+            if isinstance(predicate, And):
+                return None
+
+            if not isinstance(predicate.right, Expr):
+                return self._get_original_predicate_columns(predicate.left)
+            elif isinstance(predicate.right, Elemwise):
+                return self._get_original_predicate_columns(predicate)
+            else:
+                return None
+        else:
+            # Unsupported predicate type
+            return None
+
+    def _get_original_predicate_columns(self, predicate):
+        predicate_columns = set()
+        stack = [predicate]
+        seen = set()
+        while stack:
+            e = stack.pop()
+            if self._name == e._name:
+                continue
+
+            if e._name in seen:
+                continue
+            seen.add(e._name)
+
+            if isinstance(e, _DelayedExpr):
+                continue
+
+            dependencies = e.dependencies()
+            stack.extend(dependencies)
+            if any(d._name == self._name for d in dependencies):
+                predicate_columns.update(e.columns)
+        return predicate_columns
+
     def __str__(self):
         return f"Merge({self._name[-7:]})"
+
+    @property
+    def unique_partition_mapping_columns_from_shuffle(self):
+        if self._is_single_partition_broadcast:
+            result = self.left.unique_partition_mapping_columns_from_shuffle.copy()
+            result.update(self.right.unique_partition_mapping_columns_from_shuffle)
+            return result
+
+        return {
+            tuple(self.left_on) if isinstance(self.left_on, list) else self.left_on,
+            tuple(self.right_on) if isinstance(self.right_on, list) else self.right_on,
+        }
 
     @property
     def kwargs(self):
@@ -91,7 +190,10 @@ class Merge(Expr):
     def _meta(self):
         left = meta_nonempty(self.left._meta)
         right = meta_nonempty(self.right._meta)
-        return make_meta(left.merge(right, **self.kwargs))
+        kwargs = self.kwargs.copy()
+        if kwargs["how"] == "leftsemi":
+            kwargs["how"] = "left"
+        return make_meta(left.merge(right, **kwargs))
 
     def __exec__(self):
         left = self.left.__exec__()
@@ -145,7 +247,7 @@ class Merge(Expr):
             elif (
                 use_left
                 and self.right.npartitions == 1
-                and self.how in ("inner", "left")
+                and self.how in ("inner", "left", "leftsemi")
             ):
                 return self.left.divisions
             else:
@@ -183,10 +285,10 @@ class Merge(Expr):
         elif isinstance(self.broadcast, bool):
             broadcast = self.broadcast
 
-        s_backend = self.shuffle_method or get_default_shuffle_method()
+        s_method = self.shuffle_method or get_default_shuffle_method()
         if (
-            s_backend in ("tasks", "p2p")
-            and self.how in ("inner", "left", "right")
+            s_method in ("tasks", "p2p")
+            and self.how in ("inner", "left", "right", "leftsemi")
             and self.how != broadcast_side
             and broadcast is not False
         ):
@@ -204,7 +306,7 @@ class Merge(Expr):
             or self.left.npartitions == 1
             and self.how in ("right", "inner")
             or self.right.npartitions == 1
-            and self.how in ("left", "inner")
+            and self.how in ("left", "inner", "leftsemi")
         )
 
     @functools.cached_property
@@ -231,6 +333,16 @@ class Merge(Expr):
             self.right_index or _contains_index_name(self.right, self.right_on)
         ) and self.right.known_divisions
 
+    def _on_condition_alread_partitioned(self, expr, on):
+        if not isinstance(on, list):
+            result = (
+                on in expr.unique_partition_mapping_columns_from_shuffle
+                or (on,) in expr.unique_partition_mapping_columns_from_shuffle
+            )
+        else:
+            result = tuple(on) in expr.unique_partition_mapping_columns_from_shuffle
+        return result and expr.npartitions == self.npartitions
+
     def _lower(self):
         # Lower from an abstract expression
         left = self.left
@@ -240,6 +352,12 @@ class Merge(Expr):
         left_index = self.left_index
         right_index = self.right_index
         shuffle_method = self.shuffle_method
+
+        # TODO: capture index-merge as well
+        left_already_partitioned = self._on_condition_alread_partitioned(left, left_on)
+        right_already_partitioned = self._on_condition_alread_partitioned(
+            right, right_on
+        )
 
         # TODO:
         #  1. Add/leverage partition statistics
@@ -279,19 +397,18 @@ class Merge(Expr):
                 shuffle_right_on = right.index._meta.name
                 if shuffle_right_on is None:
                     shuffle_right_on = "_index"
-
             if self.is_broadcast_join:
                 left, right = self._bcast_left, self._bcast_right
 
                 if self.how != "inner":
                     if self.broadcast_side == "left":
-                        left = Shuffle(
+                        left = RearrangeByColumn(
                             left,
                             shuffle_left_on,
                             npartitions_out=left.npartitions,
                         )
                     else:
-                        right = Shuffle(
+                        right = RearrangeByColumn(
                             right,
                             shuffle_right_on,
                             npartitions_out=right.npartitions,
@@ -313,6 +430,8 @@ class Merge(Expr):
             shuffle_method == "p2p"
             or shuffle_method is None
             and get_default_shuffle_method() == "p2p"
+            and not left_already_partitioned
+            and not right_already_partitioned
         ):
             return HashJoinP2P(
                 left,
@@ -329,23 +448,23 @@ class Merge(Expr):
                 _npartitions=self.operand("_npartitions"),
             )
 
-        if shuffle_left_on:
+        if shuffle_left_on and not left_already_partitioned:
             # Shuffle left
-            left = Shuffle(
+            left = RearrangeByColumn(
                 left,
                 shuffle_left_on,
                 npartitions_out=self._npartitions,
-                backend=shuffle_method,
+                method=shuffle_method,
                 index_shuffle=left_index,
             )
 
-        if shuffle_right_on:
+        if shuffle_right_on and not right_already_partitioned:
             # Shuffle right
-            right = Shuffle(
+            right = RearrangeByColumn(
                 right,
                 shuffle_right_on,
                 npartitions_out=self._npartitions,
-                backend=shuffle_method,
+                method=shuffle_method,
                 index_shuffle=right_index,
             )
 
@@ -353,6 +472,43 @@ class Merge(Expr):
         return BlockwiseMerge(left, right, **self.kwargs)
 
     def _simplify_up(self, parent, dependents):
+        if isinstance(parent, Filter):
+            if not self._filter_passthrough_available(parent, dependents):
+                return
+            predicate = parent.predicate
+
+            if isinstance(predicate, And):
+                new = Filter(self, predicate.left)
+                new_pred = predicate.right.substitute(self, new)
+                return Filter(new, new_pred)
+
+            predicate_cols = self._predicate_columns(parent.predicate)
+            new_left, new_right = self.left, self.right
+            left_suffix, right_suffix = self.suffixes[0], self.suffixes[1]
+            if predicate_cols and predicate_cols.issubset(self.left.columns):
+                if left_suffix != "" and any(
+                    f"{col}{left_suffix}" in self.columns and col in self.right.columns
+                    for col in predicate_cols
+                ):
+                    # column was renamed so the predicate must go into the other side
+                    pass
+                else:
+                    left_filter = predicate.substitute(self, self.left)
+                    new_left = self.left[left_filter]
+            if predicate_cols and predicate_cols.issubset(self.right.columns):
+                if right_suffix != "" and any(
+                    f"{col}{right_suffix}" in self.columns and col in self.left.columns
+                    for col in predicate_cols
+                ):
+                    # column was renamed so the predicate must go into the other side
+                    pass
+                else:
+                    right_filter = predicate.substitute(self, self.right)
+                    new_right = self.right[right_filter]
+            if new_right is self.right and new_left is self.left:
+                # don't drop the filter
+                return
+            return type(self)(new_left, new_right, *self.operands[2:])
         if isinstance(parent, (Projection, Index)):
             # Reorder the column projection to
             # occur before the Merge
@@ -377,6 +533,7 @@ class Merge(Expr):
 
             left_suffix, right_suffix = self.suffixes[0], self.suffixes[1]
             project_left, project_right = [], []
+            right_suff_columns, left_suff_columns = [], []
 
             # Find columns to project on the left
             for col in left.columns:
@@ -387,7 +544,7 @@ class Merge(Expr):
                     if col in right.columns:
                         # Right column must be present
                         # for the suffix to be applied
-                        project_right.append(col)
+                        right_suff_columns.append(col)
 
             # Find columns to project on the right
             for col in right.columns:
@@ -398,7 +555,11 @@ class Merge(Expr):
                     if col in left.columns and col not in project_left:
                         # Left column must be present
                         # for the suffix to be applied
-                        project_left.append(col)
+                        left_suff_columns.append(col)
+            project_left.extend([c for c in left_suff_columns if c not in project_left])
+            project_right.extend(
+                [c for c in right_suff_columns if c not in project_right]
+            )
 
             if set(project_left) < set(left.columns) or set(project_right) < set(
                 right.columns
@@ -528,6 +689,7 @@ class HashJoinP2P(Merge, PartitionsFiltered):
                 self.suffixes,
                 self.left_index,
                 self.right_index,
+                self.indicator,
             )
         return dsk
 
@@ -609,15 +771,17 @@ class BroadcastJoin(Merge, PartitionsFiltered):
                 # Specify arg list for `merge_chunk`
                 _merge_args = [
                     (
-                        operator.getitem,
-                        (split_name, part_out),
-                        j,
-                    )
-                    if self.how != "inner"
-                    else (other, part_out),
+                        (
+                            operator.getitem,
+                            (split_name, part_out),
+                            j,
+                        )
+                        if self.how != "inner"
+                        else (other, part_out)
+                    ),
                     (bcast_name, j),
                 ]
-                if self.broadcast_side == "left":
+                if self.broadcast_side in ("left", "leftsemi"):
                     _merge_args.reverse()
 
                 inter_key = (inter_name, part_out, j)
@@ -649,16 +813,23 @@ def create_assign_index_merge_transfer():
         index_merge,
     ):
         if index_merge:
-            index = df[[]]
+            index = df[[]].copy()
             index["_index"] = df.index
         else:
             index = _select_columns_or_index(df, index)
         if isinstance(index, (str, list, tuple)):
             # Assume column selection from df
             index = [index] if isinstance(index, str) else list(index)
-            index = partitioning_index(df[index], npartitions)
-        else:
-            index = partitioning_index(index, npartitions)
+            index = df[index]
+
+        dtypes = {}
+        for col, dtype in index.dtypes.items():
+            if _is_numeric_cast_type(dtype):
+                dtypes[col] = np.float64
+        if dtypes:
+            index = index.astype(dtypes, errors="ignore")
+
+        index = partitioning_index(index, npartitions)
         df = df.assign(**{name: index})
         meta = meta.assign(**{name: 0})
         return merge_transfer(
@@ -666,6 +837,13 @@ def create_assign_index_merge_transfer():
         )
 
     return assign_index_merge_transfer
+
+
+class SemiMerge(Merge):
+    def _lower(self):
+        # This is cheap and avoids shuffling unnecessary data
+        right = DropDuplicatesBlockwise(self.right)
+        return Merge(self.left, right, *self.operands[2:])
 
 
 class BlockwiseMerge(Merge, Blockwise):
@@ -683,6 +861,12 @@ class BlockwiseMerge(Merge, Blockwise):
     """
 
     is_broadcast_join = False
+
+    @functools.cached_property
+    def unique_partition_mapping_columns_from_shuffle(self):
+        result = self.left.unique_partition_mapping_columns_from_shuffle.copy()
+        result.update(self.right.unique_partition_mapping_columns_from_shuffle)
+        return result
 
     def _divisions(self):
         if self.left.npartitions == self.right.npartitions:

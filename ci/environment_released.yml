@@ -4,7 +4,8 @@ channels:
 dependencies:
   - pytest
   - pytest-cov
+  - pytest-xdist
   - dask
-  - pyarrow
+  - pyarrow>=7
   - pandas>=2
   - pre-commit

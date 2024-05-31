@@ -4,8 +4,10 @@ import numpy as np
 import pytest
 
 from dask_expr import Merge, from_pandas, merge, repartition
-from dask_expr._expr import Projection
+from dask_expr._expr import Filter, Projection
+from dask_expr._merge import BroadcastJoin
 from dask_expr._shuffle import Shuffle
+from dask_expr.io import FromPandas
 from dask_expr.tests._util import _backend_library, assert_eq
 
 # Set DataFrame backend for this module
@@ -128,7 +130,7 @@ def test_join(how, shuffle_method):
 
     # Check result with/without fusion
     expect = pdf1.join(pdf2, on="x", how=how)
-    assert_eq(df3, expect, check_index=False)
+    assert_eq(df3.compute(), expect, check_index=False)
     assert_eq(df3.optimize(), expect, check_index=False)
 
     df3 = df1.join(df2.z, on="x", how=how, shuffle_method=shuffle_method)
@@ -231,7 +233,7 @@ def test_merge_combine_similar(npartitions_left, npartitions_right):
     query["new"] = query.b + query.c
     query = query.groupby(["a", "e", "x"]).new.sum()
     assert (
-        len(query.optimize().__dask_graph__()) <= 25
+        len(query.optimize().__dask_graph__()) <= 30
     )  # 45 is the non-combined version
 
     expected = pdf.merge(pdf2)
@@ -269,6 +271,23 @@ def test_merge_combine_similar_intermediate_projections():
 
     assert sorted(result.expr.frame.frame.left.operand("columns")) == ["b", "x"]
     assert_eq(result, pd_result, check_index=False)
+
+
+def test_categorical_merge_with_merge_column_cat_in_one_and_not_other_upcasts():
+    df1 = pd.DataFrame({"A": pd.Categorical([0, 1]), "B": pd.Categorical(["a", "b"])})
+    df2 = pd.DataFrame({"C": pd.Categorical(["a", "b"])})
+
+    expected = pd.merge(df2, df1, left_index=True, right_on="A")
+
+    ddf1 = from_pandas(df1, npartitions=2)
+    ddf2 = from_pandas(df2, npartitions=2)
+
+    actual = merge(ddf2, ddf1, left_index=True, right_on="A").compute()
+    assert actual.C.dtype == "category"
+    assert actual.B.dtype == "category"
+    assert actual.A.dtype == "int64"
+    assert actual.index.dtype == "int64"
+    assert assert_eq(expected, actual)
 
 
 def test_merge_combine_similar_hangs():
@@ -589,12 +608,15 @@ def test_merge_pandas_object():
     )
 
 
+@pytest.mark.parametrize("clear_divisions", [True, False])
 @pytest.mark.parametrize("how", ["left", "outer"])
 @pytest.mark.parametrize("npartitions_base", [1, 2, 3])
 @pytest.mark.parametrize("npartitions_other", [1, 2, 3])
 def test_pairwise_merge_results_in_identical_output_df(
-    how, npartitions_base, npartitions_other
+    how, npartitions_base, npartitions_other, clear_divisions
 ):
+    if clear_divisions and (npartitions_other != 3 or npartitions_base != 1):
+        pytest.skip(reason="Runtime still slower than I would like, so save some time")
     dfs_to_merge = []
     for i in range(10):
         df = pd.DataFrame(
@@ -605,15 +627,405 @@ def test_pairwise_merge_results_in_identical_output_df(
             index=[0, 1, 2, 3],
         )
         ddf = from_pandas(df, npartitions_other)
+        if clear_divisions:
+            ddf = ddf.clear_divisions()
         dfs_to_merge.append(ddf)
 
     ddf_loop = from_pandas(pd.DataFrame(index=[0, 1, 3]), npartitions_base)
+    if clear_divisions:
+        ddf_loop = ddf_loop.clear_divisions()
     for ddf in dfs_to_merge:
         ddf_loop = ddf_loop.join(ddf, how=how)
 
     ddf_pairwise = from_pandas(pd.DataFrame(index=[0, 1, 3]), npartitions_base)
+    if clear_divisions:
+        ddf_pairwise = ddf_pairwise.clear_divisions()
 
     ddf_pairwise = ddf_pairwise.join(dfs_to_merge, how=how)
 
     # recursive join doesn't yet respect divisions in dask-expr
     assert_eq(ddf_pairwise, ddf_loop)
+
+
+def test_filter_merge():
+    pdf_a = pd.DataFrame(
+        {
+            "a": range(5),
+            "b": range(5),
+            "c": range(5),
+            "d": [True, False, True, False, True],
+        }
+    )
+    pdf_b = pd.DataFrame(
+        {
+            "c": [0, 2, 4, 6, 8],
+            "x": range(5),
+            "y": range(5),
+            "z": [False, False, True, True, True],
+        }
+    )
+
+    a = from_pandas(pdf_a)
+    b = from_pandas(pdf_b)
+
+    # Some simple cases
+    df = a.merge(b)
+    # A simple projection
+    df = df[df.z]
+    bb = b[b.z]
+    expected = a.merge(bb)
+    assert df.optimize()._name == expected.optimize()._name
+    assert_eq(df, expected)
+
+    # Unary op
+    df = a.merge(b)
+    df = df[~df.z]
+    bb = b[~b.z]
+    expected = a.merge(bb)
+    assert df.optimize()._name == expected.optimize()._name
+    assert_eq(df, expected)
+
+    df = a.merge(b)
+    df = df[df.x > 3]
+    bb = b[b.x > 3]
+    expected = a.merge(bb)
+    assert df.optimize()._name == expected.optimize()._name
+    assert_eq(df, expected)
+
+    df = a.merge(b)
+    df = df[df.b > 3]
+    aa = a[a.b > 3]
+    expected = aa.merge(b)
+    assert df.optimize()._name == expected.optimize()._name
+    assert_eq(df, expected)
+
+    df = a.merge(b)
+    df = df[3 < df.b]
+    aa = a[3 < a.b]
+    expected = aa.merge(b)
+    assert df.optimize()._name == expected.optimize()._name
+    assert_eq(df, expected)
+
+    # Apply to both!
+    df = a.merge(b)
+    df = df[df.c > 3]
+    aa = a[a.c > 3]
+    bb = b[b.c > 3]
+    expected = aa.merge(bb)
+    assert df.optimize()._name == expected.optimize()._name
+    assert_eq(df, expected)
+
+    # Works with more complex expressions, and multiple columns
+    df = a.merge(b)
+    df = df[df.a > df.b + 1]
+    aa = a[a.a > a.b + 1]
+    expected = aa.merge(b)
+    assert df.optimize()._name == expected.optimize()._name
+    assert_eq(df, expected)
+
+    # Only apply if all columns are in the table, not if only some are
+    df = a.merge(b)
+    df = df[df.c > df.x + 1]
+    bb = b[b.c > b.x + 1]
+    expected = a.merge(bb)
+    assert df.optimize()._name == expected.optimize()._name
+    assert_eq(df, expected)
+
+    df = a.merge(b)
+    df = df[df.d & df.z]
+    aa = a[a.d]
+    bb = b[b.z]
+    expected = aa.merge(bb)
+    assert df.simplify()._name == expected.simplify()._name
+    assert_eq(df, expected)
+
+    df = a.merge(b)
+    df = df[(df.a > 2) & df.z]
+    aa = a[a.a > 2]
+    bb = b[b.z]
+    expected = aa.merge(bb)
+    actual = df.optimize()
+    assert actual._name == expected.optimize()._name
+    assert_eq(df, expected)
+
+    # Bail if we engage non-elemwise expressions in the predicates
+    df = a.merge(b)
+    df = df[df.x > df.y.sum()]
+    bb = b[b.x > b.y.sum()]
+    not_expected = a.merge(bb)
+    assert df.optimize()._name != not_expected.optimize()._name
+
+    df = a.merge(b)
+    df = df[df.d & df.z][["a"]]
+    aa = a[a.d]
+    bb = b[b.z]
+    expected = aa.merge(bb)[["a"]]
+    assert df.simplify()._name == expected.simplify()._name
+    assert_eq(df, expected)
+
+    df = a.merge(b)
+    df = df[df.d & df.z & (df.b == 1)][["a"]]
+    aa = a[a.d & (a.b == 1)]
+    bb = b[b.z]
+    expected = aa.merge(bb)[["a"]]
+    assert df.simplify()._name == expected.simplify()._name
+    assert_eq(df, expected)
+
+    df = a.merge(b)
+    df = df[df.d == df.z]
+    assert df.simplify()._name == df._name
+
+
+def test_filter_merge_suffixes():
+    pdf1 = pd.DataFrame({"a": [1, 2, 3, 4], "b": 1})
+    pdf2 = pd.DataFrame({"a": [1, 2, 3, 4], "b": 2})
+    df1 = from_pandas(pdf1, npartitions=2)
+    df2 = from_pandas(pdf2, npartitions=2)
+    q = df1.merge(df2, on="a", suffixes=("", "_right"))
+    result = q[q.b < 2]
+    expected = pdf1.merge(pdf2, on="a", suffixes=("", "_right"))
+    assert_eq(result, expected[expected.b < 2], check_index=False)
+    result = q[q.b > 1]
+    expected = df1.merge(df2, on="a", suffixes=("", "_right"))
+    assert_eq(result, expected[expected.b > 1], check_index=False)
+
+    q = df1.merge(df2, on="a", suffixes=("_left", "_right"))
+    result = q[q.b_left < 2]
+    # Don't do anything for now
+    assert result._name == result.simplify()._name
+    expected = df1.merge(df2, on="a", suffixes=("_left", "_right"))
+    assert_eq(result, expected[expected.b_left < 2], check_index=False)
+
+
+def test_merge_filter_renaming_columns():
+    pdf1 = pd.DataFrame({"a": [1, 2, 3, 4], "left": 4})
+    df1 = from_pandas(pdf1, npartitions=2)
+
+    pdf2 = pd.DataFrame({"a": [1, 2, 3, 4], "right": [6, 6, 5, 6]})
+    df2 = from_pandas(pdf2, npartitions=2)
+
+    result = df1.merge(df2)
+    result = result[result[["right"]].rename(columns={"right": "left"})["left"] == 6]
+    expected = pdf1.merge(pdf2)
+    expected = expected[
+        expected[["right"]].rename(columns={"right": "left"})["left"] == 6
+    ]
+    assert_eq(result, expected, check_index=False)
+
+    q = result.simplify()
+    assert isinstance(q.expr.right, Filter)
+    assert isinstance(q.expr.left, FromPandas)
+
+
+def test_merge_avoid_overeager_filter_pushdown():
+    df = pd.DataFrame({"a": [1, 2, 3], "b": 1})
+    ddf = from_pandas(df, npartitions=2)
+    df2 = pd.DataFrame({"a": [2, 3, 4], "c": 1})
+    ddf2 = from_pandas(df2, npartitions=2)
+    merged = ddf.merge(ddf2, on="a", how="left")
+    rhs = merged.c.sum()
+    q = merged[merged.a > 1].assign(c=rhs)
+    result = q.simplify()
+    assert q._name == result._name
+    assert isinstance(result.expr.frame, Filter)
+    assert isinstance(result.expr.frame.frame, Merge)
+
+    merged = ddf.merge(ddf2, on="a", how="left")
+    rhs = merged.a.sum()
+    q = merged[merged.a > 1].assign(c=rhs)
+    result = q.simplify()
+    assert q._name == result._name
+    assert isinstance(result.expr.frame, Filter)
+    assert isinstance(result.expr.frame.frame, Merge)
+
+
+@pytest.mark.parametrize("how", ["left", "inner", "right", "outer"])
+def test_isin_filter_pushdown(how):
+    pdf1 = pd.DataFrame(
+        {
+            "o_orderkey": [1, 2, 3, 4, 5],
+        }
+    )
+    pdf2 = pd.DataFrame(
+        {
+            "l_orderkey": [1, 2, 3, 4, 5],
+            "l_shipmode": ["MAIL", "SHIP", "RAIL", "bla", "MAIL"],
+            "l_commitdate": [1, 2, 3, 4, 5],
+            "l_receiptdate": [2, 2, 3, 5, 6],
+        }
+    )
+
+    df1 = from_pandas(pdf1, npartitions=2)
+    df2 = from_pandas(pdf2, npartitions=2)
+
+    table = df1.merge(df2, left_on="o_orderkey", right_on="l_orderkey", how=how)
+    result = table[
+        (table.l_shipmode.isin(("MAIL", "SHIP")))
+        & (table.l_commitdate < table.l_receiptdate)
+    ]
+
+    table = pdf1.merge(pdf2, left_on="o_orderkey", right_on="l_orderkey", how=how)
+    expected = table[
+        (table.l_shipmode.isin(("MAIL", "SHIP")))
+        & (table.l_commitdate < table.l_receiptdate)
+    ].sort_values(by="o_orderkey", ascending=False)
+    assert_eq(result, expected, check_index=False)
+
+    table = df2.merge(df1, left_on="l_orderkey", right_on="o_orderkey", how=how)
+    result = table[
+        (table.l_shipmode.isin(("MAIL", "SHIP")))
+        & (table.l_commitdate < table.l_receiptdate)
+    ]
+
+    table = pdf2.merge(pdf1, left_on="l_orderkey", right_on="o_orderkey", how=how)
+    expected = table[
+        (table.l_shipmode.isin(("MAIL", "SHIP")))
+        & (table.l_commitdate < table.l_receiptdate)
+    ].sort_values(by="o_orderkey", ascending=False)
+    assert_eq(result, expected, check_index=False)
+
+
+def test_merge_filter_pushdown_broadcast():
+    pdf = pd.DataFrame({"a": [1, 2, 3], "b": 1})
+    pdf2 = pd.DataFrame({"c": [1, 2, 3], "b": 1})
+    df1 = from_pandas(pdf, npartitions=2)
+    df2 = from_pandas(pdf2, npartitions=2)
+    result = df1.merge(df2, broadcast=True, shuffle_method="tasks")
+    result = result[result.a > 1]
+    result.optimize().pprint()
+    assert len(list(result.optimize().find_operations(BroadcastJoin))) > 0
+
+
+def test_merge_filter_stuck_between_merges():
+    pdf = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6, 7] * 100, "b": 1, "c": 2})
+    pdf2 = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6, 7] * 100, "d": 1, "e": 1, "f": 1})
+    df1 = from_pandas(pdf, npartitions=2)
+    df2 = from_pandas(pdf2, npartitions=2)
+    result = df1.merge(df2)
+    q = result.groupby("a").b.sum(split_out=True).reset_index()
+    result = result.merge(q)
+    result = result[(result.d == 1) & (result.e == 1)]
+    e = df1.merge(df2)
+    expected = e[(e.d == 1) & (e.e == 1)]
+    expected_q = e.groupby("a").b.sum(split_out=True).reset_index()
+    expected = expected.merge(expected_q)
+    assert result.optimize()._name == expected.optimize()._name
+
+
+def test_merge_or_two_branches():
+    pdf = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6, 7] * 100, "b": 1, "c": 2})
+    pdf2 = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6, 7] * 100, "d": 1, "e": 1, "f": 1})
+    df1 = from_pandas(pdf, npartitions=2)
+    df2 = from_pandas(pdf2, npartitions=2)
+
+    q = df1.merge(df2)
+    q = q[((q.b == 1) & (q.d == 1)) | ((q.b == 2) & (q.d == 1))]
+    result = (q.c * (q.f)).sum()
+
+    left = df1[(df1.b == 1) | (df1.b == 2)]
+    right = df2[df2.d == 1]
+    expected = left.merge(right)
+    expected = (expected.c * (expected.f)).sum()
+    assert result.optimize()._name == expected.optimize()._name
+
+
+def test_merge_or_two_branches_no_pushdown():
+    pdf = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6, 7] * 100, "b": 1, "c": 2})
+    pdf2 = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6, 7] * 100, "d": 1, "e": 1, "f": 1})
+    df1 = from_pandas(pdf, npartitions=2)
+    df2 = from_pandas(pdf2, npartitions=2)
+
+    q = df1.merge(df2)
+    result = q[((q.b == 1) & (q.d == 1)) | ((q.b == 2) & (q.d == 1))]
+    result = (result.c * (result.f)).sum() + q.a.sum()
+
+    assert isinstance(result.expr.right.frame.frame, Merge)
+    # Filter wasn't pushed through the merges
+    assert isinstance(result.expr.left.frame.left.frame, Filter)
+    assert isinstance(result.expr.left.frame.left.frame.frame, Merge)
+
+
+def test_merge_filter_column_used_multiple_times():
+    pdf = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6, 7] * 100, "b": 1, "c": 2})
+    pdf2 = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6, 7] * 100, "d": 1, "e": 1, "f": 1})
+
+    df1 = from_pandas(pdf, npartitions=2)
+    df2 = from_pandas(pdf2, npartitions=2)
+    result = df1.merge(df2)
+    result = result[(result.b <= result.c) & (result.b == 1)]
+    expected = df1[(df1.b <= df1.c) & (df1.b == 1)]
+    expected = expected.merge(df2)
+    assert result.optimize()._name == expected.optimize()._name
+
+
+def test_merge_scalar_comparison():
+    pdf = pd.DataFrame({"a": [1, 2, 3], "b": 1})
+    pdf2 = pd.DataFrame({"c": [1, 2, 3], "b": 1})
+    df = from_pandas(pdf, npartitions=2)
+    df2 = from_pandas(pdf2, npartitions=2)
+    result = df.merge(df2)
+    result = result[result.a > df.a.mean()]
+    expected = pdf.merge(pdf2)
+    expected = expected[expected.a > pdf.a.mean()]
+    assert_eq(result, expected, check_index=False)
+
+
+def test_merge_leftsemi():
+    pdf1 = pd.DataFrame({"aa": [1, 2, 3, 4, 5, 6, 1, 2, 3], "bb": 1})
+    pdf2 = pd.DataFrame({"aa": [1, 2, 2, 4, 4, 10], "cc": 1})
+
+    df1 = from_pandas(pdf1, npartitions=2)
+    df2 = from_pandas(pdf2, npartitions=2)
+    assert_eq(
+        df1.merge(df2, how="leftsemi"),
+        pdf1[pdf1.aa.isin(pdf2.aa)],
+        check_index=False,
+    )
+    df2 = df2.rename(columns={"aa": "dd"})
+    assert_eq(
+        df1.merge(df2, how="leftsemi", left_on="aa", right_on="dd"),
+        pdf1[pdf1.aa.isin(pdf2.aa)],
+        check_index=False,
+    )
+    with pytest.raises(NotImplementedError, match="right_index=True"):
+        df1.merge(df2, how="leftsemi")
+
+    pdf2 = pdf2.set_index("aa")
+    df2 = from_pandas(pdf2, npartitions=2)
+    with pytest.raises(NotImplementedError, match="on columns from the index"):
+        df1.merge(df2, how="leftsemi", on="aa")
+
+
+def test_merge_suffix_projections():
+    df = pd.DataFrame(
+        {
+            "a": [1, 2, 3] * 5,
+            "b": [1, 2, 3] * 5,
+            "c": ["A"] * 15,
+        },
+    )
+    ddf = from_pandas(df, npartitions=1)
+
+    merged_ddf = merge(ddf, ddf, on="a")
+    result = merged_ddf[merged_ddf["c_x"] == "A"]["c_y"]
+    expected = df.merge(df, on="a")
+    expected = expected[expected["c_x"] == "A"]["c_y"]
+    assert_eq(result, expected)
+
+
+@pytest.mark.parametrize("index", [True, False])
+def test_merge_after_rename(index):
+    pleft = pd.Series(range(10))
+    pleft = pleft.index if index else pleft
+    pleft = pleft.drop_duplicates().to_frame()
+    pleft.columns = ["a"]
+
+    left = from_pandas(pd.Series(range(10)), npartitions=2)
+    left = left.index if index else left
+    left = left.drop_duplicates().to_frame()
+    left.columns = ["a"]
+
+    right = pd.DataFrame({"a": [1, 2] * 5})
+    expected = pleft.merge(right, how="inner")
+    result = left.merge(right, how="inner")
+    assert_eq(result, expected, check_index=False)

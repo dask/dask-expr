@@ -5,6 +5,7 @@ import os
 import weakref
 from collections import defaultdict
 from collections.abc import Generator
+from typing import TYPE_CHECKING, Literal
 
 import dask
 import pandas as pd
@@ -13,6 +14,19 @@ from dask.dataframe.core import is_dataframe_like, is_index_like, is_series_like
 from dask.utils import funcname, import_required, is_arraylike
 
 from dask_expr._util import _BackendData, _tokenize_deterministic
+
+if TYPE_CHECKING:
+    # TODO import from typing (requires Python >=3.10)
+    from typing_extensions import TypeAlias
+
+OptimizerStage: TypeAlias = Literal[
+    "logical",
+    "simplified-logical",
+    "tuned-logical",
+    "physical",
+    "simplified-physical",
+    "fused",
+]
 
 
 def _unpack_collections(o):
@@ -28,45 +42,67 @@ def _unpack_collections(o):
 class Expr:
     _parameters = []
     _defaults = {}
+    _instances = weakref.WeakValueDictionary()
 
-    def __init__(self, *args, **kwargs):
+    def __new__(cls, *args, **kwargs):
         operands = list(args)
-        for parameter in type(self)._parameters[len(operands) :]:
+        for parameter in cls._parameters[len(operands) :]:
             try:
                 operands.append(kwargs.pop(parameter))
             except KeyError:
-                operands.append(type(self)._defaults[parameter])
+                operands.append(cls._defaults[parameter])
         assert not kwargs, kwargs
-        operands = [_unpack_collections(o) for o in operands]
-        self.operands = operands
-        if self._required_attribute:
-            dep = next(iter(self.dependencies()))._meta
-            if not hasattr(dep, self._required_attribute):
-                # Raise a ValueError instead of AttributeError to
-                # avoid infinite recursion
-                raise ValueError(f"{dep} has no attribute {self._required_attribute}")
+        inst = object.__new__(cls)
+        inst.operands = [_unpack_collections(o) for o in operands]
+        _name = inst._name
+        if _name in Expr._instances:
+            return Expr._instances[_name]
+
+        Expr._instances[_name] = inst
+        return inst
 
     def __exec__(self):
         raise NotImplementedError(
             f"Backend exec is not yet supported for {type(self)}."
         )
 
-    @property
-    def _required_attribute(self) -> str:
-        # Specify if the first `dependency` must support
-        # a specific attribute for valid behavior.
+    def _tune_down(self):
         return None
 
+    def _tune_up(self, parent):
+        return None
+
+    def _operands_for_repr(self):
+        to_include = []
+        for param, operand in zip(self._parameters, self.operands):
+            if isinstance(operand, Expr) or (
+                not isinstance(operand, (pd.Series, pd.DataFrame))
+                and operand != self._defaults.get(param)
+            ):
+                to_include.append(f"{param}={operand!r}")
+        return to_include
+
     def __str__(self):
-        s = ", ".join(
-            str(param) + "=" + str(operand)
-            for param, operand in zip(self._parameters, self.operands)
-            if isinstance(operand, Expr) or operand != self._defaults.get(param)
-        )
+        s = ", ".join(self._operands_for_repr())
         return f"{type(self).__name__}({s})"
 
     def __repr__(self):
         return str(self)
+
+    def _tree_repr_argument_construction(self, i, op, header):
+        try:
+            param = self._parameters[i]
+            default = self._defaults[param]
+        except (IndexError, KeyError):
+            param = self._parameters[i] if i < len(self._parameters) else ""
+            default = "--no-default--"
+
+        if repr(op) != repr(default):
+            if param:
+                header += f" {param}={repr(op)}"
+            else:
+                header += repr(op)
+        return header
 
     def _tree_repr_lines(self, indent=0, recursive=True):
         header = funcname(type(self)) + ":"
@@ -76,13 +112,6 @@ class Expr:
                 if recursive:
                     lines.extend(op._tree_repr_lines(2))
             else:
-                try:
-                    param = self._parameters[i]
-                    default = self._defaults[param]
-                except (IndexError, KeyError):
-                    param = self._parameters[i] if i < len(self._parameters) else ""
-                    default = "--no-default--"
-
                 if isinstance(op, _BackendData):
                     op = op._data
 
@@ -97,12 +126,8 @@ class Expr:
                     op = "<series>"
                 elif is_arraylike(op):
                     op = "<array>"
+                header = self._tree_repr_argument_construction(i, op, header)
 
-                if repr(op) != repr(default):
-                    if param:
-                        header += f" {param}={repr(op)}"
-                    else:
-                        header += repr(op)
         lines = [header] + lines
         lines = [" " * indent + line for line in lines]
 
@@ -110,6 +135,18 @@ class Expr:
 
     def tree_repr(self):
         return os.linesep.join(self._tree_repr_lines())
+
+    def analyze(self, filename: str | None = None, format: str | None = None) -> None:
+        from dask_expr.diagnostics import analyze
+
+        return analyze(self, filename=filename, format=format)
+
+    def explain(
+        self, stage: OptimizerStage = "fused", format: str | None = None
+    ) -> None:
+        from dask_expr.diagnostics import explain
+
+        return explain(self, stage, format)
 
     def pprint(self):
         for line in self._tree_repr_lines():
@@ -217,28 +254,26 @@ class Expr:
             _continue = False
 
             # Rewrite this node
-            if down_name in expr.__dir__():
-                out = getattr(expr, down_name)()
+            out = getattr(expr, down_name)()
+            if out is None:
+                out = expr
+            if not isinstance(out, Expr):
+                return out
+            if out._name != expr._name:
+                expr = out
+                continue
+
+            # Allow children to rewrite their parents
+            for child in expr.dependencies():
+                out = getattr(child, up_name)(expr)
                 if out is None:
                     out = expr
                 if not isinstance(out, Expr):
                     return out
-                if out._name != expr._name:
+                if out is not expr and out._name != expr._name:
                     expr = out
-                    continue
-
-            # Allow children to rewrite their parents
-            for child in expr.dependencies():
-                if up_name in child.__dir__():
-                    out = getattr(child, up_name)(expr)
-                    if out is None:
-                        out = expr
-                    if not isinstance(out, Expr):
-                        return out
-                    if out is not expr and out._name != expr._name:
-                        expr = out
-                        _continue = True
-                        break
+                    _continue = True
+                    break
 
             if _continue:
                 continue
@@ -263,7 +298,7 @@ class Expr:
 
         return expr
 
-    def simplify_once(self, dependents: defaultdict):
+    def simplify_once(self, dependents: defaultdict, simplified: dict):
         """Simplify an expression
 
         This leverages the ``._simplify_down`` and ``._simplify_up``
@@ -274,12 +309,18 @@ class Expr:
 
         dependents: defaultdict[list]
             The dependents for every node.
+        simplified: dict
+            Cache of simplified expressions for these dependents.
 
         Returns
         -------
         expr:
             output expression
         """
+        # Check if we've already simplified for these dependents
+        if self._name in simplified:
+            return simplified[self._name]
+
         expr = self
 
         while True:
@@ -308,7 +349,12 @@ class Expr:
             changed = False
             for operand in expr.operands:
                 if isinstance(operand, Expr):
-                    new = operand.simplify_once(dependents=dependents)
+                    # Bandaid for now, waiting for Singleton
+                    dependents[operand._name].append(weakref.ref(expr))
+                    new = operand.simplify_once(
+                        dependents=dependents, simplified=simplified
+                    )
+                    simplified[operand._name] = new
                     if new._name != operand._name:
                         changed = True
                 else:
@@ -324,11 +370,18 @@ class Expr:
 
     def simplify(self) -> Expr:
         expr = self
+        seen = set()
         while True:
-            dependents = collect_depdendents(expr)
-            new = expr.simplify_once(dependents=dependents)
+            dependents = collect_dependents(expr)
+            new = expr.simplify_once(dependents=dependents, simplified={})
             if new._name == expr._name:
                 break
+            if new._name in seen:
+                raise RuntimeError(
+                    f"Optimizer does not converge. {expr!r} simplified to {new!r} which was already seen. "
+                    "Please report this issue on the dask issue tracker with a minimal reproducer."
+                )
+            seen.add(new._name)
             expr = new
         return expr
 
@@ -338,7 +391,13 @@ class Expr:
     def _simplify_up(self, parent, dependents):
         return
 
-    def lower_once(self):
+    def lower_once(self, lowered: dict):
+        # Check for a chached result
+        try:
+            return lowered[self._name]
+        except KeyError:
+            pass
+
         expr = self
 
         # Lower this node
@@ -353,7 +412,7 @@ class Expr:
         changed = False
         for operand in out.operands:
             if isinstance(operand, Expr):
-                new = operand.lower_once()
+                new = operand.lower_once(lowered)
                 if new._name != operand._name:
                     changed = True
             else:
@@ -363,7 +422,8 @@ class Expr:
         if changed:
             out = type(out)(*new_operands)
 
-        return out
+        # Cache the result and return
+        return lowered.setdefault(self._name, out)
 
     def lower_completely(self) -> Expr:
         """Lower an expression completely
@@ -384,8 +444,9 @@ class Expr:
         """
         # Lower until nothing changes
         expr = self
+        lowered = {}
         while True:
-            new = expr.lower_once()
+            new = expr.lower_once(lowered)
             if new._name == expr._name:
                 break
             expr = new
@@ -395,10 +456,12 @@ class Expr:
         return
 
     @functools.cached_property
+    def _funcname(self):
+        return funcname(type(self)).lower()
+
+    @functools.cached_property
     def _name(self):
-        return (
-            funcname(type(self)).lower() + "-" + _tokenize_deterministic(*self.operands)
-        )
+        return self._funcname + "-" + _tokenize_deterministic(*self.operands)
 
     @property
     def _meta(self):
@@ -408,8 +471,8 @@ class Expr:
         try:
             return object.__getattribute__(self, key)
         except AttributeError as err:
-            if key == "_meta":
-                # Avoid a recursive loop if/when `self._meta`
+            if key.startswith("_meta"):
+                # Avoid a recursive loop if/when `self._meta*`
                 # produces an `AttributeError`
                 raise RuntimeError(
                     f"Failed to generate metadata for {self}. "
@@ -423,6 +486,8 @@ class Expr:
             if key in _parameters:
                 idx = _parameters.index(key)
                 return self.operands[idx]
+            if is_dataframe_like(self._meta) and key in self._meta.columns:
+                return self[key]
 
             link = "https://github.com/dask-contrib/dask-expr/blob/main/README.md#api-coverage"
             raise AttributeError(
@@ -472,7 +537,11 @@ class Expr:
         >>> (df + 10).substitute(10, 20)
         df + 20
         """
+        return self._substitute(old, new, _seen=set())
 
+    def _substitute(self, old, new, _seen):
+        if self._name in _seen:
+            return self
         # Check if we are replacing a literal
         if isinstance(old, Expr):
             substitute_literal = False
@@ -487,7 +556,7 @@ class Expr:
         update = False
         for operand in self.operands:
             if isinstance(operand, Expr):
-                val = operand.substitute(old, new)
+                val = operand._substitute(old, new, _seen)
                 if operand._name != val._name:
                     update = True
                 new_exprs.append(val)
@@ -502,7 +571,7 @@ class Expr:
                 # do so for the `Fused.exprs` operand.
                 val = []
                 for op in operand:
-                    val.append(op.substitute(old, new))
+                    val.append(op._substitute(old, new, _seen))
                     if val[-1]._name != op._name:
                         update = True
                 new_exprs.append(val)
@@ -519,6 +588,8 @@ class Expr:
 
         if update:  # Only recreate if something changed
             return type(self)(*new_exprs)
+        else:
+            _seen.add(self._name)
         return self
 
     def substitute_parameters(self, substitutions: dict) -> Expr:
@@ -691,7 +762,7 @@ class Expr:
         return (expr for expr in self.walk() if isinstance(expr, operation))
 
 
-def collect_depdendents(expr) -> defaultdict:
+def collect_dependents(expr) -> defaultdict:
     dependents = defaultdict(list)
     stack = [expr]
     seen = set()

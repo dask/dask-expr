@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
-from dask_expr import from_pandas, merge
+from dask_expr import Repartition, from_pandas, map_partitions, merge
 from dask_expr._merge import BroadcastJoin
 from dask_expr.tests._util import _backend_library
 
@@ -28,7 +29,7 @@ async def test_p2p_shuffle(c, s, a, b, npartitions):
         dtypes={"x": float, "y": float},
         freq="10 s",
     )
-    out = df.shuffle("x", backend="p2p", npartitions=npartitions)
+    out = df.shuffle("x", shuffle_method="p2p", npartitions=npartitions)
     if npartitions is None:
         assert out.npartitions == df.npartitions
     else:
@@ -319,7 +320,7 @@ def test_merge_combine_similar_squash_merges(add_repartition):
 
             assert (
                 result_q.expr.frame.frame.frame._name
-                == result_q.expr.frame.value.left.frame._name
+                == result_q.expr.frame.operands[2].left.frame._name
             )
             out = result.compute()
 
@@ -338,14 +339,89 @@ def test_merge_combine_similar_squash_merges(add_repartition):
 
 
 @gen_cluster(client=True)
-async def test_p2p_drop_duplicates(c, s, a, b):
-    df = dx.datasets.timeseries(
-        start="2000-01-01",
-        end="2000-01-10",
-        dtypes={"x": float, "y": float},
-        freq="10 s",
+async def test_future_in_map_partitions(c, s, a, b):
+    # xgboost uses this pattern
+
+    def test_func(n):
+        import pandas as pd
+
+        return pd.DataFrame({"a": list(range(n))})
+
+    df = from_pandas(pd.DataFrame({"a": [1, 2, 3, 4]}), npartitions=2)
+
+    f = c.submit(test_func, 100)
+    q = map_partitions(lambda x, y: y + x.sum(), f, df, meta=df._meta)
+    result = c.compute(q)
+    result = await result
+    expected = pd.DataFrame({"a": [4951, 4952, 4953, 4954]})
+    pd.testing.assert_frame_equal(result, expected)
+
+
+@gen_cluster(client=True)
+async def test_shuffle_consistency_checks(c, s, a, b):
+    pdf = pd.DataFrame({"x": [1, 2, 3]})
+    df = from_pandas(pdf, npartitions=2)
+    df2 = df.astype(np.csingle)
+    with pytest.raises(TypeError, match="p2p does not support data of type"):
+        df2.shuffle("x")
+
+    df.columns = [1]
+    with pytest.raises(TypeError, match="p2p requires all column names to be str"):
+        df.shuffle(1)
+
+
+@gen_cluster(client=True)
+async def test_merge_indicator(c, s, a, b):
+    data = {
+        "id": ["101-a", "102-a", "103-a"],
+        "test": ["val101a", "val102a", "val103a"],
+    }
+    pdf = pd.DataFrame(data, dtype="string[pyarrow]")
+    df = from_pandas(pdf, npartitions=2)
+    result = df.merge(df, on="id", how="outer", indicator=True)
+    x = c.compute(result)
+    x = await x
+    expected = pdf.merge(pdf, on="id", how="outer", indicator=True)
+
+    pd.testing.assert_frame_equal(
+        x.sort_values("id", ignore_index=True),
+        expected.sort_values("id", ignore_index=True),
     )
-    with pytest.warns(UserWarning, match="keep"):
-        df.drop_duplicates(keep="first")
-    with pytest.warns(UserWarning, match="keep"):
-        df.x.drop_duplicates(keep="first")
+
+
+@gen_cluster(client=True)
+async def test_shuffle_partition_reduction(c, s, a, b):
+    pdf = pd.DataFrame({"a": [1, 2, 3, 4] * 100, "b": 1})
+    df = from_pandas(pdf, npartitions=10)
+    result = df.shuffle(on="a", npartitions=4)
+    q = result.optimize(fuse=False)
+    assert not any(isinstance(op, Repartition) for op in q.walk())
+    x = c.compute(result)
+    x = await x
+
+    pd.testing.assert_frame_equal(
+        x.sort_values("a", ignore_index=True),
+        pdf.sort_values("a", ignore_index=True),
+    )
+
+
+@gen_cluster(client=True)
+async def test_p2p_and_merge_shuffle(c, s, a, b):
+    pdf = pd.DataFrame({"a": np.random.randint(1, 100, (100,)), "b": 1})
+
+    df = from_pandas(pdf, npartitions=15)
+
+    pdf2 = pd.DataFrame({"a": np.random.randint(1, 100, (100,)), "c": 1})
+    df2 = from_pandas(pdf2, npartitions=10)
+
+    pdf3 = pd.DataFrame({"a": np.random.randint(1, 100, (100,)), "d": 2})
+    df3 = from_pandas(pdf3, npartitions=5)
+
+    result = df.merge(df2)
+    result = result.merge(df3)
+    x = c.compute(result)
+    x = await x
+    pd.testing.assert_frame_equal(
+        x.sort_values("a", ignore_index=True),
+        pdf.merge(pdf2).merge(pdf3).sort_values("a", ignore_index=True),
+    )

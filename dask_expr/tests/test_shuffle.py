@@ -4,13 +4,18 @@ import dask
 import numpy as np
 import pytest
 
-from dask_expr import SetIndexBlockwise, from_pandas
-from dask_expr._expr import Blockwise
+from dask_expr import from_pandas, new_collection
+from dask_expr._expr import Assign, Blockwise, Filter
+from dask_expr._reductions import NFirst, NLast
 from dask_expr._repartition import RepartitionToFewer
-from dask_expr._shuffle import TaskShuffle, divisions_lru
-from dask_expr._util import DASK_GT_20231201
+from dask_expr._shuffle import (
+    BaseSetIndexSortValues,
+    P2PShuffle,
+    TaskShuffle,
+    divisions_lru,
+)
 from dask_expr.io import FromPandas
-from dask_expr.tests._util import _backend_library, assert_eq
+from dask_expr.tests._util import _backend_library, assert_eq, xfail_gpu
 
 # Set DataFrame backend for this module
 pd = _backend_library()
@@ -31,7 +36,7 @@ def df(pdf):
 def test_disk_shuffle(ignore_index, npartitions, df):
     df2 = df.shuffle(
         "x",
-        backend="disk",
+        shuffle_method="disk",
         npartitions=npartitions,
         ignore_index=ignore_index,
     )
@@ -46,17 +51,19 @@ def test_disk_shuffle(ignore_index, npartitions, df):
     # If any values of "x" can be found in multiple
     # partitions, this will fail
     df3 = df2["x"].map_partitions(lambda x: x.drop_duplicates())
-    assert sorted(df3.compute().tolist()) == list(range(20))
+    assert sorted(df3.compute().values) == list(range(20))
 
     # Check `partitions` after shuffle
     a = df2.partitions[1]
     b = df.shuffle(
         "y",
-        backend="disk",
+        shuffle_method="disk",
         npartitions=npartitions,
         ignore_index=ignore_index,
     ).partitions[1]
-    assert set(a["x"].compute()).issubset(b["y"].compute())
+    assert set(a["x"].compute().values.tolist()).issubset(
+        b["y"].compute().values.tolist()
+    )
 
     # Check for culling
     assert len(a.optimize().dask) < len(df2.optimize().dask)
@@ -68,7 +75,7 @@ def test_disk_shuffle(ignore_index, npartitions, df):
 def test_task_shuffle(ignore_index, npartitions, max_branch, df):
     df2 = df.shuffle(
         "x",
-        backend="tasks",
+        shuffle_method="tasks",
         npartitions=npartitions,
         ignore_index=ignore_index,
         max_branch=max_branch,
@@ -84,17 +91,19 @@ def test_task_shuffle(ignore_index, npartitions, max_branch, df):
     # If any values of "x" can be found in multiple
     # partitions, this will fail
     df3 = df2["x"].map_partitions(lambda x: x.drop_duplicates())
-    assert sorted(df3.compute().tolist()) == list(range(20))
+    assert sorted(df3.compute().values) == list(range(20))
 
     # Check `partitions` after shuffle
     a = df2.partitions[1]
     b = df.shuffle(
         "y",
-        backend="tasks",
+        shuffle_method="tasks",
         npartitions=npartitions,
         ignore_index=ignore_index,
     ).partitions[1]
-    assert set(a["x"].compute()).issubset(b["y"].compute())
+    assert set(a["x"].compute().values.tolist()).issubset(
+        b["y"].compute().values.tolist()
+    )
 
     # Check for culling
     assert len(a.optimize().dask) < len(df2.optimize().dask)
@@ -108,7 +117,7 @@ def test_task_shuffle_index(npartitions, max_branch, pdf):
 
     df2 = df.shuffle(
         "x",
-        backend="tasks",
+        shuffle_method="tasks",
         npartitions=npartitions,
         max_branch=max_branch,
     )
@@ -123,7 +132,7 @@ def test_task_shuffle_index(npartitions, max_branch, pdf):
     # If any values of "x" can be found in multiple
     # partitions, this will fail
     df3 = df2.index.map_partitions(lambda x: x.drop_duplicates())
-    assert sorted(df3.compute().tolist()) == list(range(20))
+    assert sorted(df3.compute().values) == list(range(20))
 
 
 def test_shuffle_column_projection(df):
@@ -197,22 +206,12 @@ def test_set_index_sorted(pdf):
     df = from_pandas(pdf, npartitions=10)
     q = df.set_index("y", sorted=True)
     assert_eq(q, pdf.set_index("y"))
-    result = q.simplify().expr
-    assert all(
-        isinstance(expr, (SetIndexBlockwise, FromPandas)) for expr in result.walk()
-    )
 
     q = df.set_index("y", sorted=True)["x"]
     assert_eq(q, pdf.set_index("y")["x"])
-    result = q.optimize(fuse=False)
-    expected = df[["x", "y"]].set_index("y", sorted=True)["x"].simplify()
-    assert result._name == expected._name
 
-    q = df.set_index(["y", "z"], sorted=True)[[]]
-    assert_eq(q, pdf.set_index(["y", "z"])[[]])
-    result = q.optimize(fuse=False)
-    expected = df[["y", "z"]].set_index(["y", "z"], sorted=True)[[]].simplify()
-    assert result._name == expected._name
+    with pytest.raises(NotImplementedError, match="not yet support multi-indexes"):
+        df.set_index(["y", "z"], sorted=True)
 
     with pytest.raises(TypeError, match="not supported by set_index"):
         df.set_index([df["y"], df["x"]], sorted=True)
@@ -323,8 +322,10 @@ def test_sort_values(df, pdf, shuffle):
         df.sort_values("x", shuffle_method=shuffle, upsample=2.0), pdf.sort_values("x")
     )
 
-    with pytest.raises(NotImplementedError, match="a single boolean for ascending"):
-        df.sort_values(by=["x", "y"], shuffle_method=shuffle, ascending=[True, True])
+    assert_eq(
+        df.sort_values(by=["x", "y"], shuffle_method=shuffle, ascending=[True, True]),
+        pdf.sort_values(by=["x", "y"], ascending=[True, True]),
+    )
     with pytest.raises(NotImplementedError, match="sorting by named columns"):
         df.sort_values(by=1, shuffle_method=shuffle)
 
@@ -370,24 +371,110 @@ def test_sort_values_descending(df, pdf):
     )
 
 
-def test_sort_head_nlargest(df):
-    a = df.sort_values("x", ascending=False).head(10, compute=False).expr
-    b = df.nlargest(10, columns=["x"]).expr
+def test_sort_head_nlargest(df, pdf):
+    a = df.sort_values("x", ascending=False).head(10, compute=False)
+    b = NFirst(df, 10, _columns=["x"], ascending=False)
     assert a.optimize()._name == b.optimize()._name
 
-    a = df.sort_values("x", ascending=True).head(10, compute=False).expr
-    b = df.nsmallest(10, columns=["x"]).expr
+    a = df.sort_values("x", ascending=True).head(10, compute=False)
+    b = NFirst(df, 10, _columns=["x"], ascending=True)
     assert a.optimize()._name == b.optimize()._name
 
-    a = df.sort_values("x", ascending=False).tail(10, compute=False).expr
-    b = df.nsmallest(10, columns=["x"]).expr
+    a = df.sort_values("x", ascending=[False]).head(10, compute=False)
+    b = NFirst(df, 10, _columns=["x"], ascending=[False])
     assert a.optimize()._name == b.optimize()._name
 
-    a = df.sort_values("x", ascending=True).tail(10, compute=False).expr
-    b = df.nlargest(10, columns=["x"]).expr
+    a = df.sort_values("x", ascending=[True]).head(10, compute=False)
+    b = NFirst(df, 10, _columns=["x"], ascending=[True])
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values(["x"], ascending=[False]).head(10, compute=False)
+    b = NFirst(df, 10, _columns=["x"], ascending=[False])
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values(["x"], ascending=[True]).head(10, compute=False)
+    b = NFirst(df, 10, _columns=["x"], ascending=[True])
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values(["x", "y"], ascending=[False, False]).head(10, compute=False)
+    b = NFirst(df, 10, _columns=["x", "y"], ascending=[False, False])
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values(["x", "y"], ascending=[True, True]).head(10, compute=False).expr
+    b = NFirst(df, 10, _columns=["x", "y"], ascending=[True, True])
     assert a.optimize()._name == b.optimize()._name
 
 
+def test_sort_tail_nsmallest(df, pdf):
+    a = df.sort_values("x", ascending=False).tail(10, compute=False)
+    b = NLast(df, 10, _columns=["x"], ascending=False)
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values("x", ascending=True).tail(10, compute=False)
+    b = NLast(df, 10, _columns=["x"], ascending=True)
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values("x", ascending=[False]).tail(10, compute=False)
+    b = NLast(df, 10, _columns=["x"], ascending=[False])
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values("x", ascending=[True]).tail(10, compute=False)
+    b = NLast(df, 10, _columns=["x"], ascending=[True])
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values(["x"], ascending=[False]).tail(10, compute=False)
+    b = NLast(df, 10, _columns=["x"], ascending=[False])
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values(["x"], ascending=[True]).tail(10, compute=False)
+    b = NLast(df, 10, _columns=["x"], ascending=[True])
+    assert a.optimize()._name == b.optimize()._name
+
+    with pytest.raises(ValueError, match="Length of ascending"):
+        df.sort_values(["x", "y"], ascending=[False]).tail(10, compute=False)
+
+    a = df.sort_values(["x", "y"], ascending=[True, True]).tail(10, compute=False)
+    b = NLast(df, 10, _columns=["x", "y"], ascending=[True, True])
+    assert a.optimize()._name == b.optimize()._name
+
+    a = df.sort_values(["x", "y"], ascending=[False, False]).tail(10, compute=False)
+    b = NLast(df, 10, _columns=["x", "y"], ascending=[False, False])
+    assert a.optimize()._name == b.optimize()._name
+
+
+@pytest.mark.parametrize(
+    "ascending",
+    [
+        pytest.param([True, False], id="[True, False]"),
+        pytest.param([False, True], id="[False, True]"),
+    ],
+)
+@pytest.mark.parametrize("npartitions", [1, 3])
+def test_sort_values_conflicting_ascending_head_tail(pdf, ascending, npartitions):
+    divisions_lru.data = OrderedDict()
+
+    df = from_pandas(pdf, npartitions=npartitions)
+
+    a = df.sort_values(by=["x", "y"], ascending=ascending).head(10, compute=False)
+    b = new_collection(NFirst(df, _columns=["x", "y"], n=10, ascending=ascending))
+    assert a.expr.optimize()._name == b.expr.optimize()._name
+    assert len(divisions_lru) == 0
+    assert_eq(
+        a.compute(),
+        pdf.sort_values(by=["x", "y"], ascending=ascending).head(10),
+    )
+
+    a = df.sort_values(by=["x", "y"], ascending=ascending).tail(10, compute=False)
+    b = new_collection(NLast(df, _columns=["x", "y"], n=10, ascending=ascending))
+    assert a.expr.optimize()._name == b.expr.optimize()._name
+    assert len(divisions_lru) == 0
+    assert_eq(
+        a.compute(),
+        pdf.sort_values(by=["x", "y"], ascending=ascending).tail(10),
+    )
+
+
+@xfail_gpu("cudf udf support")
 def test_sort_head_nlargest_string(pdf):
     pdf["z"] = "a" + pdf.x.map(str)
     df = from_pandas(pdf, npartitions=5)
@@ -405,12 +492,12 @@ def test_sort_head_nlargest_string(pdf):
 
 
 def test_set_index_head_nlargest(df, pdf):
-    a = df.set_index("x").head(10, compute=False).expr
-    b = df.nsmallest(10, columns="x").set_index("x").expr
+    a = df.set_index("x").head(10, compute=False)
+    b = new_collection(NFirst(df, 10, _columns="x", ascending=True)).set_index("x")
     assert a.optimize()._name == b.optimize()._name
 
-    a = df.set_index("x").tail(10, compute=False).expr
-    b = df.nlargest(10, columns="x").set_index("x").expr
+    a = df.set_index("x").tail(10, compute=False)
+    b = new_collection(NLast(df, 10, _columns="x", ascending=True)).set_index("x")
     assert a.optimize()._name == b.optimize()._name
 
     # These still work, even if we haven't optimized them yet
@@ -418,6 +505,7 @@ def test_set_index_head_nlargest(df, pdf):
     # df.set_index([df.x, df.y]).head(3)
 
 
+@xfail_gpu("cudf udf support")
 def test_set_index_head_nlargest_string(pdf):
     pdf["z"] = "a" + pdf.x.map(str)
     df = from_pandas(pdf, npartitions=5)
@@ -459,13 +547,13 @@ def test_index_nulls(null_value):
     )
     ddf = from_pandas(df, npartitions=2)
     with pytest.raises(NotImplementedError, match="presence of nulls"):
-        ddf.set_index(
-            ddf["non_numeric"].map({"foo": "foo", "bar": null_value})
-        ).compute()
+        with pytest.warns(UserWarning):
+            ddf.set_index(
+                ddf["non_numeric"].map({"foo": "foo", "bar": null_value})
+            ).compute()
 
 
-@pytest.mark.xfail(not DASK_GT_20231201, reason="needed changes in dask/dask")
-@pytest.mark.parametrize("freq", ["16H", "-16H"])
+@pytest.mark.parametrize("freq", ["16h", "-16h"])
 def test_set_index_with_dask_dt_index(freq):
     values = {
         "x": [1, 2, 3, 4] * 3,
@@ -504,10 +592,10 @@ def test_set_index_predicate_pushdown(df, pdf):
     expected_query = df[df.y > 5].set_index("x").optimize()
     assert expected_query._name == result.optimize()._name
 
-    result = query[query.index > 5]
+    result = query[query.index.to_series() > 5]
     assert_eq(result, pdf[pdf.index > 5])
 
-    result = query[(query.index > 5) & (query.y > -1)]
+    result = query[(query.index.to_series() > 5) & (query.y > -1)]
     assert_eq(result, pdf[(pdf.index > 5) & (pdf.y > -1)])
 
 
@@ -555,6 +643,14 @@ def test_set_index_sort_values_one_partition(pdf):
     assert len(list(query.expr.find_operations(RepartitionToFewer))) > 0
 
 
+def test_set_index_triggers_calc_when_accessing_divisions(pdf, df):
+    divisions_lru.data = OrderedDict()
+    query = df.set_index("x")
+    assert len(divisions_lru.data) == 0
+    divisions = query.divisions  # noqa: F841
+    assert len(divisions_lru.data) == 1
+
+
 def test_shuffle(df, pdf):
     result = df.shuffle(df.x)
     assert result.npartitions == df.npartitions
@@ -590,3 +686,129 @@ def test_empty_partitions():
 
     ddf = ddf.set_index("c")
     assert_eq(ddf, df.set_index("b").set_index("c"))
+
+
+def test_shuffle_no_assign(df, pdf):
+    result = df.shuffle(df.x)
+    q = result.optimize(fuse=False)
+    assert len([x for x in q.walk() if isinstance(x, Assign)]) == 0
+
+
+@pytest.mark.parametrize("func", ["set_index", "sort_values", "shuffle"])
+def test_respect_context_shuffle(df, pdf, func):
+    with dask.config.set({"dataframe.shuffle.method": "tasks"}):
+        q = getattr(df, func)("x")
+    result = q.optimize(fuse=False)
+    assert len([x for x in result.walk() if isinstance(x, TaskShuffle)]) > 0
+
+    q = getattr(df, func)("x")
+    with dask.config.set({"dataframe.shuffle.method": "tasks"}):
+        result = q.optimize(fuse=False)
+    assert len([x for x in result.walk() if isinstance(x, TaskShuffle)]) > 0
+
+    with dask.config.set({"dataframe.shuffle.method": "p2p"}):
+        q = getattr(df, func)("x")
+    with dask.config.set({"dataframe.shuffle.method": "tasks"}):
+        result = q.optimize(fuse=False)
+    assert len([x for x in result.walk() if isinstance(x, P2PShuffle)]) > 0
+
+
+@pytest.mark.parametrize("meth", ["shuffle", "sort_values"])
+def test_shuffle_filter_pushdown(pdf, meth):
+    pdf["z"] = 1
+    df = from_pandas(pdf, npartitions=10)
+    result = getattr(df, meth)("x")
+    result = result[result.x > 5.0]
+    expected = getattr(df[df.x > 5.0], meth)("x")
+    assert result.simplify()._name == expected._name
+
+    result = getattr(df, meth)("x")
+    result = result[result.x > 5.0][["x", "y"]]
+    expected = df[["x", "y"]]
+    expected = getattr(expected[expected.x > 5.0], meth)("x")
+    assert result.simplify()._name == expected.simplify()._name
+
+    result = getattr(df, meth)("x")[["x", "y"]]
+    result = result[result.x > 5.0]
+    expected = df[["x", "y"]]
+    expected = getattr(expected[expected.x > 5.0], meth)("x")
+    assert result.simplify()._name == expected.simplify()._name
+
+
+@pytest.mark.parametrize("meth", ["set_index", "sort_values"])
+def test_sort_values_avoid_overeager_filter_pushdown(meth):
+    pdf1 = pd.DataFrame({"a": [4, 2, 3], "b": [1, 2, 3]})
+    df = from_pandas(pdf1, npartitions=2)
+    df = getattr(df, meth)("a")
+    df = df[df.b > 2] + df.b.sum()
+    result = df.simplify()
+    assert isinstance(result.expr.left, Filter)
+    assert isinstance(result.expr.left.frame, BaseSetIndexSortValues)
+
+
+def test_set_index_filter_pushdown():
+    pdf = pd.DataFrame({"x": [1, 2, 3, 4, 5, 6, 7, 8] * 10, "y": 1, "z": 2})
+    df = from_pandas(pdf, npartitions=10)
+    result = df.set_index("x")
+    result = result[result.y == 1]
+    expected = df[df.y == 1].set_index("x")
+    assert result.simplify()._name == expected._name
+
+    result = df.set_index("x")
+    result = result[result.y == 1][["y"]]
+    expected = df[["x", "y"]]
+    expected = expected[expected.y == 1].set_index("x")
+    assert result.simplify()._name == expected.simplify()._name
+
+    result = df.set_index("x")[["y"]]
+    result = result[result.y == 1]
+    expected = df[["x", "y"]]
+    expected = expected[expected.y == 1].set_index("x")
+    assert result.simplify()._name == expected.simplify()._name
+
+
+def test_shuffle_index_shuffle(df):
+    with pytest.raises(TypeError, match="Must shuffle on either "):
+        df.shuffle()
+    with pytest.raises(TypeError, match="Cannot shuffle on both"):
+        df.shuffle("x", on_index=True)
+
+
+def test_set_index_user_divisions_one_partition(pdf):
+    df = from_pandas(pdf, npartitions=1)
+    result = df.set_index("x", divisions=[0, 10, 20, 21])
+    assert_eq(result, pdf.set_index("x"))
+
+
+def test_set_index_divisions_npartitions(pdf):
+    df = from_pandas(pdf, npartitions=1, sort=False)
+    result = df.set_index("x", sort=True, npartitions=2)
+    assert result.known_divisions
+    assert result.optimize().known_divisions
+    assert_eq(result, pdf.set_index("x"))
+
+
+def test_sort_values_unordered_categorical():
+    df = pd.DataFrame()
+    df["a"] = np.arange(10)[::-1]
+    df["b"] = df["a"].astype("category")
+    ddf = from_pandas(df, npartitions=2)
+    result = ddf.sort_values(by="b")
+    expected = df.sort_values(by="b")
+    assert_eq(result, expected, check_index=False)
+
+
+def test_set_index_before_assign(df, pdf):
+    result = df.set_index("x")
+    result["z"] = result.y + 1
+    expected = pdf.set_index("x")
+    expected["z"] = expected.y + 1
+    assert_eq(result["z"], expected["z"])
+
+
+def test_set_index_shuffle_afterwards(pdf):
+    ddf = from_pandas(pdf, npartitions=1)
+    ddf = ddf.set_index("y", sort=True, divisions=[0, 10, 20, 100], shuffle="tasks")
+    result = ddf.reset_index().y.unique()
+    expected = pd.Series(pdf.y.unique(), name="y")
+    assert_eq(result, expected, check_index=False)

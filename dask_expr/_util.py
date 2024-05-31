@@ -2,25 +2,26 @@ from __future__ import annotations
 
 import functools
 from collections import OrderedDict, UserDict
-from collections.abc import Hashable, Sequence
-from types import LambdaType
-from typing import Any, Literal, NoReturn, TypeVar, cast
+from collections.abc import Hashable, Iterable, Sequence
+from typing import Any, Literal, TypeVar, cast
 
 import dask
 import numpy as np
 import pandas as pd
 from dask import config
-from dask.base import normalize_object, normalize_token, tokenize
+from dask.base import normalize_token, tokenize
 from dask.dataframe._compat import is_string_dtype
+from dask.dataframe.core import is_dask_collection, is_dataframe_like, is_series_like
 from dask.utils import get_default_shuffle_method
 from packaging.version import Version
-from pandas.api.types import is_datetime64_dtype, is_numeric_dtype
 
 K = TypeVar("K", bound=Hashable)
 V = TypeVar("V")
 
 DASK_VERSION = Version(dask.__version__)
 DASK_GT_20231201 = DASK_VERSION > Version("2023.12.1")
+PANDAS_VERSION = Version(pd.__version__)
+PANDAS_GE_300 = PANDAS_VERSION.major >= 3
 
 
 def _calc_maybe_new_divisions(df, periods, freq):
@@ -45,7 +46,7 @@ def _calc_maybe_new_divisions(df, periods, freq):
 
     is_offset = isinstance(freq, pd.DateOffset)
     if is_offset:
-        if freq.is_anchored() or not hasattr(freq, "delta"):
+        if not isinstance(freq, pd.offsets.Tick):
             # Can't infer divisions on relative or anchored offsets, as
             # divisions may now split identical index value.
             # (e.g. index_partitions = [[1, 2, 3], [3, 4, 5]])
@@ -82,7 +83,7 @@ def _convert_to_list(column) -> list | None:
 
 def is_scalar(x):
     # np.isscalar does not work for some pandas scalars, for example pd.NA
-    if isinstance(x, Sequence) and not isinstance(x, str):
+    if isinstance(x, (Sequence, Iterable)) and not isinstance(x, str):
         return False
     elif hasattr(x, "dtype"):
         return isinstance(x, np.ScalarType)
@@ -96,26 +97,9 @@ def is_scalar(x):
     return not isinstance(x, Expr)
 
 
-def is_valid_nth_dtype(dtype):
-    return is_numeric_dtype(dtype) or is_datetime64_dtype(dtype)
-
-
-@normalize_token.register(LambdaType)
-def _normalize_lambda(func):
-    # Free functions also are instances of LambdaType.
-    # To be more sure, check the name
-    # and if cloudpickle can deterministically pickle it:
-    # ref: https://github.com/cloudpipe/cloudpickle/issues/385
-    func_str = str(func)
-    if func.__name__ == "<lambda>" or "<locals>" in func_str:
-        return func_str
-    return normalize_object(func)
-
-
 def _tokenize_deterministic(*args, **kwargs) -> str:
     # Utility to be strict about deterministic tokens
-    with config.set({"tokenize.ensure-deterministic": True}):
-        return tokenize(*args, **kwargs)
+    return tokenize(*args, ensure_deterministic=True, **kwargs)
 
 
 def _tokenize_partial(expr, ignore: list | None = None) -> str:
@@ -189,10 +173,11 @@ def normalize_data_wrapper(data):
 def _maybe_from_pandas(dfs):
     from dask_expr import from_pandas
 
-    dfs = [
-        from_pandas(df, 1) if isinstance(df, (pd.Series, pd.DataFrame)) else df
-        for df in dfs
-    ]
+    def _pd_series_or_dataframe(x):
+        # `x` can be a cudf Series/DataFrame
+        return not is_dask_collection(x) and (is_series_like(x) or is_dataframe_like(x))
+
+    dfs = [from_pandas(df, 1) if _pd_series_or_dataframe(df) else df for df in dfs]
     return dfs
 
 
@@ -220,24 +205,23 @@ def _raise_if_object_series(x, funcname):
             raise ValueError("`%s` not supported with string series" % funcname)
 
 
-class RaiseAttributeError:
-    """Method or property defined on superclass, but not on subclass.
+def _is_any_real_numeric_dtype(arr_or_dtype):
+    try:
+        from pandas.api.types import is_any_real_numeric_dtype
 
-    Usage::
+        return is_any_real_numeric_dtype(arr_or_dtype)
+    except ImportError:
+        # Temporary/soft pandas<2 support to enable cudf dev
+        # TODO: Remove `try` block after 4/2024
+        from pandas.api.types import is_bool_dtype, is_complex_dtype, is_numeric_dtype
 
-        class A:
-            def x(self): ...
-
-        class B(A):
-            x = RaiseAttributeError()
-    """
-
-    name: str
-
-    def __set_name__(self, owner: type, name: str) -> None:
-        self.name = name
-
-    def __get__(self, instance: object | None, owner: type) -> NoReturn:
-        raise AttributeError(
-            f"{owner.__name__!r} object has no attribute {self.name!r}"
+        return (
+            is_numeric_dtype(arr_or_dtype)
+            and not is_complex_dtype(arr_or_dtype)
+            and not is_bool_dtype(arr_or_dtype)
         )
+
+
+def get_specified_shuffle(shuffle_method):
+    # Take the config shuffle if given, otherwise defer evaluation until optimize
+    return shuffle_method or config.get("dataframe.shuffle.method", None)

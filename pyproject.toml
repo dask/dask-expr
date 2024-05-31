@@ -26,8 +26,8 @@ classifiers = [
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
-    "dask >= 2023.10.1",
-    "pyarrow",
+    "dask == 2024.5.1",
+    "pyarrow>=7.0.0",
     "pandas >= 2",
 ]
 
@@ -61,4 +61,14 @@ style = "pep440"
 versionfile_source = "dask_expr/_version.py"
 versionfile_build = "dask_expr/_version.py"
 tag_prefix = "v"
-parentdir_prefix = "dask-"
+parentdir_prefix = "dask_expr-"
+
+
+[tool.pytest.ini_options]
+addopts = "-v -rsxfE --durations=10 --color=yes"
+filterwarnings = [
+    'ignore:Passing a BlockManager to DataFrame is deprecated and will raise in a future version. Use public APIs instead:DeprecationWarning',  # https://github.com/apache/arrow/issues/35081
+    'ignore:The previous implementation of stack is deprecated and will be removed in a future version of pandas\.:FutureWarning',
+    'error:\nA value is trying to be set on a copy of a slice from a DataFrame',
+]
+xfail_strict = true

@@ -1,8 +1,7 @@
-import numpy as np
 import pytest
 from dask.dataframe._compat import PANDAS_GE_200
 
-from dask_expr._collection import from_pandas
+from dask_expr._collection import DataFrame, from_pandas
 from dask_expr.tests._util import _backend_library, assert_eq
 
 pd = _backend_library()
@@ -15,7 +14,9 @@ def ser():
 
 @pytest.fixture()
 def dser(ser):
-    return from_pandas(ser, npartitions=3)
+    import dask.dataframe as dd
+
+    return dd.from_pandas(ser, npartitions=3)
 
 
 @pytest.mark.parametrize(
@@ -79,7 +80,27 @@ def dser(ser):
     ],
 )
 def test_string_accessor(ser, dser, func, kwargs):
+    ser = ser.astype("string[pyarrow]")
+
     assert_eq(getattr(ser.str, func)(**kwargs), getattr(dser.str, func)(**kwargs))
+
+    if func in (
+        "contains",
+        "endswith",
+        "fullmatch",
+        "isalnum",
+        "isalpha",
+        "isdecimal",
+        "isdigit",
+        "islower",
+        "isspace",
+        "istitle",
+        "isupper",
+        "startswith",
+        "match",
+    ):
+        # This returns arrays and doesn't work in dask/dask either
+        return
 
     ser.index = ser.values
     ser = ser.sort_index()
@@ -89,9 +110,6 @@ def test_string_accessor(ser, dser, func, kwargs):
     if func == "cat" and len(kwargs) > 0:
         # Doesn't work with others on Index
         return
-
-    if isinstance(pdf_result, np.ndarray):
-        pdf_result = pd.Index(pdf_result)
     if isinstance(pdf_result, pd.DataFrame):
         assert_eq(
             getattr(dser.index.str, func)(**kwargs), pdf_result, check_index=False
@@ -134,3 +152,12 @@ def test_str_accessor_not_available():
         df.a.str
 
     assert "str" not in dir(df.a)
+
+
+def test_partition():
+    df = DataFrame.from_dict({"A": ["A|B", "C|D"]}, npartitions=2)["A"].str.partition(
+        "|"
+    )
+    result = df[1]
+    expected = pd.DataFrame.from_dict({"A": ["A|B", "C|D"]})["A"].str.partition("|")[1]
+    assert_eq(result, expected)

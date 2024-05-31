@@ -5,7 +5,9 @@ import math
 import operator
 
 import numpy as np
+import pyarrow as pa
 from dask.dataframe import methods
+from dask.dataframe._pyarrow import to_pyarrow_string
 from dask.dataframe.core import apply_and_enforce, is_dataframe_like, make_meta
 from dask.dataframe.io.io import _meta_from_array, sorted_division_locations
 from dask.utils import apply, funcname, is_series_like
@@ -36,7 +38,7 @@ class FromGraph(IO):
     conversion from legacy dataframes.
     """
 
-    _parameters = ["layer", "_meta", "divisions", "_name"]
+    _parameters = ["layer", "_meta", "divisions", "keys", "name_prefix"]
 
     @property
     def _meta(self):
@@ -45,12 +47,19 @@ class FromGraph(IO):
     def _divisions(self):
         return self.operand("divisions")
 
-    @property
+    @functools.cached_property
     def _name(self):
-        return self.operand("_name")
+        return (
+            self.operand("name_prefix") + "-" + _tokenize_deterministic(*self.operands)
+        )
 
     def _layer(self):
-        return dict(self.operand("layer"))
+        dsk = dict(self.operand("layer"))
+        # The name may not actually match the layers name therefore rewrite this
+        # using an alias
+        for part, k in enumerate(self.operand("keys")):
+            dsk[(self._name, part)] = k
+        return dsk
 
 
 class BlockwiseIO(Blockwise, IO):
@@ -94,7 +103,7 @@ class FusedIO(BlockwiseIO):
     @functools.cached_property
     def _name(self):
         return (
-            funcname(type(self.operand("_expr"))).lower()
+            self.operand("_expr")._funcname
             + "-fused-"
             + _tokenize_deterministic(*self.operands)
         )
@@ -113,7 +122,10 @@ class FusedIO(BlockwiseIO):
     def _divisions(self):
         divisions = self.operand("_expr")._divisions()
         new_divisions = [divisions[b[0]] for b in self._fusion_buckets]
-        new_divisions.append(self._fusion_buckets[-1][-1])
+        if new_divisions[0] is None:
+            new_divisions.append(None)
+        else:
+            new_divisions.append(divisions[-1])
         return tuple(new_divisions)
 
     def _task(self, index: int):
@@ -134,6 +146,58 @@ class FusedIO(BlockwiseIO):
 
     def _tune_up(self, parent):
         return
+
+
+class FusedParquetIO(FusedIO):
+    _parameters = ["_expr"]
+
+    @functools.cached_property
+    def _name(self):
+        return (
+            funcname(type(self.operand("_expr"))).lower()
+            + "-fused-parq-"
+            + _tokenize_deterministic(*self.operands)
+        )
+
+    @staticmethod
+    def _load_multiple_files(
+        frag_filters,
+        columns,
+        schema,
+        *to_pandas_args,
+    ):
+        from dask_expr.io.parquet import ReadParquetPyarrowFS
+
+        tables = (
+            ReadParquetPyarrowFS._fragment_to_table(
+                frag,
+                filter,
+                columns,
+                schema,
+            )
+            for frag, filter in frag_filters
+        )
+        table = pa.concat_tables(tables, promote_options="permissive")
+        return ReadParquetPyarrowFS._table_to_pandas(table, *to_pandas_args)
+
+    def _task(self, index: int):
+        expr = self.operand("_expr")
+        bucket = self._fusion_buckets[index]
+        fragments_filters = []
+        assert bucket
+        to_pandas_args = ()
+        for i in bucket:
+            _, frag_to_table, *to_pandas_args = expr._filtered_task(i)
+            fragments_filters.append((frag_to_table[1], frag_to_table[2]))
+            columns = frag_to_table[3]
+            schema = frag_to_table[4]
+        return (
+            self._load_multiple_files,
+            fragments_filters,
+            columns,
+            schema,
+            *to_pandas_args,
+        )
 
 
 class FromMap(PartitionsFiltered, BlockwiseIO):
@@ -218,6 +282,7 @@ class FromMapProjectable(FromMap):
         "columns",
         "args",
         "kwargs",
+        "columns_arg_required",
         "user_meta",
         "enforce_metadata",
         "user_divisions",
@@ -255,9 +320,9 @@ class FromMapProjectable(FromMap):
     @functools.cached_property
     def kwargs(self):
         options = self.operand("kwargs")
-        if self.columns_operand:
+        if self.columns_arg_required or self.columns_operand:
             options = options.copy()
-            options["columns"] = self.columns_operand
+            options["columns"] = self.columns
         return options
 
     @functools.cached_property
@@ -308,6 +373,7 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
         "sort",
         "chunksize",
         "columns",
+        "pyarrow_strings_enabled",
         "_partitions",
         "_series",
     ]
@@ -332,7 +398,11 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
 
     @functools.cached_property
     def _meta(self):
-        meta = self.frame.head(0)
+        if self.pyarrow_strings_enabled:
+            meta = make_meta(to_pyarrow_string(self.frame.head(1)))
+        else:
+            meta = self.frame.head(0)
+
         if self.operand("columns") is not None:
             return meta[self.columns[0]] if self._series else meta[self.columns]
         return meta
@@ -374,7 +444,10 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
                     chunksize=self.operand("chunksize"),
                 )
             else:
-                chunksize = int(math.ceil(nrows / npartitions))
+                if npartitions is None:
+                    chunksize = self.operand("chunksize")
+                else:
+                    chunksize = int(math.ceil(nrows / npartitions))
                 locations = list(range(0, nrows, chunksize)) + [len(data)]
                 divisions = (None,) * len(locations)
             _division_info_cache[key] = divisions, locations
@@ -419,6 +492,8 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
     def _filtered_task(self, index: int):
         start, stop = self._locations()[index : index + 2]
         part = self.frame.iloc[start:stop]
+        if self.pyarrow_strings_enabled:
+            part = to_pyarrow_string(part)
         if self.operand("columns") is not None:
             return part[self.columns[0]] if self._series else part[self.columns]
         return part
@@ -434,9 +509,20 @@ class FromPandas(PartitionsFiltered, BlockwiseIO):
 
 
 class FromPandasDivisions(FromPandas):
-    _parameters = ["frame", "divisions", "columns", "_partitions", "_series"]
+    _parameters = [
+        "frame",
+        "divisions",
+        "columns",
+        "pyarrow_strings_enabled",
+        "_partitions",
+        "_series",
+    ]
     _defaults = {"columns": None, "_partitions": None, "_series": False}
     sort = True
+
+    @functools.cached_property
+    def _name(self):
+        return "from_pd_divs" + "-" + _tokenize_deterministic(*self.operands)
 
     @property
     def _divisions_and_locations(self):

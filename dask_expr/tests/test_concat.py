@@ -22,8 +22,8 @@ def df(pdf):
 
 def test_concat_str(df):
     result = str(concat([df, df], join="inner"))
-    expected = "<dask_expr.expr.DataFrame: expr=Concat(frames=[df, df], join=inner)>"
-    assert result == expected
+    expected = "Expr=Concat(frames=[df, df], join='inner')"
+    assert expected in result, result
 
 
 def test_concat(pdf, df):
@@ -339,3 +339,13 @@ def test_concat_series(pdf):
     expected = concat([df2.y, df2.x], axis=1)[["x", "y"]]
     assert q.optimize(fuse=False)._name == expected.optimize(fuse=False)._name
     assert_eq(q, pd.concat([pdf.y, pdf.x, pdf.z], axis=1)[["x", "y"]])
+
+
+def test_concat_series_and_projection(df, pdf):
+    result = concat([df.x, df.y], axis=1)["x"]
+    expected = pd.concat([pdf.x, pdf.y], axis=1)["x"]
+    assert_eq(result, expected)
+
+    result = concat([df.x, df.y], axis=1)[["x"]]
+    expected = pd.concat([pdf.x, pdf.y], axis=1)[["x"]]
+    assert_eq(result, expected)

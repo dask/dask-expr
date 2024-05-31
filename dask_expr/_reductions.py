@@ -4,10 +4,16 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 import toolz
+from dask.array import chunk
+from dask.array.reductions import moment_agg, moment_chunk, moment_combine, nannumel
 from dask.dataframe import hyperloglog, methods
 from dask.dataframe._compat import PANDAS_GE_200
 from dask.dataframe.core import (
     _concat,
+    _cov_corr_agg,
+    _cov_corr_chunk,
+    _cov_corr_combine,
+    _mode_aggregate,
     idxmaxmin_agg,
     idxmaxmin_chunk,
     idxmaxmin_combine,
@@ -18,6 +24,7 @@ from dask.dataframe.core import (
     meta_nonempty,
     total_mem_usage,
 )
+from dask.typing import no_default
 from dask.utils import M, apply, funcname
 
 from dask_expr._concat import Concat
@@ -140,6 +147,7 @@ class ShuffleReduce(Expr):
         "sort",
         "shuffle_by_index",
         "shuffle_method",
+        "ignore_index",
     ]
     _defaults = {
         "split_every": 8,
@@ -147,6 +155,7 @@ class ShuffleReduce(Expr):
         "sort": None,
         "shuffle_by_index": None,
         "shuffle_method": None,
+        "ignore_index": True,
     }
 
     @property
@@ -161,17 +170,27 @@ class ShuffleReduce(Expr):
 
     def _lower(self):
         from dask_expr._repartition import Repartition
-        from dask_expr._shuffle import SetIndexBlockwise, Shuffle, SortValues
+        from dask_expr._shuffle import RearrangeByColumn, SetIndexBlockwise, SortValues
 
         if is_index_like(self.frame._meta):
-            columns = [self.frame._meta.name or "__index__"]
+            columns = [
+                self.frame._meta.name
+                if self.frame._meta.name is not None
+                else "__index__"
+            ]
         elif is_series_like(self.frame._meta):
-            columns = [self.frame._meta.name or "__series__"]
+            columns = [
+                self.frame._meta.name
+                if self.frame._meta.name is not None
+                else "__series__"
+            ]
         else:
             columns = self.frame.columns
 
         # Find what columns we are shuffling by
         split_by = self.split_by or columns
+        if not isinstance(split_by, (list, tuple)):
+            split_by = [split_by]
         split_by_index = bool(set(split_by) - set(columns))
 
         # Make sure we have dataframe-like data to shuffle
@@ -192,6 +211,7 @@ class ShuffleReduce(Expr):
         unmap_columns = {v: k for k, v in map_columns.items()}
         if map_columns:
             chunked = RenameFrame(chunked, map_columns)
+            split_by = [c if c not in map_columns else map_columns[c] for c in split_by]
 
         # Sort or shuffle
         split_every = getattr(self, "split_every", 0) or chunked.npartitions
@@ -210,13 +230,13 @@ class ShuffleReduce(Expr):
                 ignore_index=ignore_index,
             )
         else:
-            shuffled = Shuffle(
+            shuffled = RearrangeByColumn(
                 chunked,
                 split_by,
                 shuffle_npartitions,
                 ignore_index=ignore_index,
                 index_shuffle=not split_by_index and self.shuffle_by_index,
-                backend=self.shuffle_method,
+                method=self.shuffle_method,
             )
 
         # Unmap column names if necessary
@@ -225,19 +245,20 @@ class ShuffleReduce(Expr):
 
         # Reset the index if we we used it for shuffling
         if split_by_index:
-            divisions = (None,) * (shuffle_npartitions + 1)
-            shuffled = SetIndexBlockwise(shuffled, split_by, True, divisions)
+            shuffled = SetIndexBlockwise(shuffled, split_by, True, None)
 
         # Convert back to Series if necessary
-        if is_series_like(self._meta):
-            shuffled = shuffled[shuffled.columns[0]]
-        elif is_index_like(self._meta):
-            column = shuffled.columns[0]
-            shuffled = Index(
-                SetIndexBlockwise(shuffled, column, True, shuffled.divisions)
-            )
-            if column == "__index__":
-                shuffled = RenameSeries(shuffled, self.frame._meta.name)
+        if self.shuffle_by_index is not False:
+            if is_series_like(self._meta) and is_series_like(self.frame._meta):
+                shuffled = shuffled[shuffled.columns[0]]
+                if shuffled.name == "__series__":
+                    shuffled = RenameSeries(shuffled, self.frame._meta.name)
+            elif is_index_like(self._meta):
+                column = shuffled.columns[0]
+                divs = None if shuffled.divisions[0] is None else shuffled.divisions
+                shuffled = Index(SetIndexBlockwise(shuffled, column, True, divs))
+                if column == "__index__":
+                    shuffled = RenameSeries(shuffled, self.frame._meta.name)
 
         # Blockwise aggregate
         result = Aggregate(
@@ -314,7 +335,7 @@ class TreeReduce(Expr):
         d = {}
         keys = self.frame.__dask_keys__()
         split_every = self.split_every
-        while len(keys) > 1:
+        while split_every is not False and len(keys) > split_every:
             new_keys = []
             for i, batch in enumerate(
                 toolz.partition_all(split_every or len(keys), keys)
@@ -440,6 +461,36 @@ class ApplyConcatApply(Expr):
     def _chunk_cls_args(self):
         return []
 
+    @property
+    def should_shuffle(self):
+        sort = getattr(self, "sort", False)
+        return not (
+            not isinstance(self.split_out, bool) and self.split_out == 1 or sort
+        )
+
+    @functools.cached_property
+    def need_to_shuffle(self):
+        split_by = self.split_by or self.frame.columns
+        if any(
+            set(split_by) >= (set(cols) if isinstance(cols, tuple) else {cols})
+            for cols in self.frame.unique_partition_mapping_columns_from_shuffle
+        ):
+            return False
+        return True
+
+    @functools.cached_property
+    def unique_partition_mapping_columns_from_shuffle(self):
+        if self.should_shuffle and not self.need_to_shuffle:
+            return self.frame.unique_partition_mapping_columns_from_shuffle
+        elif self.should_shuffle:
+            return (
+                {self.split_by}
+                if not isinstance(self.split_by, list)
+                else {tuple(self.split_by)}
+            )
+        else:
+            return set()
+
     def _lower(self):
         # Normalize functions in case not all are defined
         chunk = self.chunk
@@ -458,12 +509,11 @@ class ApplyConcatApply(Expr):
             combine = aggregate
             combine_kwargs = aggregate_kwargs
 
-        sort = getattr(self, "sort", False)
         split_every = getattr(self, "split_every", None)
         chunked = self._chunk_cls(
             self.frame, type(self), chunk, chunk_kwargs, *self._chunk_cls_args
         )
-        if not isinstance(self.split_out, bool) and self.split_out == 1 or sort:
+        if not self.should_shuffle:
             # Lower into TreeReduce(Chunk)
             return TreeReduce(
                 chunked,
@@ -475,6 +525,23 @@ class ApplyConcatApply(Expr):
                 aggregate_kwargs,
                 split_every=split_every,
             )
+        elif not self.need_to_shuffle:
+            # Repartition and return
+            result = Aggregate(
+                chunked,
+                type(self),
+                aggregate,
+                aggregate_kwargs,
+                *self.aggregate_args,
+            )
+
+            if self.split_out is not True and self.split_out < result.npartitions:
+                from dask_expr import Repartition
+
+                return Repartition(result, new_partitions=self.split_out)
+            if self.ndim < result.ndim:
+                result = result[result.columns[0]]
+            return result
 
         # Lower into ShuffleReduce
         return ShuffleReduce(
@@ -489,9 +556,10 @@ class ApplyConcatApply(Expr):
             split_by=self.split_by,
             split_out=self.split_out,
             split_every=split_every,
-            sort=sort,
+            sort=getattr(self, "sort", False),
             shuffle_by_index=getattr(self, "shuffle_by_index", None),
             shuffle_method=getattr(self, "shuffle_method", None),
+            ignore_index=getattr(self, "ignore_index", True),
         )
 
 
@@ -556,7 +624,9 @@ class DropDuplicates(Unique):
 
     @functools.cached_property
     def _meta(self):
-        return self.chunk(meta_nonempty(self.frame._meta), **self.chunk_kwargs)
+        return make_meta(
+            self.chunk(meta_nonempty(self.frame._meta), **self.chunk_kwargs)
+        )
 
     @property
     def chunk_kwargs(self):
@@ -572,7 +642,7 @@ class DropDuplicates(Unique):
             columns = determine_column_projection(
                 self, parent, dependents, additional_columns=self.subset
             )
-            if columns == set(self.frame.columns):
+            if set(columns) == set(self.frame.columns):
                 # Don't add unnecessary Projections, protects against loops
                 return
 
@@ -749,7 +819,9 @@ class Reduction(ApplyConcatApply):
     def __str__(self):
         params = {param: self.operand(param) for param in self._parameters[1:]}
         s = ", ".join(
-            k + "=" + repr(v) for k, v in params.items() if v != self._defaults.get(k)
+            k + "=" + repr(v)
+            for k, v in params.items()
+            if v is not self._defaults.get(k)
         )
         base = str(self.frame)
         if " " in base:
@@ -761,51 +833,102 @@ class Reduction(ApplyConcatApply):
             return plain_column_projection(self, parent, dependents)
 
 
+class CustomReduction(Reduction):
+    _parameters = [
+        "frame",
+        "meta",
+        "chunk_kwargs",
+        "aggregate_kwargs",
+        "combine_kwargs",
+        "split_every",
+        "token",
+    ]
+
+    @functools.cached_property
+    def _name(self):
+        name = self.operand("token") or funcname(type(self)).lower()
+        return name + "-" + _tokenize_deterministic(*self.operands)
+
+    @classmethod
+    def chunk(cls, df, **kwargs):
+        func = kwargs.pop("func")
+        out = func(df, **kwargs)
+        # Return a dataframe so that the concatenated version is also a dataframe
+        return out.to_frame().T if is_series_like(out) else out
+
+    @classmethod
+    def combine(cls, inputs: list, **kwargs):
+        func = kwargs.pop("func")
+        df = _concat(inputs)
+        out = func(df, **kwargs)
+        # Return a dataframe so that the concatenated version is also a dataframe
+        return out.to_frame().T if is_series_like(out) else out
+
+    @classmethod
+    def aggregate(cls, inputs, **kwargs):
+        func = kwargs.pop("func")
+        df = _concat(inputs)
+        return func(df, **kwargs)
+
+    @functools.cached_property
+    def _meta(self):
+        if self.operand("meta") is not no_default:
+            return self.operand("meta")
+        return super()._meta
+
+    @property
+    def chunk_kwargs(self):
+        return self.operand("chunk_kwargs")
+
+    @property
+    def combine_kwargs(self):
+        return self.operand("combine_kwargs")
+
+    @property
+    def aggregate_kwargs(self):
+        return self.operand("aggregate_kwargs")
+
+    def _simplify_up(self, parent, dependents):
+        return
+
+    def _divisions(self):
+        return (None, None)
+
+
 class Sum(Reduction):
-    _parameters = ["frame", "skipna", "numeric_only", "min_count", "split_every"]
+    _parameters = ["frame", "skipna", "numeric_only", "split_every", "axis"]
     _defaults = {
         "split_every": False,
         "numeric_only": False,
-        "min_count": 0,
         "skipna": True,
+        "axis": 0,
     }
     reduction_chunk = M.sum
 
     @property
     def chunk_kwargs(self):
-        return dict(
-            skipna=self.skipna,
-            numeric_only=self.numeric_only,
-            min_count=self.min_count,
-        )
-
-
-class Prod(Reduction):
-    _parameters = ["frame", "skipna", "numeric_only", "min_count", "split_every"]
-    _defaults = {
-        "split_every": False,
-        "numeric_only": False,
-        "min_count": 0,
-        "skipna": True,
-    }
-    reduction_chunk = M.prod
+        return dict(skipna=self.skipna, numeric_only=self.numeric_only, axis=self.axis)
 
     @property
-    def chunk_kwargs(self):
-        return dict(
-            skipna=self.skipna,
-            numeric_only=self.numeric_only,
-            min_count=self.min_count,
-        )
+    def combine_kwargs(self):
+        return dict(skipna=self.skipna, axis=self.axis)
+
+    @property
+    def aggregate_kwargs(self):
+        return dict(skipna=self.skipna, axis=self.axis)
+
+
+class Prod(Sum):
+    reduction_chunk = M.prod
 
 
 class Max(Reduction):
-    _parameters = ["frame", "skipna", "numeric_only", "split_every"]
+    _parameters = ["frame", "skipna", "numeric_only", "split_every", "axis"]
     _defaults = {
         "split_every": False,
         "numeric_only": False,
-        "min_count": 0,
         "skipna": True,
+        "axis": 0,
     }
     reduction_chunk = M.max
 
@@ -814,7 +937,17 @@ class Max(Reduction):
         if self.frame._meta.ndim < 2:
             return dict(skipna=self.skipna)
         else:
-            return dict(skipna=self.skipna, numeric_only=self.numeric_only)
+            return dict(
+                skipna=self.skipna, numeric_only=self.numeric_only, axis=self.axis
+            )
+
+    @property
+    def combine_kwargs(self):
+        return dict(skipna=self.skipna, axis=self.axis)
+
+    @property
+    def aggregate_kwargs(self):
+        return dict(skipna=self.skipna, axis=self.axis)
 
 
 class Min(Max):
@@ -846,20 +979,24 @@ class All(Reduction):
 
 
 class IdxMin(Reduction):
-    _parameters = ["frame", "skipna", "numeric_only"]
+    _parameters = ["frame", "skipna", "numeric_only", "split_every"]
+    _defaults = {"skipna": True, "numeric_only": False, "split_every": False}
     reduction_chunk = idxmaxmin_chunk
     reduction_combine = idxmaxmin_combine
     reduction_aggregate = idxmaxmin_agg
-    _required_attribute = "idxmin"
+    _reduction_attribute = "idxmin"
 
     @property
     def chunk_kwargs(self):
-        # TODO: Add numeric_only after Dask release on May 26th
-        return dict(skipna=self.skipna, fn=self._required_attribute)
+        return dict(
+            skipna=self.skipna,
+            fn=self._reduction_attribute,
+            numeric_only=self.numeric_only,
+        )
 
     @property
     def combine_kwargs(self):
-        return dict(skipna=self.skipna, fn=self._required_attribute)
+        return dict(skipna=self.skipna, fn=self._reduction_attribute)
 
     @property
     def aggregate_kwargs(self):
@@ -867,7 +1004,37 @@ class IdxMin(Reduction):
 
 
 class IdxMax(IdxMin):
-    _required_attribute = "idxmax"
+    _reduction_attribute = "idxmax"
+
+
+class Cov(Reduction):
+    _parameters = ["frame", "min_periods", "split_every", "scalar"]
+    _defaults = {"min_periods": 2, "split_every": False, "scalar": False}
+    reduction_chunk = staticmethod(_cov_corr_chunk)
+    reduction_combine = staticmethod(_cov_corr_combine)
+    reduction_aggregate = staticmethod(_cov_corr_agg)
+    corr = False
+
+    @property
+    def chunk_kwargs(self):
+        return {"corr": self.corr}
+
+    @property
+    def combine_kwargs(self):
+        return self.chunk_kwargs
+
+    @property
+    def aggregate_kwargs(self):
+        return {
+            **self.chunk_kwargs,
+            "scalar": self.scalar,
+            "like_df": self.frame._meta,
+            "cols": self.frame.columns,
+        }
+
+
+class Corr(Cov):
+    corr = True
 
 
 class Len(Reduction):
@@ -921,14 +1088,33 @@ class Size(Reduction):
 class NBytes(Reduction):
     # Only supported for Series objects
     reduction_aggregate = sum
-    _required_attribute = "nbytes"
 
     @staticmethod
     def reduction_chunk(ser):
         return ser.nbytes
 
 
-class Var(Reduction):
+class ArrayReduction(Reduction):
+    @classmethod
+    def chunk(cls, df, **kwargs):
+        return cls.reduction_chunk(df, **kwargs)
+
+    @classmethod
+    def combine(cls, inputs: list, **kwargs):
+        func = cls.reduction_combine or cls.reduction_aggregate or cls.reduction_chunk
+        return func(inputs, **kwargs)
+
+    @classmethod
+    def aggregate(cls, inputs, meta, index, **kwargs):
+        func = cls.reduction_aggregate or cls.reduction_chunk
+        result = func(inputs, **kwargs)
+        if is_series_like(meta):
+            return type(meta)(result, name=meta.name, index=index)
+        else:
+            return result
+
+
+class Var(ArrayReduction):
     # Uses the parallel version of Welford's online algorithm (Chan 79')
     # (http://i.stanford.edu/pub/cstr/reports/cs/tr/79/773/CS-TR-79-773.pdf)
     _parameters = ["frame", "skipna", "ddof", "numeric_only", "split_every"]
@@ -944,73 +1130,117 @@ class Var(Reduction):
 
     @property
     def chunk_kwargs(self):
-        return dict(skipna=self.skipna, numeric_only=self.numeric_only)
+        return dict(skipna=self.skipna)
 
     @property
     def combine_kwargs(self):
-        return {}
+        return {"skipna": self.skipna}
 
     @property
     def aggregate_kwargs(self):
-        return dict(ddof=self.ddof)
+        cols = self.frame.columns if self.frame.ndim == 1 else self.frame._meta.columns
+        return dict(
+            ddof=self.ddof,
+            skipna=self.skipna,
+            meta=self._meta,
+            index=cols,
+        )
 
     @classmethod
-    def reduction_chunk(cls, x, skipna=True, numeric_only=False):
-        kwargs = {"numeric_only": numeric_only} if is_dataframe_like(x) else {}
-        if skipna or numeric_only:
-            n = x.count(**kwargs)
-            kwargs["skipna"] = skipna
-            avg = x.mean(**kwargs)
+    def reduction_chunk(cls, x, skipna):
+        values = x.values.astype("f8")
+        if skipna:
+            return moment_chunk(
+                values, sum=chunk.nansum, numel=nannumel, keepdims=True, axis=(0,)
+            )
         else:
-            # Not skipping nulls, so might as well
-            # avoid the full `count` operation
-            n = len(x)
-            kwargs["skipna"] = skipna
-            avg = x.sum(**kwargs) / n
-        if numeric_only:
-            # Workaround for cudf bug
-            # (see: https://github.com/rapidsai/cudf/issues/13731)
-            x = x[n.index]
-        m2 = ((x - avg) ** 2).sum(**kwargs)
-        return n, avg, m2
+            return moment_chunk(values, keepdims=True, axis=(0,))
 
     @classmethod
-    def reduction_combine(cls, parts):
-        n, avg, m2 = parts[0]
-        for i in range(1, len(parts)):
-            n_a, avg_a, m2_a = n, avg, m2
-            n_b, avg_b, m2_b = parts[i]
-            n = n_a + n_b
-            avg = (n_a * avg_a + n_b * avg_b) / n
-            delta = avg_b - avg_a
-            m2 = m2_a + m2_b + delta**2 * n_a * n_b / n
-        return n, avg, m2
+    def reduction_combine(cls, parts, skipna):
+        if skipna:
+            return moment_combine(parts, sum=np.nansum, axis=(0,))
+        else:
+            return moment_combine(parts, axis=(0,))
 
     @classmethod
-    def reduction_aggregate(cls, vals, ddof=1):
-        vals = cls.reduction_combine(vals)
-        n, _, m2 = vals
-        return m2 / (n - ddof)
+    def reduction_aggregate(cls, vals, ddof, skipna):
+        if skipna:
+            result = moment_agg(vals, sum=np.nansum, ddof=ddof, axis=(0,))
+        else:
+            result = moment_agg(vals, ddof=ddof, axis=(0,))
+        return result
 
 
-class Mean(Reduction):
-    _parameters = ["frame", "skipna", "numeric_only", "split_every"]
-    _defaults = {"skipna": True, "numeric_only": False, "split_every": False}
+class Moment(ArrayReduction):
+    _parameters = ["frame", "order"]
 
     @functools.cached_property
     def _meta(self):
-        return (
-            self.frame._meta.sum(skipna=self.skipna, numeric_only=self.numeric_only) / 2
+        # Use var as proxy for result dimension
+        return make_meta(meta_nonempty(self.frame._meta).var())
+
+    @property
+    def chunk_kwargs(self):
+        return dict(order=self.order)
+
+    @property
+    def combine_kwargs(self):
+        return self.chunk_kwargs
+
+    @property
+    def aggregate_kwargs(self):
+        return dict(
+            order=self.order,
+            meta=self._meta,
+            index=self.frame.columns,
+        )
+
+    @classmethod
+    def reduction_chunk(cls, x, order):
+        values = x.values.astype("f8")
+        return moment_chunk(values, order=order, axis=(0,), keepdims=True)
+
+    @classmethod
+    def reduction_combine(cls, parts, order):
+        return moment_combine(parts, order=order, axis=(0,))
+
+    @classmethod
+    def reduction_aggregate(cls, vals, order):
+        result = moment_agg(vals, order=order, axis=(0,))
+        return result
+
+
+class Mean(Reduction):
+    _parameters = ["frame", "skipna", "numeric_only", "split_every", "axis"]
+    _defaults = {"skipna": True, "numeric_only": False, "split_every": False, "axis": 0}
+
+    @functools.cached_property
+    def _meta(self):
+        return make_meta(
+            meta_nonempty(self.frame._meta).mean(
+                skipna=self.skipna, numeric_only=self.numeric_only, axis=self.axis
+            )
         )
 
     def _lower(self):
-        return self.frame.sum(
+        s = self.frame.sum(
             skipna=self.skipna,
             numeric_only=self.numeric_only,
             split_every=self.split_every,
-        ) / self.frame.count(
+        )
+        c = self.frame.count(
             split_every=self.split_every, numeric_only=self.numeric_only
         )
+        if self.axis is None and s.ndim == 1:
+            return s.sum() / c.sum()
+        else:
+            return MeanAggregate(s, c)
+
+
+class MeanAggregate(Blockwise):
+    _parameters = ["frame", "counter"]
+    operation = staticmethod(methods.mean_aggregate)
 
 
 class Count(Reduction):
@@ -1030,7 +1260,15 @@ class Count(Reduction):
             return dict(numeric_only=self.numeric_only)
 
 
-class Mode(ApplyConcatApply):
+class IndexCount(Reduction):
+    _parameters = ["frame", "split_every"]
+    _defaults = {"split_every": False}
+    reduction_chunk = staticmethod(methods.index_count)
+    reduction_aggregate = staticmethod(np.sum)
+    # aggregate_chunk = staticmethod(np.sum)
+
+
+class Mode(Reduction):
     """
 
     Mode was a bit more complicated than class reductions, so we retreat back
@@ -1039,21 +1277,12 @@ class Mode(ApplyConcatApply):
 
     _parameters = ["frame", "dropna", "split_every"]
     _defaults = {"dropna": True, "split_every": False}
-    chunk = M.value_counts
+    reduction_chunk = M.value_counts
+    reduction_combine = M.sum
+    reduction_aggregate = staticmethod(_mode_aggregate)
 
-    @classmethod
-    def combine(cls, results: list[pd.Series]):
-        df = _concat(results)
-        out = df.groupby(df.index).sum()
-        out.name = results[0].name
-        return out
-
-    @classmethod
-    def aggregate(cls, results: list[pd.Series], dropna=None):
-        [df] = results
-        max = df.max(skipna=dropna)
-        out = df[df == max].index.to_series().sort_values().reset_index(drop=True)
-        return out
+    def _divisions(self):
+        return self.frame.divisions[0], self.frame.divisions[-1]
 
     @property
     def chunk_kwargs(self):
@@ -1111,8 +1340,8 @@ class ReductionConstantDim(Reduction):
 
 
 class NLargest(ReductionConstantDim):
-    _defaults = {"n": 5, "_columns": None}
-    _parameters = ["frame", "n", "_columns"]
+    _parameters = ["frame", "n", "_columns", "split_every"]
+    _defaults = {"n": 5, "_columns": None, "split_every": None}
     reduction_chunk = M.nlargest
     reduction_aggregate = M.nlargest
 
@@ -1134,28 +1363,33 @@ class NLargest(ReductionConstantDim):
         return self.chunk_kwargs
 
 
-def _nsmallest_slow(df, columns, n):
-    return df.sort_values(by=columns).head(n)
+def _nfirst(df, columns, n, ascending):
+    return df.sort_values(by=columns, ascending=ascending).head(n)
 
 
-def _nlargest_slow(df, columns, n):
-    return df.sort_values(by=columns).tail(n)
+def _nlast(df, columns, n, ascending):
+    return df.sort_values(by=columns, ascending=ascending).tail(n)
 
 
-class NLargestSlow(NLargest):
-    reduction_chunk = _nlargest_slow
-    reduction_aggregate = _nlargest_slow
+class NFirst(NLargest):
+    _parameters = ["frame", "n", "_columns", "ascending", "split_every"]
+    _defaults = {"n": 5, "_columns": None, "ascending": None, "split_every": None}
+    reduction_chunk = staticmethod(_nfirst)
+    reduction_aggregate = staticmethod(_nfirst)
+
+    @property
+    def chunk_kwargs(self):
+        return {"ascending": self.ascending, **super().chunk_kwargs}
+
+
+class NLast(NFirst):
+    reduction_chunk = staticmethod(_nlast)
+    reduction_aggregate = staticmethod(_nlast)
 
 
 class NSmallest(NLargest):
-    _parameters = ["frame", "n", "_columns"]
     reduction_chunk = M.nsmallest
     reduction_aggregate = M.nsmallest
-
-
-class NSmallestSlow(NLargest):
-    reduction_chunk = _nsmallest_slow
-    reduction_aggregate = _nsmallest_slow
 
 
 class ValueCounts(ReductionConstantDim):
@@ -1205,7 +1439,7 @@ class ValueCounts(ReductionConstantDim):
 
     @property
     def aggregate_args(self):
-        if self.normalize and self.split_out != 1:
+        if self.normalize and (self.split_out > 1 or self.split_out is True):
             return [self.total_length]
         return []
 
@@ -1278,14 +1512,22 @@ class TotalMemoryUsageFrame(MemoryUsageFrame):
     def reduction_combine(x, is_dataframe):
         return x
 
+    @staticmethod
+    def reduction_aggregate(x):
+        return x
+
 
 class IsMonotonicIncreasing(Reduction):
+    @functools.cached_property
+    def _meta(self):
+        return make_meta(bool)
+
     reduction_chunk = methods.monotonic_increasing_chunk
     reduction_combine = methods.monotonic_increasing_combine
     reduction_aggregate = methods.monotonic_increasing_aggregate
 
 
-class IsMonotonicDecreasing(Reduction):
+class IsMonotonicDecreasing(IsMonotonicIncreasing):
     reduction_chunk = methods.monotonic_decreasing_chunk
     reduction_combine = methods.monotonic_decreasing_combine
     reduction_aggregate = methods.monotonic_decreasing_aggregate
