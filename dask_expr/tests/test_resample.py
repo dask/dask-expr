@@ -138,3 +138,7 @@ def test_resample_divisions_propagation():
     result = result.repartition(freq="1T")
     expected = pdf.resample("0.03s").mean()
     assert_eq(result, expected)
+
+    result = df.resample("0.03s").mean().partitions[1]
+    expected = pdf.resample("0.03s").mean()[997 : 2 * 997]
+    assert_eq(result, expected)
