@@ -193,6 +193,8 @@ class Merge(Expr):
         kwargs = self.kwargs.copy()
         if kwargs["how"] == "leftsemi":
             kwargs["how"] = "left"
+        if kwargs["how"] == "leftanti":
+            return make_meta(left)
         return make_meta(left.merge(right, **kwargs))
 
     @functools.cached_property
