@@ -2831,10 +2831,10 @@ class DataFrame(FrameBase):
               of the calling's one
             - leftsemi: Choose all rows in left where the join keys can be found
               in right. Won't duplicate rows if the keys are duplicated in right.
-              Drops all columns from right. Only supported with 'cudf' backend.
+              Drops all columns from right.
             - leftanti: Choose all rows in left where the join keys cannot be found
               in right. Won't duplicate rows if the keys are duplicated in right.
-              Drops all columns from right.
+              Drops all columns from right. Only supported with 'cudf' backend.
 
         on : label or list
             Column or index level names to join on. These must be found in both
