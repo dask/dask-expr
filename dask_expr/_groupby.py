@@ -1083,14 +1083,18 @@ class Median(GroupByShift):
         return npartitions
 
 
+def groupby_get_group(df, *by_key, get_key=None, columns=None):
+    return _groupby_get_group(df, list(by_key), get_key, columns)
+
+
 class GetGroup(Blockwise, GroupByBase):
-    operation = staticmethod(_groupby_get_group)
+    operation = staticmethod(groupby_get_group)
     _parameters = ["frame", "get_key", "columns"]
     _keyword_only = ["get_key", "columns"]
 
     @property
     def _args(self) -> list:
-        return [self.frame] + [self.by]
+        return [self.frame] + self.by
 
     @property
     def _kwargs(self) -> dict:
