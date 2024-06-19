@@ -1090,7 +1090,7 @@ class GetGroup(Blockwise, GroupByBase):
 
     @property
     def _args(self) -> list:
-        return [self.frame] + self.by
+        return [self.frame] + [self.by]
 
     @property
     def _kwargs(self) -> dict:
