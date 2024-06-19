@@ -18,6 +18,11 @@ import dask_expr as dx
 pd = _backend_library()
 
 
+@pytest.fixture(params=["arrow"])
+def filesystem(request):
+    return request.param
+
+
 def _make_file(dir, df=None, filename="myfile.parquet", **kwargs):
     fn = os.path.join(str(dir), filename)
     if df is None:
