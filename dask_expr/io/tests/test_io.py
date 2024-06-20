@@ -4,9 +4,11 @@ import os
 import dask.array as da
 import dask.dataframe as dd
 import numpy as np
+import pyarrow.parquet as pq
 import pytest
+from dask import config
 from dask.array.utils import assert_eq as array_assert_eq
-from dask.dataframe.utils import assert_eq
+from dask.dataframe.utils import assert_eq, make_meta
 
 from dask_expr import (
     DataFrame,
@@ -14,26 +16,25 @@ from dask_expr import (
     from_dask_array,
     from_dask_dataframe,
     from_dict,
+    from_legacy_dataframe,
     from_map,
     from_pandas,
     optimize,
     read_csv,
     read_parquet,
-    repartition,
 )
-from dask_expr._expr import Expr, Lengths, Literal, Replace
-from dask_expr._reductions import Len
-from dask_expr.io import FromArray, FromMap, ReadCSV, ReadParquet
+from dask_expr._expr import Expr, Replace
+from dask_expr.io import FromArray, FromMap, ReadCSV, ReadParquet, parquet
 from dask_expr.tests._util import _backend_library
 
 # Set DataFrame backend for this module
-lib = _backend_library()
+pd = _backend_library()
 
 
 def _make_file(dir, format="parquet", df=None):
     fn = os.path.join(str(dir), f"myfile.{format}")
     if df is None:
-        df = lib.DataFrame({c: range(10) for c in "abcde"})
+        df = pd.DataFrame({c: range(10) for c in "abcde"})
     if format == "csv":
         df.to_csv(fn)
     elif format == "parquet":
@@ -57,7 +58,7 @@ def df_bc(fn):
         (
             # Add -> Mul
             lambda fn: df(fn) + df(fn),
-            lambda fn: 2 * df(fn),
+            lambda fn: df(fn) + df(fn),
         ),
         (
             # Column projection
@@ -67,7 +68,7 @@ def df_bc(fn):
         (
             # Compound
             lambda fn: 3 * (df(fn) + df(fn))[["b", "c"]],
-            lambda fn: 6 * df_bc(fn),
+            lambda fn: 3 * (df_bc(fn) + df_bc(fn)),
         ),
         (
             # Traverse Sum
@@ -101,89 +102,40 @@ def test_io_fusion(tmpdir, fmt):
     assert_eq(df2, df[["a", "b"]] + 1)
 
 
-@pytest.mark.skip()
-def test_predicate_pushdown(tmpdir):
-    original = lib.DataFrame(
-        {
-            "a": [1, 2, 3, 4, 5] * 10,
-            "b": [0, 1, 2, 3, 4] * 10,
-            "c": range(50),
-            "d": [6, 7] * 25,
-            "e": [8, 9] * 25,
-        }
+def test_csv_integer_usecols(tmpdir):
+    fn = _make_file(tmpdir, format="csv")
+    df = read_csv(fn, usecols=[0, 1], names=["x", "y"])
+    result = df["x"]
+    expected = pd.read_csv(fn, usecols=[0, 1], names=["x", "y"])["x"]
+    assert_eq(result, expected)
+
+
+def test_read_csv_keywords(tmpdir):
+    fn = _make_file(tmpdir, format="csv")
+    df = read_csv(
+        fn,
+        sep=",",
+        names=["u", "v", "w", "x", "y", "z"],
+        engine="pyarrow",
+        header=None,
+        dtype_backend="pyarrow",
     )
-    fn = _make_file(tmpdir, format="parquet", df=original)
-    df = read_parquet(fn)
-    assert_eq(df, original)
-    x = df[df.a == 5][df.c > 20]["b"]
-    y = optimize(x, fuse=False)
-    assert isinstance(y.expr, ReadParquet)
-    assert ("a", "==", 5) in y.expr.operand("filters")[0]
-    assert ("c", ">", 20) in y.expr.operand("filters")[0]
-    assert list(y.columns) == ["b"]
-
-    # Check computed result
-    y_result = y.compute()
-    assert y_result.name == "b"
-    assert len(y_result) == 6
-    assert (y_result == 4).all()
-
-
-@pytest.mark.skip()
-def test_predicate_pushdown_compound(tmpdir):
-    pdf = lib.DataFrame(
-        {
-            "a": [1, 2, 3, 4, 5] * 10,
-            "b": [0, 1, 2, 3, 4] * 10,
-            "c": range(50),
-            "d": [6, 7] * 25,
-            "e": [8, 9] * 25,
-        }
+    expected = pd.read_csv(
+        fn,
+        sep=",",
+        names=["u", "v", "w", "x", "y", "z"],
+        engine="pyarrow",
+        header=None,
+        dtype_backend="pyarrow",
     )
-    fn = _make_file(tmpdir, format="parquet", df=pdf)
-    df = read_parquet(fn)
-
-    # Test AND
-    x = df[(df.a == 5) & (df.c > 20)]["b"]
-    y = optimize(x, fuse=False)
-    assert isinstance(y.expr, ReadParquet)
-    assert {("c", ">", 20), ("a", "==", 5)} == set(y.filters[0])
-    assert_eq(
-        y,
-        pdf[(pdf.a == 5) & (pdf.c > 20)]["b"],
-        check_index=False,
-    )
-
-    # Test OR
-    x = df[(df.a == 5) | (df.c > 20)]
-    x = x[x.b != 0]["b"]
-    y = optimize(x, fuse=False)
-    assert isinstance(y.expr, ReadParquet)
-    filters = [set(y.filters[0]), set(y.filters[1])]
-    assert {("c", ">", 20), ("b", "!=", 0)} in filters
-    assert {("a", "==", 5), ("b", "!=", 0)} in filters
-    expect = pdf[(pdf.a == 5) | (pdf.c > 20)]
-    expect = expect[expect.b != 0]["b"]
-    assert_eq(
-        y,
-        expect,
-        check_index=False,
-    )
-
-    # Test OR and AND
-    x = df[((df.a == 5) | (df.c > 20)) & (df.b != 0)]["b"]
-    z = optimize(x, fuse=False)
-    assert isinstance(z.expr, ReadParquet)
-    filters = [set(z.filters[0]), set(z.filters[1])]
-    assert {("c", ">", 20), ("b", "!=", 0)} in filters
-    assert {("a", "==", 5), ("b", "!=", 0)} in filters
-    assert_eq(y, z)
+    assert_eq(df, expected)
 
 
 def test_io_fusion_blockwise(tmpdir):
-    pdf = lib.DataFrame({c: range(10) for c in "abcdefghijklmn"})
+    pdf = pd.DataFrame({c: range(10) for c in "abcdefghijklmn"})
     dd.from_pandas(pdf, 3).to_parquet(tmpdir)
-    df = read_parquet(tmpdir)["a"].fillna(10).optimize()
+    read_parq = read_parquet(tmpdir)
+    df = read_parq["a"].fillna(10).optimize()
     assert df.npartitions == 2
     assert len(df.__dask_graph__()) == 2
     graph = (
@@ -192,11 +144,13 @@ def test_io_fusion_blockwise(tmpdir):
         .optimize(fuse=False)
         .__dask_graph__()
     )
-    assert any("readparquet-fused" in key[0] for key in graph.keys())
+    assert any(
+        f"{read_parq._expr._name.split('-')[0]}-fused" in key[0] for key in graph.keys()
+    )
 
 
 def test_repartition_io_fusion_blockwise(tmpdir):
-    pdf = lib.DataFrame({c: range(10) for c in "ab"})
+    pdf = pd.DataFrame({c: range(10) for c in "ab"})
     dd.from_pandas(pdf, 10).to_parquet(tmpdir)
     df = read_parquet(tmpdir)["a"]
     df = df.repartition(npartitions=lambda x: max(x // 2, 1)).optimize()
@@ -204,8 +158,8 @@ def test_repartition_io_fusion_blockwise(tmpdir):
 
 
 def test_io_fusion_merge(tmpdir):
-    pdf = lib.DataFrame({c: range(10) for c in "ab"})
-    pdf2 = lib.DataFrame({c: range(10) for c in "uvwxyz"})
+    pdf = pd.DataFrame({c: range(10) for c in "ab"})
+    pdf2 = pd.DataFrame({c: range(10) for c in "uvwxyz"})
     dd.from_pandas(pdf, 10).to_parquet(tmpdir)
     dd.from_pandas(pdf2, 10).to_parquet(tmpdir + "x")
     df = read_parquet(tmpdir)
@@ -218,9 +172,16 @@ def test_io_fusion_merge(tmpdir):
     )
 
 
+def test_io_fusion_zero(tmpdir):
+    pdf = pd.DataFrame({c: range(10) for c in "ab"})
+    dd.from_pandas(pdf, 10).to_parquet(tmpdir)
+    result = read_parquet(tmpdir, columns=[])
+    assert_eq(result, pdf[[]])
+
+
 @pytest.mark.parametrize("fmt", ["parquet", "csv", "pandas"])
 def test_io_culling(tmpdir, fmt):
-    pdf = lib.DataFrame({c: range(10) for c in "abcde"})
+    pdf = pd.DataFrame({c: range(10) for c in "abcde"})
     if fmt == "parquet":
         dd.from_pandas(pdf, 2).to_parquet(tmpdir)
         df = read_parquet(tmpdir)
@@ -229,12 +190,18 @@ def test_io_culling(tmpdir, fmt):
         df = read_csv(tmpdir + "/*")
     else:
         df = from_pandas(pdf, 2)
+
+    # Check that original pdf type is conserved
+    with config.set({"dataframe.backend": "pandas"}):
+        assert type(df.head()) == type(pdf)
+
     df = (df[["a", "b"]] + 1).partitions[1]
     df2 = optimize(df)
 
     # All tasks should be fused for the single output partition
     assert df2.npartitions == 1
-    assert len(df2.dask) == df2.npartitions
+    # from pandas is not fused together
+    assert len(df2.dask) == df2.npartitions + (1 if fmt == "pandas" else 0)
     expected = pdf.iloc[5:][["a", "b"]] + 1
     assert_eq(df2, expected, check_index=False)
 
@@ -251,29 +218,6 @@ def test_io_culling(tmpdir, fmt):
     assert_eq(df3, expected, check_index=False)
 
 
-@pytest.mark.parametrize("sort", [True, False])
-def test_from_pandas(sort):
-    pdf = lib.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
-    df = from_pandas(pdf, npartitions=2, sort=sort)
-
-    assert df.divisions == (0, 3, 5) if sort else (None,) * 3
-    assert_eq(df, pdf)
-
-
-def test_from_pandas_empty():
-    pdf = lib.DataFrame(columns=["a", "b"])
-    df = from_pandas(pdf, npartitions=2)
-    assert_eq(pdf, df)
-
-
-def test_from_pandas_immutable():
-    pdf = lib.DataFrame({"x": [1, 2, 3, 4]})
-    expected = pdf.copy()
-    df = from_pandas(pdf)
-    pdf["z"] = 100
-    assert_eq(df, expected)
-
-
 def test_parquet_complex_filters(tmpdir):
     df = read_parquet(_make_file(tmpdir))
     pdf = df.compute()
@@ -284,80 +228,40 @@ def test_parquet_complex_filters(tmpdir):
     assert_eq(got.optimize(), expect)
 
 
-def test_parquet_len(tmpdir):
-    df = read_parquet(_make_file(tmpdir))
-    pdf = df.compute()
-
-    assert len(df[df.a > 5]) == len(pdf[pdf.a > 5])
-
-    s = (df["b"] + 1).astype("Int32")
-    assert len(s) == len(pdf)
-
-    assert isinstance(Len(s.expr).optimize(), Literal)
-    assert isinstance(Lengths(s.expr).optimize(), Literal)
-
-
-def test_parquet_len_filter(tmpdir):
-    df = read_parquet(_make_file(tmpdir))
-    expr = Len(df[df.c > 0].expr)
-    result = expr.simplify()
-    for rp in result.find_operations(ReadParquet):
-        assert rp.operand("columns") == ["c"] or rp.operand("columns") == []
-
-
 @pytest.mark.parametrize("optimize", [True, False])
-def test_from_dask_dataframe(optimize):
+def test_from_legacy_dataframe(optimize):
     ddf = dd.from_dict({"a": range(100)}, npartitions=10)
-    df = from_dask_dataframe(ddf, optimize=optimize)
+    df = from_legacy_dataframe(ddf, optimize=optimize)
     assert isinstance(df.expr, Expr)
     assert_eq(df, ddf)
 
+    # Check deprecated API
+    with pytest.warns(FutureWarning, match="deprecated"):
+        df2 = from_dask_dataframe(ddf, optimize=optimize)
+        assert_eq(df, df2)
+
 
 @pytest.mark.parametrize("optimize", [True, False])
-def test_to_dask_dataframe(optimize):
-    pdf = lib.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
+def test_to_legacy_dataframe(optimize):
+    pdf = pd.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
     df = from_pandas(pdf, npartitions=2)
-    ddf = df.to_dask_dataframe(optimize=optimize)
-    assert isinstance(ddf, dd.DataFrame)
+    ddf = df.to_legacy_dataframe(optimize=optimize)
+    assert isinstance(ddf, dd.core.DataFrame)
     assert_eq(df, ddf)
+
+    # Check deprecated API
+    with pytest.warns(FutureWarning, match="deprecated"):
+        ddf2 = df.to_dask_dataframe(optimize=optimize)
+        assert_eq(ddf, ddf2)
 
 
 @pytest.mark.parametrize("optimize", [True, False])
 def test_to_dask_array(optimize):
-    pdf = lib.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
+    pdf = pd.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
     df = from_pandas(pdf, npartitions=2)
     darr = df.to_dask_array(optimize=optimize)
     assert isinstance(darr, da.Array)
     array_assert_eq(darr, pdf.values)
-
-
-@pytest.mark.parametrize("write_metadata_file", [True, False])
-def test_to_parquet(tmpdir, write_metadata_file):
-    pdf = lib.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
-    df = from_pandas(pdf, npartitions=2)
-
-    # Check basic parquet round trip
-    df.to_parquet(tmpdir, write_metadata_file=write_metadata_file)
-    df2 = read_parquet(tmpdir, calculate_divisions=True)
-    assert_eq(df, df2)
-
-    # Check overwrite behavior
-    df["new"] = df["x"] + 1
-    df.to_parquet(tmpdir, overwrite=True, write_metadata_file=write_metadata_file)
-    df2 = read_parquet(tmpdir, calculate_divisions=True)
-    assert_eq(df, df2)
-
-    # Check that we cannot overwrite a path we are
-    # reading from in the same graph
-    with pytest.raises(ValueError, match="Cannot overwrite"):
-        df2.to_parquet(tmpdir, overwrite=True)
-
-
-def test_to_parquet_engine(tmpdir):
-    pdf = lib.DataFrame({"x": [1, 4, 3, 2, 0, 5]})
-    df = from_pandas(pdf, npartitions=2)
-    with pytest.raises(NotImplementedError, match="not supported"):
-        df.to_parquet(tmpdir + "engine.parquet", engine="fastparquet")
 
 
 @pytest.mark.parametrize(
@@ -365,7 +269,7 @@ def test_to_parquet_engine(tmpdir):
     [("parquet", read_parquet, ReadParquet), ("csv", read_csv, ReadCSV)],
 )
 def test_combine_similar(tmpdir, fmt, read_func, read_cls):
-    pdf = lib.DataFrame(
+    pdf = pd.DataFrame(
         {"x": [0, 1, 2, 3] * 4, "y": range(16), "z": [None, 1, 2, 3] * 4}
     )
     fn = _make_file(tmpdir, format=fmt, df=pdf)
@@ -397,7 +301,7 @@ def test_combine_similar(tmpdir, fmt, read_func, read_cls):
 
 
 def test_combine_similar_no_projection_on_one_branch(tmpdir):
-    pdf = lib.DataFrame(
+    pdf = pd.DataFrame(
         {"x": [0, 1, 2, 3] * 4, "y": range(16), "z": [None, 1, 2, 3] * 4}
     )
     fn = _make_file(tmpdir, format="parquet", df=pdf)
@@ -408,28 +312,18 @@ def test_combine_similar_no_projection_on_one_branch(tmpdir):
     assert_eq(df, pdf)
 
 
-def test_from_pandas_sort_and_different_partitions():
-    pdf = lib.DataFrame({"a": [1, 2, 3] * 3, "b": 1}).set_index("a")
-    df = from_pandas(pdf, npartitions=4, sort=True)
-    assert_eq(pdf.sort_index(), df, sort_results=False)
-
-    pdf = lib.DataFrame({"a": [1, 2, 3] * 3, "b": 1}).set_index("a")
-    df = from_pandas(pdf, npartitions=4, sort=False)
-    assert_eq(pdf, df, sort_results=False)
-
-
 @pytest.mark.parametrize("meta", [True, False])
 @pytest.mark.parametrize("label", [None, "foo"])
 @pytest.mark.parametrize("allow_projection", [True, False])
 @pytest.mark.parametrize("enforce_metadata", [True, False])
 def test_from_map(tmpdir, meta, label, allow_projection, enforce_metadata):
-    pdf = lib.DataFrame({c: range(10) for c in "abcdefghijklmn"})
+    pdf = pd.DataFrame({c: range(10) for c in "abcdefghijklmn"})
     dd.from_pandas(pdf, 3).to_parquet(tmpdir, write_index=False)
     files = sorted(glob.glob(str(tmpdir) + "/*.parquet"))
     if allow_projection:
-        func = lib.read_parquet
+        func = pd.read_parquet
     else:
-        func = lambda *args, **kwargs: lib.read_parquet(*args, **kwargs)
+        func = lambda *args, **kwargs: pd.read_parquet(*args, **kwargs)
     options = {
         "enforce_metadata": enforce_metadata,
         "label": label,
@@ -444,12 +338,12 @@ def test_from_map(tmpdir, meta, label, allow_projection, enforce_metadata):
     assert_eq(df[["a", "b"]], pdf[["a", "b"]], check_index=False)
 
     if label:
-        assert df.expr._name.startswith(label)
+        assert df.expr.frame._name.startswith(label)
 
     if allow_projection:
         got = df[["a", "b"]].optimize(fuse=False)
-        assert isinstance(got.expr, FromMap)
-        assert got.expr.operand("columns") == ["a", "b"]
+        assert isinstance(got.expr.frame, FromMap)
+        assert got.expr.frame.operand("columns") == ["a", "b"]
 
     # Check that we can always pass columns up front
     if meta:
@@ -464,61 +358,60 @@ def test_from_map(tmpdir, meta, label, allow_projection, enforce_metadata):
     # Check the case that func returns a Series
     if meta:
         options["meta"] = options["meta"]["a"]
-    result = from_map(lambda x: lib.read_parquet(x)["a"], files, **options)
+    result = from_map(lambda x: pd.read_parquet(x)["a"], files, **options)
     assert_eq(result, pdf["a"], check_index=False)
 
 
-def test_from_pandas_sort():
-    pdf = lib.DataFrame({"a": [1, 2, 3, 1, 2, 2]}, index=[6, 5, 4, 3, 2, 1])
-    df = from_pandas(pdf, npartitions=2)
-    assert_eq(df, pdf.sort_index(), sort_results=False)
+def func(path, columns):
+    raise NotImplementedError("This shouldn't ever be called")
 
 
-def test_from_pandas_divisions():
-    pdf = lib.DataFrame({"a": [1, 2, 3, 1, 2, 2]}, index=[7, 6, 4, 3, 2, 1])
-    df = repartition(pdf, (1, 5, 8))
-    assert_eq(df, pdf.sort_index())
-
-    pdf = lib.DataFrame({"a": [1, 2, 3, 1, 2, 2]}, index=[7, 6, 4, 3, 2, 1])
-    df = repartition(pdf, (1, 4, 8))
-    assert_eq(df.partitions[1], lib.DataFrame({"a": [3, 2, 1]}, index=[4, 6, 7]))
-
-    df = repartition(df, divisions=(1, 3, 8), force=True)
-    assert_eq(df, pdf.sort_index())
+def func2(path, columns):
+    return pd.DataFrame({"a": range(10), "b": range(10)})
 
 
-def test_from_pandas_empty_projection():
-    pdf = lib.DataFrame({"a": [1, 2, 3], "b": 1})
-    df = from_pandas(pdf)
-    assert_eq(df[[]], pdf[[]])
+def test_from_map_columns_required():
+    with pytest.raises(TypeError, match=r"columns.*optional"):
+        from_map(func, ["foo"])
+    meta = make_meta(func2("foo", None))
+    ddf = from_map(func2, ["foo"], meta=meta)
+    ddf_expected = from_pandas(func2("foo", None), npartitions=1)
+
+    assert_eq(ddf, ddf_expected, check_divisions=False)
+
+    actual = from_map(func2, ["foo"], meta=meta)[["a"]].optimize()
+    expected = from_map(func2, ["foo"], meta=meta, columns=["a"]).optimize()
+
+    assert actual._name == expected._name
 
 
-def test_from_pandas_divisions_duplicated():
-    pdf = lib.DataFrame({"a": 1}, index=[1, 2, 3, 4, 5, 5, 5, 6, 8])
-    df = repartition(pdf, (1, 5, 7, 10))
-    assert_eq(df, pdf)
-    assert_eq(df.partitions[0], pdf.loc[1:4])
-    assert_eq(df.partitions[1], pdf.loc[5:6])
-    assert_eq(df.partitions[2], pdf.loc[8:])
+def func_object(path):
+    return pd.DataFrame({"a": "x", "b": range(10)})
+
+
+def test_from_map_string_conversion():
+    result = from_map(func_object, ["foo"])
+    assert result.a.dtype == "string"
+    assert result.a.compute().dtype == "string"
 
 
 def test_from_array():
     arr = np.random.randint(1, 100, (100,))
-    assert_eq(from_array(arr, chunksize=5), lib.Series(arr))
-    assert_eq(from_array(arr, chunksize=5, columns="a"), lib.Series(arr, name="a"))
+    assert_eq(from_array(arr, chunksize=5), pd.Series(arr))
+    assert_eq(from_array(arr, chunksize=5, columns="a"), pd.Series(arr, name="a"))
     columns = ["a", "b", "c", "d"]
     arr = np.random.randint(1, 100, (100, 4))
     assert_eq(
         from_array(arr, chunksize=5, columns=columns),
-        lib.DataFrame(arr, columns=columns),
+        pd.DataFrame(arr, columns=columns),
     )
     assert_eq(
         from_array(arr, chunksize=5, columns=columns)["a"],
-        lib.DataFrame(arr, columns=columns)["a"],
+        pd.DataFrame(arr, columns=columns)["a"],
     )
     assert_eq(
         from_array(arr, chunksize=5, columns=columns)[["a"]],
-        lib.DataFrame(arr, columns=columns)[["a"]],
+        pd.DataFrame(arr, columns=columns)[["a"]],
     )
     q = from_array(arr, chunksize=5, columns=columns)[["a"]].simplify()
     for expr in q.walk():
@@ -526,32 +419,54 @@ def test_from_array():
             assert expr.columns == ["a"]
 
 
+@pytest.mark.parametrize("dtype", [object, str])
+def test_from_array_string_conersion(dtype):
+    arr = np.array(["a", "b", "c", "d"], dtype=dtype)
+    result = from_array(arr, chunksize=2)
+    assert result.dtype == "string"
+    assert result.compute().dtype == "string"
+
+
 def test_from_dask_array():
     import dask.array as da
 
     arr = da.ones((20, 4), chunks=(2, 2))
     df = from_dask_array(arr, columns=["a", "b", "c", "d"])
-    pdf = lib.DataFrame(arr.compute(), columns=["a", "b", "c", "d"])
+    pdf = pd.DataFrame(arr.compute(), columns=["a", "b", "c", "d"])
+    assert_eq(df, pdf)
+
+
+@pytest.mark.parametrize("columns", [1, "aa"])
+def test_from_dask_array_scalar_columns(columns):
+    import dask.array as da
+
+    arr = da.ones((20,), chunks=(2,))
+    df = from_dask_array(arr, columns=columns)
+    pdf = pd.Series(arr.compute(), name=columns)
     assert_eq(df, pdf)
 
 
 def test_from_dict():
     data = {"a": [1, 2, 3, 4], "B": [10, 11, 12, 13]}
     result = from_dict(data, npartitions=2)
-    expected = lib.DataFrame(data)
+    expected = pd.DataFrame(data)
     assert_eq(result, expected)
     assert_eq(DataFrame.from_dict(data), expected)
 
 
-def test_from_pandas_chunksize():
-    pdf = lib.DataFrame(np.random.randn(10, 5), columns=list("abcde"))
-    df = from_pandas(pdf, chunksize=4)
-    assert df.npartitions == 3
-    assert_eq(df, pdf)
+@pytest.mark.parametrize("normalizer", ("filemetadata", "schema"))
+def test_normalize_token_parquet_filemetadata_and_schema(tmpdir, normalizer):
+    df = pd.DataFrame({c: range(10) for c in "abcde"})
+    path = tmpdir / "df.parquet"
+    df.to_parquet(path)
 
-    df = from_pandas(pdf)
-    assert df.npartitions == 1
-    assert_eq(df, pdf)
+    meta = pq.read_metadata(path)
 
-    with pytest.raises(TypeError, match="chunksize and npartitions"):
-        from_pandas(pdf, npartitions=2, chunksize=2)
+    if normalizer == "filemetadata":
+        normalizer = parquet.normalize_pq_filemetadata
+        obj = meta
+    else:
+        normalizer = parquet.normalize_pq_schema
+        obj = meta.schema
+
+    assert normalizer(obj) == normalizer(obj)

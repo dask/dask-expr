@@ -8,42 +8,29 @@ from dask.dataframe.dispatch import make_meta
 from dask.dataframe.utils import check_meta
 from dask.delayed import Delayed, delayed
 
-from dask_expr import new_collection
-from dask_expr._expr import Expr, PartitionsFiltered
+from dask_expr._expr import PartitionsFiltered, _DelayedExpr
+from dask_expr._util import _tokenize_deterministic
 from dask_expr.io import BlockwiseIO
 
 if TYPE_CHECKING:
     import distributed
 
 
-class _DelayedExpr(Expr):
-    # Wraps a Delayed object to make it an Expr for now. This is hacky and we should
-    # integrate this properly...
-    # TODO
-
-    def __init__(self, obj):
-        self.obj = obj
-        self.operands = [obj]
-
-    @property
-    def _name(self):
-        return self.obj.key
-
-    def _layer(self) -> dict:
-        return self.obj.dask.to_dict()
-
-    def _divisions(self):
-        return (None, None)
-
-
 class FromDelayed(PartitionsFiltered, BlockwiseIO):
-    _parameters = ["meta", "user_divisions", "verify_meta", "_partitions"]
+    _parameters = ["meta", "user_divisions", "verify_meta", "_partitions", "prefix"]
     _defaults = {
         "meta": None,
         "_partitions": None,
         "user_divisions": None,
         "verify_meta": True,
+        "prefix": None,
     }
+
+    @functools.cached_property
+    def _name(self):
+        if self.prefix is None:
+            return super()._name
+        return self.prefix + "-" + _tokenize_deterministic(*self.operands)
 
     def dependencies(self):
         return self.dfs
@@ -70,10 +57,10 @@ class FromDelayed(PartitionsFiltered, BlockwiseIO):
         if self.verify_meta:
             return (
                 functools.partial(check_meta, meta=self._meta, funcname="from_delayed"),
-                key,
+                (key, 0),
             )
         else:
-            return identity, key
+            return identity, (key, 0)
 
 
 def identity(x):
@@ -84,6 +71,7 @@ def from_delayed(
     dfs: Delayed | distributed.Future | Iterable[Delayed | distributed.Future],
     meta=None,
     divisions: tuple | None = None,
+    prefix: str | None = None,
     verify_meta: bool = True,
 ):
     """Create Dask DataFrame from many Dask Delayed objects
@@ -112,11 +100,18 @@ def from_delayed(
     if len(dfs) == 0:
         raise TypeError("Must supply at least one delayed object")
 
+    if meta is None:
+        meta = delayed(make_meta)(dfs[0]).compute()
+
     if divisions == "sorted":
         raise NotImplementedError(
             "divisions='sorted' not supported, please calculate the divisions "
             "yourself."
         )
+    elif divisions is not None:
+        divs = list(divisions)
+        if len(divs) != len(dfs) + 1:
+            raise ValueError("divisions should be a tuple of len(dfs) + 1")
 
     dfs = [
         delayed(df) if not isinstance(df, Delayed) and hasattr(df, "key") else df
@@ -129,6 +124,8 @@ def from_delayed(
 
     dfs = [_DelayedExpr(df) for df in dfs]
 
+    from dask_expr._collection import new_collection
+
     return new_collection(
-        FromDelayed(make_meta(meta), divisions, verify_meta, None, *dfs)
+        FromDelayed(make_meta(meta), divisions, verify_meta, None, prefix, *dfs)
     )

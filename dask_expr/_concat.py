@@ -2,20 +2,24 @@ import functools
 import warnings
 
 import pandas as pd
+from dask.core import flatten
 from dask.dataframe import methods
 from dask.dataframe.dispatch import make_meta, meta_nonempty
 from dask.dataframe.multi import concat_and_check
 from dask.dataframe.utils import check_meta, strip_unknown_categories
 from dask.utils import apply, is_dataframe_like, is_series_like
+from toolz import merge_sorted, unique
 
 from dask_expr._expr import (
     AsType,
     Blockwise,
     Expr,
     Projection,
+    ToFrame,
     are_co_aligned,
     determine_column_projection,
 )
+from dask_expr._util import _convert_to_list
 
 
 class Concat(Expr):
@@ -25,6 +29,7 @@ class Concat(Expr):
         "_kwargs",
         "axis",
         "ignore_unknown_divisions",
+        "interleave_partitions",
     ]
     _defaults = {
         "join": "outer",
@@ -32,6 +37,7 @@ class Concat(Expr):
         "_kwargs": {},
         "axis": 0,
         "ignore_unknown_divisions": False,
+        "interleave_partitions": False,
     }
 
     def __str__(self):
@@ -39,11 +45,7 @@ class Concat(Expr):
             "frames="
             + str(self.dependencies())
             + ", "
-            + ", ".join(
-                str(param) + "=" + str(operand)
-                for param, operand in zip(self._parameters, self.operands)
-                if operand != self._defaults.get(param)
-            )
+            + ", ".join(self._operands_for_repr())
         )
         return f"{type(self).__name__}({s})"
 
@@ -54,7 +56,7 @@ class Concat(Expr):
     @functools.cached_property
     def _meta(self):
         # ignore DataFrame without columns to avoid dtype upcasting
-        meta = make_meta(
+        return make_meta(
             methods.concat(
                 [
                     meta_nonempty(df._meta)
@@ -68,33 +70,72 @@ class Concat(Expr):
                 **self._kwargs,
             )
         )
-        return strip_unknown_categories(meta)
 
     def _divisions(self):
         dfs = self._frames
 
         if self.axis == 1:
+            if self._are_co_alinged_or_single_partition:
+                if {df.npartitions for df in self._frames} == {1}:
+                    divisions = set(
+                        flatten([e.divisions for e in dfs], container=tuple)
+                    )
+                    return min(divisions), max(divisions)
+                return dfs[0].divisions
+            elif self._all_known_divisions:
+                divisions = list(unique(merge_sorted(*[df.divisions for df in dfs])))
+                if len(divisions) == 1:  # single value for index
+                    divisions = (divisions[0], divisions[0])
+                return divisions
             return (None,) * (max(df.npartitions for df in dfs) + 1)
 
-        if all(df.known_divisions for df in dfs):
+        if self._monotonic_divisions:
+            divisions = []
+            for df in dfs[:-1]:
+                # remove last to concatenate with next
+                divisions += df.divisions[:-1]
+            divisions += dfs[-1].divisions
+            return divisions
+        elif self._all_known_divisions and self.interleave_partitions:
+            divisions = list(unique(merge_sorted(*[df.divisions for df in dfs])))
+            if len(divisions) == 1:  # single value for index
+                divisions = (divisions[0], divisions[0])
+            return divisions
+        return [None] * (sum(df.npartitions for df in dfs) + 1)
+
+    @functools.cached_property
+    def interleave_partitions(self):
+        if "interleave_partitions" in self._parameters:
+            return self.operand("interleave_partitions")
+        return False
+
+    @functools.cached_property
+    def _all_known_divisions(self):
+        dfs = self._frames
+        return all(df.known_divisions for df in dfs)
+
+    @functools.cached_property
+    def _monotonic_divisions(self):
+        dfs = self._frames
+
+        if self._all_known_divisions:
             # each DataFrame's division must be greater than previous one
-            if all(
+            return all(
                 dfs[i].divisions[-1] < dfs[i + 1].divisions[0]
                 for i in range(len(dfs) - 1)
-            ):
-                divisions = []
-                for df in dfs[:-1]:
-                    # remove last to concatenate with next
-                    divisions += df.divisions[:-1]
-                divisions += dfs[-1].divisions
-                return divisions
+            )
+        return False
 
-        return [None] * (sum(df.npartitions for df in dfs) + 1)
+    @functools.cached_property
+    def _are_co_alinged_or_single_partition(self):
+        return are_co_aligned(*self._frames) or {
+            df.npartitions for df in self._frames
+        } == {1}
 
     def _lower(self):
         dfs = self._frames
         if self.axis == 1:
-            if are_co_aligned(*self._frames) or {df.npartitions for df in dfs} == {1}:
+            if self._are_co_alinged_or_single_partition:
                 return ConcatIndexed(self.ignore_order, self._kwargs, self.axis, *dfs)
 
             elif (
@@ -109,8 +150,26 @@ class Concat(Expr):
                         "safe."
                     )
                 return ConcatUnindexed(self.ignore_order, self._kwargs, self.axis, *dfs)
+            elif self._all_known_divisions:
+                from dask_expr._repartition import Repartition
+
+                divs = self._divisions()
+                cast_dfs = [
+                    Repartition(df, new_divisions=divs, force=True) for df in dfs
+                ]
+                return StackPartitionInterleaved(
+                    self.join,
+                    self.ignore_order,
+                    self.axis,
+                    self._kwargs,
+                    *cast_dfs,
+                )
+
             else:
-                raise NotImplementedError
+                raise ValueError(
+                    "Unable to concatenate DataFrame with unknown "
+                    "division specifying axis=1"
+                )
 
         cast_dfs = []
         for df in dfs:
@@ -140,9 +199,29 @@ class Concat(Expr):
             else:
                 cast_dfs.append(df)
 
+        if (
+            not self._monotonic_divisions
+            and self._all_known_divisions
+            and self.interleave_partitions
+        ):
+            from dask_expr._repartition import Repartition
+
+            divs = self._divisions()
+            cast_dfs = [
+                Repartition(df, new_divisions=divs, force=True) for df in cast_dfs
+            ]
+            return StackPartitionInterleaved(
+                self.join,
+                self.ignore_order,
+                self.axis,
+                self._kwargs,
+                *cast_dfs,
+            )
+
         return StackPartition(
             self.join,
             self.ignore_order,
+            self.axis,
             self._kwargs,
             *cast_dfs,
         )
@@ -154,6 +233,7 @@ class Concat(Expr):
                 return e.columns if e.ndim == 2 else [e.name]
 
             columns = determine_column_projection(self, parent, dependents)
+            columns = _convert_to_list(columns)
             columns_frame = [
                 [col for col in get_columns_or_name(frame) if col in columns]
                 for frame in self._frames
@@ -165,38 +245,42 @@ class Concat(Expr):
                 return
 
             frames = [
-                frame[cols]
-                if sorted(cols) != sorted(get_columns_or_name(frame))
-                else frame
+                (
+                    frame[cols]
+                    if sorted(cols) != sorted(get_columns_or_name(frame))
+                    else frame
+                )
                 for frame, cols in zip(self._frames, columns_frame)
                 if len(cols) > 0
             ]
-            return type(parent)(
-                type(self)(
-                    self.join,
-                    self.ignore_order,
-                    self._kwargs,
-                    self.axis,
-                    self.ignore_unknown_divisions,
-                    *frames,
-                ),
-                *parent.operands[1:],
+            result = type(self)(
+                self.join,
+                self.ignore_order,
+                self._kwargs,
+                self.axis,
+                self.ignore_unknown_divisions,
+                self.interleave_partitions,
+                *frames,
             )
+            if result.columns == _convert_to_list(parent.operand("columns")):
+                if result.ndim == parent.ndim:
+                    return result
+                elif result.ndim < parent.ndim:
+                    return ToFrame(result)
+
+            return type(parent)(result, *parent.operands[1:])
 
 
 class StackPartition(Concat):
-    _parameters = ["join", "ignore_order", "_kwargs"]
-    _defaults = {"join": "outer", "ignore_order": False, "_kwargs": {}}
-
-    @property
-    def axis(self):
-        return 0
+    _parameters = ["join", "ignore_order", "axis", "_kwargs"]
+    _defaults = {"join": "outer", "ignore_order": False, "_kwargs": {}, "axis": 0}
 
     def _layer(self):
         dsk, i = {}, 0
         kwargs = self._kwargs.copy()
         kwargs["ignore_order"] = self.ignore_order
         ctr = 0
+        meta = strip_unknown_categories(self._meta)
         for df in self._frames:
             try:
                 check_meta(df._meta, self._meta)
@@ -212,7 +296,7 @@ class StackPartition(Concat):
                         apply,
                         methods.concat,
                         [
-                            [self._meta, (df._name, i)],
+                            [meta, (df._name, i)],
                             self.axis,
                             self.join,
                             False,
@@ -225,6 +309,32 @@ class StackPartition(Concat):
 
     def _lower(self):
         return
+
+
+class StackPartitionInterleaved(StackPartition):
+    def _divisions(self):
+        return self._frames[0].divisions
+
+    def _layer(self):
+        dsk, i = {}, 0
+        kwargs = self._kwargs.copy()
+        kwargs["ignore_order"] = self.ignore_order
+
+        dfs = self._frames
+        for i in range(self.npartitions):
+            dsk[(self._name, i)] = (
+                apply,
+                methods.concat,
+                [
+                    [(df._name, i) for df in dfs],
+                    self.axis,
+                    self.join,
+                    False,
+                    True,
+                ],
+                kwargs,
+            )
+        return dsk
 
 
 class ConcatUnindexed(Blockwise):

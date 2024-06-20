@@ -18,16 +18,27 @@ def test_timeseries():
 def test_optimization():
     df = timeseries(dtypes={"x": int, "y": float}, seed=123)
     expected = timeseries(dtypes={"x": int}, seed=123)
-    result = df[["x"]].optimize()
-    assert result.expr.operand("columns") == expected.expr.operand("columns")
+    result = df[["x"]].optimize(fuse=False)
+    assert result.expr.frame.operand("columns") == expected.expr.frame.operand(
+        "columns"
+    )
 
     expected = timeseries(dtypes={"x": int}, seed=123)["x"].simplify()
     result = df["x"].optimize(fuse=False)
-    assert expected.expr.operand("columns") == result.expr.operand("columns")
+    assert expected.expr.frame.operand("columns") == result.expr.frame.operand(
+        "columns"
+    )
+
+
+def test_arrow_string_option():
+    df = timeseries(dtypes={"x": object, "y": float}, seed=123)
+    result = df.optimize(fuse=False)
+    assert result.x.dtype == "string"
+    assert result.x.compute().dtype == "string"
 
 
 def test_column_projection_deterministic():
-    df = timeseries(freq="1H", start="2000-01-01", end="2000-01-02", seed=123)
+    df = timeseries(freq="1h", start="2000-01-01", end="2000-01-02", seed=123)
     result_id = df[["id"]].optimize()
     result_id_x = df[["id", "x"]].optimize()
     assert_eq(result_id["id"], result_id_x["id"])
@@ -48,16 +59,16 @@ def test_timeseries_culling():
 
 
 def test_persist():
-    df = timeseries(freq="1H", start="2000-01-01", end="2000-01-02", seed=123)
+    df = timeseries(freq="1h", start="2000-01-01", end="2000-01-02", seed=123)
     a = df["x"]
     b = a.persist()
 
     assert_eq(a, b)
-    assert len(b.dask) == b.npartitions
+    assert len(b.dask) == 2 * b.npartitions
 
 
 def test_lengths():
-    df = timeseries(freq="1H", start="2000-01-01", end="2000-01-03", seed=123)
+    df = timeseries(freq="1h", start="2000-01-01", end="2000-01-03", seed=123)
     assert len(df) == sum(new_collection(Lengths(df.expr).optimize()).compute())
 
 
@@ -115,3 +126,10 @@ def test_timeseries_gaph_size(seed):
     # Make sure we are close to the dask.dataframe graph size
     threshold = 1.10 if PANDAS_GE_200 else 1.50
     assert graph_size < threshold * graph_size_dd
+
+
+def test_dataset_head():
+    ddf = timeseries(freq="1d")
+    expected = ddf.compute()
+    assert_eq(ddf.head(30, npartitions=-1), expected)
+    assert_eq(ddf.head(30, npartitions=-1, compute=False), expected)

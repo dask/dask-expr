@@ -1,16 +1,19 @@
+import datetime
+
+import numpy as np
 import pytest
 from dask.dataframe._compat import PANDAS_GE_200
 
-from dask_expr import from_pandas, map_partitions
+from dask_expr import from_pandas, map_overlap, map_partitions
 from dask_expr.tests._util import _backend_library, assert_eq
 
 # Set DataFrame backend for this module
-lib = _backend_library()
+pd = _backend_library()
 
 
 @pytest.fixture
 def pdf():
-    pdf = lib.DataFrame({"x": range(100)})
+    pdf = pd.DataFrame({"x": range(100)})
     pdf["y"] = pdf.x // 7  # Not unique; duplicates span different partitions
     yield pdf
 
@@ -45,9 +48,9 @@ def test_map_partitions_broadcast(df):
 @pytest.mark.parametrize("opt", [True, False])
 def test_map_partitions_merge(opt):
     # Make simple left & right dfs
-    pdf1 = lib.DataFrame({"x": range(20), "y": range(20)})
+    pdf1 = pd.DataFrame({"x": range(20), "y": range(20)})
     df1 = from_pandas(pdf1, 2)
-    pdf2 = lib.DataFrame({"x": range(0, 20, 2), "z": range(10)})
+    pdf2 = pd.DataFrame({"x": range(0, 20, 2), "z": range(10)})
     df2 = from_pandas(pdf2, 1)
 
     # Partition-wise merge with map_partitions
@@ -71,23 +74,23 @@ def test_map_overlap():
         x = x + x.sum()
         return x
 
-    idx = lib.date_range("2020-01-01", periods=5, freq="D")
-    pdf = lib.DataFrame(1, index=idx, columns=["a"])
+    idx = pd.date_range("2020-01-01", periods=5, freq="D")
+    pdf = pd.DataFrame(1, index=idx, columns=["a"])
     df = from_pandas(pdf, npartitions=2)
 
     result = df.map_overlap(func, before=0, after="2D")
-    expected = lib.DataFrame([5, 5, 5, 3, 3], index=idx, columns=["a"])
+    expected = pd.DataFrame([5, 5, 5, 3, 3], index=idx, columns=["a"])
     assert_eq(result, expected)
     result = df.map_overlap(func, before=0, after=1)
     assert_eq(result, expected)
 
     # Bug in dask/dask
     # result = df.map_overlap(func, before=0, after="1D")
-    # expected = lib.DataFrame([4, 4, 4, 3, 3], index=idx, columns=["a"])
+    # expected = pd.DataFrame([4, 4, 4, 3, 3], index=idx, columns=["a"])
     # assert_eq(result, expected)
 
     result = df.map_overlap(func, before="2D", after=0)
-    expected = lib.DataFrame(4, index=idx, columns=["a"])
+    expected = pd.DataFrame(4, index=idx, columns=["a"])
     assert_eq(result, expected, check_index=False)
 
     result = df.map_overlap(func, before=1, after=0)
@@ -99,8 +102,8 @@ def test_map_overlap_raises():
         x = x + x.sum()
         return x
 
-    idx = lib.date_range("2020-01-01", periods=5, freq="D")
-    pdf = lib.DataFrame(1, index=idx, columns=["a"])
+    idx = pd.date_range("2020-01-01", periods=5, freq="D")
+    pdf = pd.DataFrame(1, index=idx, columns=["a"])
     df = from_pandas(pdf, npartitions=2)
 
     with pytest.raises(NotImplementedError, match="is less than"):
@@ -108,9 +111,6 @@ def test_map_overlap_raises():
 
     with pytest.raises(NotImplementedError, match="is less than"):
         df.map_overlap(func, before=0, after=5).compute()
-
-    with pytest.raises(NotImplementedError, match="is less than"):
-        df.map_overlap(func, before="5D", after=0).compute()
 
     with pytest.raises(NotImplementedError, match="is less than"):
         df.map_overlap(func, before=0, after="5D").compute()
@@ -149,7 +149,7 @@ def test_map_overlap_divisions(df, pdf):
     result = df.bfill()
     assert result.divisions == result.optimize().divisions
 
-    pdf.index = lib.date_range("2019-12-31", freq="s", periods=len(pdf))
+    pdf.index = pd.date_range("2019-12-31", freq="s", periods=len(pdf))
     df = from_pandas(pdf, npartitions=10)
     result = df.shift(freq="2s")
     assert result.known_divisions
@@ -169,11 +169,11 @@ def test_map_partitions_partition_info(df):
 
     df = df.map_partitions(f, meta=df._meta)
     result = df.compute(scheduler="single-threaded")
-    assert type(result) == lib.DataFrame
+    assert type(result) == pd.DataFrame
 
 
 def test_map_overlap_provide_meta():
-    df = lib.DataFrame(
+    df = pd.DataFrame(
         {"x": [1, 2, 4, 7, 11], "y": [1.0, 2.0, 3.0, 4.0, 5.0]}
     ).rename_axis("myindex")
     ddf = from_pandas(df, npartitions=2)
@@ -181,6 +181,12 @@ def test_map_overlap_provide_meta():
     # Provide meta spec, but not full metadata
     res = ddf.map_overlap(
         lambda df: df.rolling(2).sum(), 2, 0, meta={"x": "i8", "y": "i8"}
+    )
+    sol = df.rolling(2).sum()
+    assert_eq(res, sol)
+
+    res = map_overlap(
+        lambda df: df.rolling(2).sum(), ddf, 2, 0, meta={"x": "i8", "y": "i8"}
     )
     sol = df.rolling(2).sum()
     assert_eq(res, sol)
@@ -202,7 +208,7 @@ def test_map_overlap_errors(df):
 
     # Timedelta offset with non-datetime
     with pytest.raises(TypeError):
-        df.map_overlap(func, lib.Timedelta("1s"), lib.Timedelta("1s"), 0, 2, c=2)
+        df.map_overlap(func, pd.Timedelta("1s"), pd.Timedelta("1s"), 0, 2, c=2)
 
     # String timedelta offset with non-datetime
     with pytest.raises(TypeError):
@@ -211,19 +217,19 @@ def test_map_overlap_errors(df):
 
 @pytest.mark.parametrize("clear_divisions", [True, False])
 def test_align_dataframes(clear_divisions):
-    df1 = lib.DataFrame({"A": [1, 2, 3, 3, 2, 3], "B": [1, 2, 3, 4, 5, 6]})
-    df2 = lib.DataFrame({"A": [3, 1, 2], "C": [1, 2, 3]})
+    df1 = pd.DataFrame({"A": [1, 2, 3, 3, 2, 3], "B": [1, 2, 3, 4, 5, 6]})
+    df2 = pd.DataFrame({"A": [3, 1, 2], "C": [1, 2, 3]})
     ddf1 = from_pandas(df1, npartitions=2)
     ddf2 = from_pandas(df2, npartitions=1)
 
     actual = ddf1.map_partitions(
-        lib.merge, df2, align_dataframes=False, left_on="A", right_on="A", how="left"
+        pd.merge, df2, align_dataframes=False, left_on="A", right_on="A", how="left"
     )
-    expected = lib.merge(df1, df2, left_on="A", right_on="A", how="left")
+    expected = pd.merge(df1, df2, left_on="A", right_on="A", how="left")
     assert_eq(actual, expected, check_index=False, check_divisions=False)
 
     actual = ddf2.map_partitions(
-        lib.merge,
+        pd.merge,
         ddf1,
         align_dataframes=False,
         clear_divisions=clear_divisions,
@@ -231,5 +237,116 @@ def test_align_dataframes(clear_divisions):
         right_on="A",
         how="right",
     )
-    expected = lib.merge(df2, df1, left_on="A", right_on="A", how="right")
+    expected = pd.merge(df2, df1, left_on="A", right_on="A", how="right")
     assert_eq(actual, expected, check_index=False, check_divisions=False)
+
+
+def shifted_sum(df, before, after, c=0):
+    a = df.shift(before)
+    b = df.shift(-after)
+    return df + a + b + c
+
+
+@pytest.mark.parametrize("use_dask_input", [True, False])
+@pytest.mark.parametrize("npartitions", [1, 4])
+@pytest.mark.parametrize("enforce_metadata", [True, False])
+@pytest.mark.parametrize("transform_divisions", [True, False])
+@pytest.mark.parametrize("align_dataframes", [True, False])
+@pytest.mark.parametrize(
+    "overlap_setup",
+    [
+        (0, 3),
+        (3, 0),
+        (3, 3),
+        (0, 0),
+    ],
+)
+def test_map_overlap_multiple_dataframes(
+    use_dask_input,
+    npartitions,
+    enforce_metadata,
+    transform_divisions,
+    align_dataframes,
+    overlap_setup,
+    pdf,
+):
+    before, after = overlap_setup
+
+    ddf = pdf
+    ddf2 = pdf * 2
+    if use_dask_input:
+        ddf = from_pandas(ddf, npartitions)
+        ddf2 = from_pandas(ddf2, 2 if align_dataframes else npartitions)
+
+    def get_shifted_sum_arg(overlap):
+        return (
+            overlap.seconds - 1 if isinstance(overlap, datetime.timedelta) else overlap
+        )
+
+    before_shifted_sum, after_shifted_sum = get_shifted_sum_arg(
+        before
+    ), get_shifted_sum_arg(after)
+
+    # DataFrame
+    res = map_overlap(
+        shifted_sum,
+        ddf,
+        before,
+        after,
+        before_shifted_sum,
+        after_shifted_sum,
+        ddf2,
+        align_dataframes=align_dataframes,
+        transform_divisions=transform_divisions,
+        enforce_metadata=enforce_metadata,
+    )
+    sol = shifted_sum(pdf, before_shifted_sum, after_shifted_sum, pdf * 2)
+    assert_eq(res, sol)
+
+    # Series
+    res = map_overlap(
+        shifted_sum,
+        ddf.x,
+        before,
+        after,
+        before_shifted_sum,
+        after_shifted_sum,
+        ddf2.x,
+        align_dataframes=align_dataframes,
+        transform_divisions=transform_divisions,
+        enforce_metadata=enforce_metadata,
+    )
+    sol = shifted_sum(pdf.x, before_shifted_sum, after_shifted_sum, pdf.x * 2)
+    assert_eq(res, sol)
+
+
+def test_map_partitions_propagates_index_metadata():
+    index = pd.Series(list("abcde"), name="myindex")
+    df = pd.DataFrame(
+        {"A": np.arange(5, dtype=np.int32), "B": np.arange(10, 15, dtype=np.int32)},
+        index=index,
+    )
+    ddf = from_pandas(df, npartitions=2)
+    res = ddf.map_partitions(
+        lambda df: df.assign(C=df.A + df.B),
+        meta=[("A", "i4"), ("B", "i4"), ("C", "i4")],
+    )
+    sol = df.assign(C=df.A + df.B)
+    assert_eq(res, sol)
+
+    res = ddf.map_partitions(lambda df: df.rename_axis("newindex"))
+    sol = df.rename_axis("newindex")
+    assert_eq(res, sol)
+
+
+def test_token_given(df, pdf):
+    def my_func(df):
+        return df + 1
+
+    result = df.map_partitions(my_func, token="token_given")
+    assert result._name.split("-")[0] == "token_given"
+    assert_eq(result, pdf + 1)
+
+    result = df.map_partitions(my_func)
+    assert result._name.split("-")[0] == "my_func"
+    assert_eq(result, pdf + 1)

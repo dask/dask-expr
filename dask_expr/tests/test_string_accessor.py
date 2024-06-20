@@ -1,21 +1,22 @@
-import numpy as np
 import pytest
 from dask.dataframe._compat import PANDAS_GE_200
 
-from dask_expr._collection import from_pandas
+from dask_expr._collection import DataFrame, from_pandas
 from dask_expr.tests._util import _backend_library, assert_eq
 
-lib = _backend_library()
+pd = _backend_library()
 
 
 @pytest.fixture()
 def ser():
-    return lib.Series(["a", "b", "1", "aaa", "bbb", "ccc", "ddd", "abcd"])
+    return pd.Series(["a", "b", "1", "aaa", "bbb", "ccc", "ddd", "abcd"])
 
 
 @pytest.fixture()
 def dser(ser):
-    return from_pandas(ser, npartitions=3)
+    import dask.dataframe as dd
+
+    return dd.from_pandas(ser, npartitions=3)
 
 
 @pytest.mark.parametrize(
@@ -75,11 +76,31 @@ def dser(ser):
         ("split", {"pat": "a"}),
         ("rsplit", {"pat": "a"}),
         ("cat", {}),
-        ("cat", {"others": lib.Series(["a"])}),
+        ("cat", {"others": pd.Series(["a"])}),
     ],
 )
 def test_string_accessor(ser, dser, func, kwargs):
+    ser = ser.astype("string[pyarrow]")
+
     assert_eq(getattr(ser.str, func)(**kwargs), getattr(dser.str, func)(**kwargs))
+
+    if func in (
+        "contains",
+        "endswith",
+        "fullmatch",
+        "isalnum",
+        "isalpha",
+        "isdecimal",
+        "isdigit",
+        "islower",
+        "isspace",
+        "istitle",
+        "isupper",
+        "startswith",
+        "match",
+    ):
+        # This returns arrays and doesn't work in dask/dask either
+        return
 
     ser.index = ser.values
     ser = ser.sort_index()
@@ -89,10 +110,7 @@ def test_string_accessor(ser, dser, func, kwargs):
     if func == "cat" and len(kwargs) > 0:
         # Doesn't work with others on Index
         return
-
-    if isinstance(pdf_result, np.ndarray):
-        pdf_result = lib.Index(pdf_result)
-    if isinstance(pdf_result, lib.DataFrame):
+    if isinstance(pdf_result, pd.DataFrame):
         assert_eq(
             getattr(dser.index.str, func)(**kwargs), pdf_result, check_index=False
         )
@@ -117,7 +135,7 @@ def test_str_accessor_cat(ser, dser):
 
 @pytest.mark.parametrize("index", [None, [0]], ids=["range_index", "other index"])
 def test_str_split_(index):
-    df = lib.DataFrame({"a": ["a\nb"]}, index=index)
+    df = pd.DataFrame({"a": ["a\nb"]}, index=index)
     ddf = from_pandas(df, npartitions=1)
 
     pd_a = df["a"].str.split("\n", n=1, expand=True)
@@ -127,10 +145,19 @@ def test_str_split_(index):
 
 
 def test_str_accessor_not_available():
-    pdf = lib.DataFrame({"a": [1, 2, 3]})
+    pdf = pd.DataFrame({"a": [1, 2, 3]})
     df = from_pandas(pdf, npartitions=2)
     # Not available on invalid dtypes
     with pytest.raises(AttributeError, match=".str accessor"):
         df.a.str
 
     assert "str" not in dir(df.a)
+
+
+def test_partition():
+    df = DataFrame.from_dict({"A": ["A|B", "C|D"]}, npartitions=2)["A"].str.partition(
+        "|"
+    )
+    result = df[1]
+    expected = pd.DataFrame.from_dict({"A": ["A|B", "C|D"]})["A"].str.partition("|")[1]
+    assert_eq(result, expected)
