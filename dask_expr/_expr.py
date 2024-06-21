@@ -2970,7 +2970,7 @@ class _DelayedExpr(Expr):
         return 0
 
 
-class DelayedExprs(Expr):
+class DelayedsExpr(Expr):
     _parameters = []
 
     def __init__(self, *delayed_objects):
