@@ -5796,8 +5796,8 @@ def from_map(
     Parameters
     ----------
     func : callable
-        Function used to create each partition. If ``func`` satisfies the
-        ``DataFrameIOFunction`` protocol, column projection will be enabled.
+        Function used to create each partition. Column projection will be
+        enabled if the function has a ``columns`` keyword argument.
     *iterables : Iterable objects
         Iterable objects to map to each output partition. All iterables must
         be the same length. This length determines the number of partitions
