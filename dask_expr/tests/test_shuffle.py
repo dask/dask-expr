@@ -134,18 +134,21 @@ def test_shuffle_str_column_not_in_dataframe(df):
     # ddf = from_pandas(pdf, npartitions=10)
     with pytest.raises(
         KeyError,
-        match="Cannot shuffle on 'z', as it is not in target DataFrame columns",
-    ):
+        match="Cannot shuffle on",
+    ) as execinfo:
         df.shuffle(on="z")  # .compute()
+    assert "z" in str(execinfo.value)
 
 
 def test_shuffle_mixed_list_column_not_in_dataframe(df):
     # not all cols in list are not in dataframe
     with pytest.raises(
         KeyError,
-        match="Cannot shuffle on 'z', as it is not in target DataFrame columns",
-    ):
+        match="Cannot shuffle on",
+    ) as execinfo:
         df.shuffle(["x", "z"])
+    assert "z" in str(execinfo.value)
+    assert "x" not in str(execinfo.value)
 
 
 def test_shuffle_list_column_not_in_dataframe(df):
