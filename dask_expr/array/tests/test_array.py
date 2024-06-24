@@ -124,7 +124,6 @@ def test_slicing_optimization():
     assert b.T[5:].optimize()._name == b[:, 5:].T._name
 
 
-@pytest.mark.xfail(reason="Blockwise specifies too much about dimension")
 def test_slicing_optimization_change_dimensionality():
     a = np.random.random((10, 20))
     b = da.from_array(a, chunks=(2, 5))

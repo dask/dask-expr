@@ -1,3 +1,4 @@
+import functools
 import itertools
 import numbers
 from collections.abc import Iterable
@@ -45,18 +46,24 @@ class Blockwise(Array):
         "kwargs": None,
     }
 
-    @property
+    @functools.cached_property
     def args(self):
         return self.operands[len(self._parameters) :]
 
-    @property
+    @functools.cached_property
+    def _meta_provided(self):
+        # We catch recursion errors if key starts with _meta, so define
+        # explicitly here
+        return self.operand("_meta_provided")
+
+    @functools.cached_property
     def _meta(self):
         if self._meta_provided is not None:
             return self._meta_provided
         else:
             return compute_meta(self.func, self.dtype, *self.args[::2], **self.kwargs)
 
-    @property
+    @functools.cached_property
     def chunks(self):
         if self.align_arrays:
             chunkss, arrays = unify_chunks(*self.args)
@@ -101,11 +108,11 @@ class Blockwise(Array):
         chunks = tuple(chunks)
         return chunks
 
-    @property
+    @functools.cached_property
     def dtype(self):
         return self.operand("dtype")
 
-    @property
+    @functools.cached_property
     def _name(self):
         if "name" in self._parameters and self.operand("name"):
             return self.operand("name")
