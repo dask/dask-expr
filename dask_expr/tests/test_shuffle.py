@@ -131,12 +131,11 @@ def test_task_shuffle_index(npartitions, max_branch, pdf):
 
 
 def test_shuffle_str_column_not_in_dataframe(df):
-    # ddf = from_pandas(pdf, npartitions=10)
     with pytest.raises(
         KeyError,
         match="Cannot shuffle on",
     ) as execinfo:
-        df.shuffle(on="z")  # .compute()
+        df.shuffle(on="z")
     assert "z" in str(execinfo.value)
 
 
