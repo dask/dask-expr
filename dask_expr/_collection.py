@@ -923,7 +923,7 @@ Expr={expr}"""
                 raise TypeError(
                     f"p2p requires all column names to be str, found: {unsupported}",
                 )
-
+        # Returned shuffled result
         return new_collection(
             RearrangeByColumn(
                 self,
