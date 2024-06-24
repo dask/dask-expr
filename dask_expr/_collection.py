@@ -900,14 +900,20 @@ Expr={expr}"""
             if pd.api.types.is_list_like(on) and not is_dask_collection(on):
                 on = list(on)
             elif isinstance(on, str):
-                on =[on] #this doesn't split the string into characters, it just makes a list with the string as the only element
-            # Check if 'on' is a valid column
-            bad_cols = [index_col for index_col in on if (index_col not in self.columns) and (index_col != self.index.name)]
-            # Adding this check so it collects all bad columns at once rather than requiring multiple runs
+                on = [on]
+            bad_cols = [
+                index_col
+                for index_col in on
+                if (index_col not in self.columns) and (index_col != self.index.name)
+            ]
             if len(bad_cols) == 1:
-                raise KeyError(f"Cannot shuffle on '{bad_cols[0]}', as it is not in target DataFrame columns")
+                raise KeyError(
+                    f"Cannot shuffle on '{bad_cols[0]}', as it is not in target DataFrame columns"
+                )
             elif len(bad_cols) > 1:
-                raise KeyError(f"Cannot shuffle on {bad_cols}, as they are not in target DataFrame columns")
+                raise KeyError(
+                    f"Cannot shuffle on {bad_cols}, as they are not in target DataFrame columns"
+                )
 
         if (shuffle_method or get_default_shuffle_method()) == "p2p":
             from distributed.shuffle._arrow import check_dtype_support
