@@ -132,29 +132,33 @@ def test_task_shuffle_index(npartitions, max_branch, pdf):
 
 def test_shuffle_str_column_not_in_dataframe(df):
     # ddf = from_pandas(pdf, npartitions=10)
-    with pytest.raises(KeyError, 
-    match="Cannot shuffle on 'z', as it is not in target DataFrame columns"
+    with pytest.raises(
+        KeyError,
+        match="Cannot shuffle on 'z', as it is not in target DataFrame columns",
     ):
-        df.shuffle(on="z")#.compute()
+        df.shuffle(on="z")  # .compute()
+
 
 def test_shuffle_mixed_list_column_not_in_dataframe(df):
     # not all cols in list are not in dataframe
-    with pytest.raises(KeyError,
-    match= "Cannot shuffle on 'z', as it is not in target DataFrame columns"
-    ): 
+    with pytest.raises(
+        KeyError,
+        match="Cannot shuffle on 'z', as it is not in target DataFrame columns",
+    ):
         df.shuffle(["x", "z"])
+
 
 def test_shuffle_list_column_not_in_dataframe(df):
     # all cols in list are not in dataframe
-    with pytest.raises(KeyError,
-
-    match=r"Cannot shuffle on") as excinfo: 
+    with pytest.raises(KeyError, match=r"Cannot shuffle on") as excinfo:
         df.shuffle(["zz", "z"])
     assert "z" in str(excinfo.value)
     assert "zz" in str(excinfo.value)
 
+
 def test_shuffle_column_columns(df):
     df.shuffle(df.columns[-1])
+
 
 def test_shuffle_column_projection(df):
     df2 = df.shuffle("x")[["x"]].simplify()
