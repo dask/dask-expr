@@ -140,7 +140,6 @@ def test_shuffle_str_column_not_in_dataframe(df):
 
 
 def test_shuffle_mixed_list_column_not_in_dataframe(df):
-    # not all cols in list are not in dataframe
     with pytest.raises(
         KeyError,
         match="Cannot shuffle on",
@@ -151,7 +150,6 @@ def test_shuffle_mixed_list_column_not_in_dataframe(df):
 
 
 def test_shuffle_list_column_not_in_dataframe(df):
-    # all cols in list are not in dataframe
     with pytest.raises(KeyError, match=r"Cannot shuffle on") as excinfo:
         df.shuffle(["zz", "z"])
     assert "z" in str(excinfo.value)
