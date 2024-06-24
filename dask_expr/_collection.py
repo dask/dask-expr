@@ -899,20 +899,16 @@ Expr={expr}"""
         else:
             if pd.api.types.is_list_like(on) and not is_dask_collection(on):
                 on = list(on)
-            elif isinstance(on, str):
+            elif isinstance(on, str) or isinstance(on, int):
                 on = [on]
             bad_cols = [
                 index_col
                 for index_col in on
                 if (index_col not in self.columns) and (index_col != self.index.name)
             ]
-            if len(bad_cols) == 1:
+            if bad_cols:
                 raise KeyError(
-                    f"Cannot shuffle on '{bad_cols[0]}', as it is not in target DataFrame columns"
-                )
-            elif len(bad_cols) > 1:
-                raise KeyError(
-                    f"Cannot shuffle on {bad_cols}, as they are not in target DataFrame columns"
+                    f"Cannot shuffle on {bad_cols}, column(s) not in dataframe to shuffle"
                 )
 
         if (shuffle_method or get_default_shuffle_method()) == "p2p":
