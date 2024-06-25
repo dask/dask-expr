@@ -796,7 +796,7 @@ def test_groupby_index_array(pdf):
     pdf.index = pd.date_range(start="2020-12-31", freq="D", periods=len(pdf))
     df = from_pandas(pdf, npartitions=10)
     # pandas loses the freq for mac but keeps it on ubuntu
-    expected = pdf.x.groupby(df.index).nunique()
+    expected = pdf.x.groupby(pdf.index).nunique()
     expected.index.freq = None
 
     assert_eq(
