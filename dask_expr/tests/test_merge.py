@@ -8,7 +8,7 @@ from dask_expr._expr import Filter, Projection
 from dask_expr._merge import BroadcastJoin
 from dask_expr._shuffle import Shuffle
 from dask_expr.io import FromPandas
-from dask_expr.tests._util import _backend_library, assert_eq
+from dask_expr.tests._util import _backend_library, _backend_name, assert_eq
 
 # Set DataFrame backend for this module
 pd = _backend_library()
@@ -994,6 +994,33 @@ def test_merge_leftsemi():
     df2 = from_pandas(pdf2, npartitions=2)
     with pytest.raises(NotImplementedError, match="on columns from the index"):
         df1.merge(df2, how="leftsemi", on="aa")
+
+
+@pytest.mark.xfail(
+    _backend_name() != "cudf", reason="leftanti joins not supported with pandas backend"
+)
+def test_merge_leftanti_cudf():
+    pdf1 = pd.DataFrame({"aa": [1, 2, 3, 4, 5, 6, 1, 2, 3], "bb": 1})
+    pdf2 = pd.DataFrame({"aa": [1, 2, 2, 4, 4, 10], "cc": 1})
+
+    df1 = from_pandas(pdf1, npartitions=2)
+    df2 = from_pandas(pdf2, npartitions=2)
+    assert_eq(
+        df1.merge(df2, how="leftanti"),
+        pdf1[~pdf1.aa.isin(pdf2.aa)],
+        check_index=False,
+    )
+    df2 = df2.rename(columns={"aa": "dd"})
+    assert_eq(
+        df1.merge(df2, how="leftanti", left_on="aa", right_on="dd"),
+        pdf1[~pdf1.aa.isin(pdf2.aa)],
+        check_index=False,
+    )
+    assert_eq(df1.merge(df2, how="leftanti"), pdf1[~pdf1.index.isin(pdf2.index)])
+
+    pdf2 = pdf2.set_index("aa")
+    df2 = from_pandas(pdf2, npartitions=2)
+    assert_eq(df1.merge(df2, how="leftanti", on="aa"), pdf1[~pdf1.aa.isin(pdf2.index)])
 
 
 def test_merge_suffix_projections():
