@@ -12,3 +12,4 @@ from dask_expr.array.reductions import (
     sum,
     var,
 )
+from dask_expr.array._creation import arange

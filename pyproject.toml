@@ -75,3 +75,6 @@ filterwarnings = [
     'error:\nA value is trying to be set on a copy of a slice from a DataFrame',
 ]
 xfail_strict = true
+
+[tool.isort]
+skip=["dask_expr/array/__init__.py"]
