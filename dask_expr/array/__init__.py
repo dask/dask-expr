@@ -1,3 +1,5 @@
+# isort: skip_file
+
 from dask_expr.array import random
 from dask_expr.array.core import Array, asarray, from_array
 from dask_expr.array.reductions import (
