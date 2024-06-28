@@ -78,3 +78,4 @@ xfail_strict = true
 
 [tool.isort]
 skip=["dask_expr/array/__init__.py"]
+profile = "black"
