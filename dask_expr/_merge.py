@@ -195,6 +195,11 @@ class Merge(Expr):
             kwargs["how"] = "left"
         return make_meta(left.merge(right, **kwargs))
 
+    def __exec__(self):
+        left = self.left.__exec__()
+        right = self.right.__exec__()
+        return left.merge(right, **self.kwargs)
+
     @functools.cached_property
     def _npartitions(self):
         if self.operand("_npartitions") is not None:

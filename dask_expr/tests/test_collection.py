@@ -2665,3 +2665,11 @@ def test_empty_from_pandas_projection():
     df["foo"] = from_pandas(foo, npartitions=1)
     pdf["foo"] = foo
     assert_eq(df["foo"], pdf["foo"])
+
+
+def test_exec():
+    pdf = pd.DataFrame({"a": [1, 2, 3, 4, 5, 6], "b": 1, "c": 2})
+    df = from_pandas(pdf.copy())
+    result = (df + 1).sort_values("a")["a"]
+    result_pd = (pdf + 1).sort_values("a")["a"]
+    assert_eq(result.exec(), result_pd)
