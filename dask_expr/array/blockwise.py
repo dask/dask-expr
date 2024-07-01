@@ -179,7 +179,7 @@ class Blockwise(Array):
         )
         return dict(graph)
 
-    def _simplify_down(self):
+    def _lower(self):
         if self.align_arrays:
             _, arrays, changed = unify_chunks(*self.args)
             if changed:
