@@ -616,7 +616,7 @@ def is_scalar_for_elemwise(arg):
 class Transpose(Blockwise):
     _parameters = ["array", "axes"]
     func = staticmethod(np.transpose)
-    align_arrays = True
+    align_arrays = False
     adjust_chunks = None
     concatenate = None
     token = "transpose"
@@ -748,7 +748,7 @@ def unify_chunks(*args, **kwargs):
             chunks = tuple(
                 chunkss[j]
                 if a.shape[n] > 1
-                else a.shape[n]
+                else (a.shape[n],)
                 if not np.isnan(sum(chunkss[j]))
                 else None
                 for n, j in enumerate(i)

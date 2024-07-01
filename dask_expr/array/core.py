@@ -115,10 +115,11 @@ class Array(core.Expr, DaskMethodsMixin):
         return dtype
 
     def __dask_keys__(self):
+        out = self.lower_completely()
         if self._cached_keys is not None:
             return self._cached_keys
 
-        name, chunks, numblocks = self.name, self.chunks, self.numblocks
+        name, chunks, numblocks = out.name, out.chunks, out.numblocks
 
         def keys(*args):
             if not chunks:
@@ -160,6 +161,9 @@ class Array(core.Expr, DaskMethodsMixin):
         method=None,
     ):
         from dask_expr.array.rechunk import Rechunk
+
+        if isinstance(chunks, tuple):
+            assert len(chunks) == self.ndim
 
         return Rechunk(self, chunks, threshold, block_size_limit, balance, method)
 
