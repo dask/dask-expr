@@ -218,3 +218,12 @@ def test_unify_chunks():
     bb = da.asarray(b, chunks=(10,))
 
     assert_eq(a + b, aa + bb)
+
+
+def test_array_function():
+    a = np.random.random((10, 20))
+    aa = da.asarray(a, chunks=(4, 5))
+
+    assert isinstance(np.nanmean(aa), da.Array)
+
+    assert_eq(np.nanmean(aa), np.nanmean(a))

@@ -56,8 +56,20 @@ class Array(core.Expr, DaskMethodsMixin):
     def __array_ufunc__(self, numpy_ufunc, method, *inputs, **kwargs):
         raise NotImplementedError()
 
-    def __array_function__(self, *args, **kwargs):
-        raise NotImplementedError()
+    def __array_function__(self, func, types, args, kwargs):
+        # TODO: look at dask.array implementation to find lots of other cases
+        import dask_expr.array as module
+
+        for submodule in func.__module__.split(".")[1:]:
+            try:
+                module = getattr(module, submodule)
+            except AttributeError:
+                # TODO
+                # return handle_nonmatching_names(func, args, kwargs)
+                raise
+
+        da_func = getattr(module, func.__name__)
+        return da_func(*args, **kwargs)
 
     def __array__(self):
         return self.compute()
