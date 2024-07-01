@@ -53,7 +53,6 @@ from dask_expr._expr import (
     Index,
     Lengths,
     Literal,
-    Mod,
     Or,
     Projection,
     determine_column_projection,
@@ -716,7 +715,7 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
     def _filter_passthrough_available(self, parent, dependents):
         return (
             super()._filter_passthrough_available(parent, dependents)
-            and (isinstance(parent.predicate, (LE, GE, LT, GT, EQ, NE, And, Or, Mod)))
+            and (isinstance(parent.predicate, (LE, GE, LT, GT, EQ, NE, And, Or)))
             and _DNF.extract_pq_filters(self, parent.predicate)._filters is not None
         )
 
@@ -1668,25 +1667,7 @@ class _DNF:
                 column = predicate_expr.right.columns[0]
                 value = predicate_expr.left
                 _filters = (column, op, value)
-            elif (
-                not isinstance(predicate_expr.right, Expr)
-                and isinstance(predicate_expr.left, Mod)
-                and isinstance(predicate_expr.left.right, int)
-                and isinstance(predicate_expr.left.left, Projection)
-                and predicate_expr.left.left.frame._name == pq_expr._name
-            ):
-                divisor = predicate_expr.left.right
-                remainder = predicate_expr.right
-                _filters = [
-                    pc.subtract(
-                        pc.field(predicate_expr.left.left.name),
-                        pc.multiply(
-                            pc.divide(pc.field(predicate_expr.left.left.name), divisor),
-                            divisor,
-                        ),
-                    )
-                    == remainder
-                ]
+
         elif isinstance(predicate_expr, (And, Or)):
             left = cls.extract_pq_filters(pq_expr, predicate_expr.left)._filters
             right = cls.extract_pq_filters(pq_expr, predicate_expr.right)._filters
@@ -1695,8 +1676,6 @@ class _DNF:
                     _filters = cls._And([left, right])
                 else:
                     _filters = cls._Or([left, right])
-        elif isinstance(predicate_expr, Mod):
-            pass
 
         return _DNF(_filters)
 
