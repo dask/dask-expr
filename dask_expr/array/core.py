@@ -47,6 +47,12 @@ class Array(core.Expr, DaskMethodsMixin):
             key_split(state._name),
         )
 
+    def __dask_graph__(self):
+        expr = self.lower_completely()
+        if expr._name == self._name:
+            return super().__dask_graph__()
+        return expr.__dask_graph__()
+
     def compute(self, **kwargs):
         return DaskMethodsMixin.compute(self.simplify(), **kwargs)
 
