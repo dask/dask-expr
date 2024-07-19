@@ -584,6 +584,7 @@ class P2PShuffle(SimpleShuffle):
         parts_out = (
             self._partitions if self._filtered else list(range(self.npartitions_out))
         )
+        # Avoid embedding a materialized list unless necessary
         parts_out_arg = (
             set(self._partitions) if self._filtered else self.npartitions_out
         )
