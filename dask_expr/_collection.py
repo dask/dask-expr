@@ -5099,17 +5099,18 @@ def from_dask_array(x, columns=None, index=None, meta=None):
     return from_legacy_dataframe(df, optimize=True)
 
 
+@dataframe_creation_dispatch.register_inplace("pandas")
 def read_csv(
     path,
     *args,
     header="infer",
     dtype_backend=None,
     storage_options=None,
+    _legacy_backend="pandas",
     **kwargs,
 ):
     from dask_expr.io.csv import ReadCSV
 
-    dataframe_backend = config.get("dataframe.backend", "pandas")
     if not isinstance(path, str):
         path = stringify_path(path)
     return new_collection(
@@ -5119,7 +5120,7 @@ def read_csv(
             storage_options=storage_options,
             kwargs=kwargs,
             header=header,
-            dataframe_backend=dataframe_backend,
+            dataframe_backend=_legacy_backend,
         )
     )
 
@@ -5174,6 +5175,7 @@ def read_fwf(
     )
 
 
+@dataframe_creation_dispatch.register_inplace("pandas")
 def read_parquet(
     path=None,
     columns=None,
