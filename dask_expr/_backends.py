@@ -5,7 +5,9 @@ import pandas as pd
 from dask.backends import CreationDispatch
 from dask.dataframe.backends import DataFrameBackendEntrypoint
 
+from dask_expr._collection import new_collection
 from dask_expr._dispatch import get_collection_type
+from dask_expr._expr import ToBackend
 
 try:
     import sparse
@@ -32,6 +34,14 @@ dataframe_creation_dispatch = CreationDispatch(
 )
 
 
+class ToPandasBackend(ToBackend):
+    @staticmethod
+    def operation(df, options):
+        from dask.dataframe.dispatch import to_pandas_dispatch
+
+        return to_pandas_dispatch(df, **options)
+
+
 class PandasBackendEntrypoint(DataFrameBackendEntrypoint):
     """Pandas-Backend Entrypoint Class for Dask-Expressions
 
@@ -50,7 +60,9 @@ class PandasBackendEntrypoint(DataFrameBackendEntrypoint):
         if isinstance(data._meta, (pd.DataFrame, pd.Series, pd.Index)):
             # Already a pandas-backed collection
             return data
-        return data.map_partitions(cls.to_backend_dispatch(), **kwargs)
+        return new_collection(
+            ToPandasBackend(data, kwargs)
+        )  # data.map_partitions(cls.to_backend_dispatch(), **kwargs)
 
 
 dataframe_creation_dispatch.register_backend("pandas", PandasBackendEntrypoint())
