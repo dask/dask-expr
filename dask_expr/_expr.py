@@ -52,7 +52,7 @@ from dask.utils import (
     random_state_data,
 )
 from pandas.errors import PerformanceWarning
-from tlz import merge_sorted, partition, unique
+from tlz import merge, merge_sorted, partition, unique
 
 from dask_expr import _core as core
 from dask_expr._util import (
@@ -86,6 +86,11 @@ class Expr(core.Expr):
             return meta.ndim
         except AttributeError:
             return 0
+
+    @functools.cached_property
+    def _resources(self):
+        dep_resources = merge(dep._resources or {} for dep in self.dependencies())
+        return dep_resources or None
 
     def __dask_keys__(self):
         return [(self._name, i) for i in range(self.npartitions)]
@@ -1303,11 +1308,24 @@ class _DeepCopy(Elemwise):
         return df.copy(deep=True)
 
 
-class ResourceBarrier(Elemwise):
-    _parameters = ["frame", "resources"]
+class ResourceBarrier(Expr):
+    @property
+    def _resources(self):
+        raise NotImplementedError()
+
+    def __str__(self):
+        return f"{type(self).__name__}({self._resources})"
+
+
+class ElemwiseResourceBarrier(Elemwise, ResourceBarrier):
+    _parameters = ["frame", "resource_spec"]
     _projection_passthrough = True
     _filter_passthrough = True
     _preserves_partitioning_information = True
+
+    @property
+    def _resources(self):
+        return self.resource_spec
 
     def _task(self, index: int):
         return (self.frame._name, index)

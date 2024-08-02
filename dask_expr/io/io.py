@@ -19,6 +19,7 @@ from dask_expr._expr import (
     Literal,
     PartitionsFiltered,
     Projection,
+    ResourceBarrier,
     determine_column_projection,
     no_default,
 )
@@ -29,6 +30,14 @@ from dask_expr._util import _BackendData, _convert_to_list, _tokenize_determinis
 class IO(Expr):
     def __str__(self):
         return f"{type(self).__name__}({self._name[-7:]})"
+
+
+class IOResourceBarrier(ResourceBarrier):
+    _parameters = ["resource_spec"]
+
+    @property
+    def _resources(self):
+        return self.resource_spec
 
 
 class FromGraph(IO):

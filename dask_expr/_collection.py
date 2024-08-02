@@ -2503,7 +2503,7 @@ Expr={expr}"""
         return self.to_legacy_dataframe().to_delayed(optimize_graph=optimize_graph)
 
     def resource_barrier(self, resources):
-        return new_collection(expr.ResourceBarrier(self.expr, resources))
+        return new_collection(expr.ElemwiseResourceBarrier(self.expr, resources))
 
     def to_backend(self, backend: str | None = None, **kwargs):
         """Move to a new DataFrame backend
@@ -5203,6 +5203,7 @@ def read_parquet(
     filesystem="fsspec",
     engine=None,
     arrow_to_pandas=None,
+    resources=None,
     **kwargs,
 ):
     """
@@ -5397,6 +5398,7 @@ def read_parquet(
     to_parquet
     pyarrow.parquet.ParquetDataset
     """
+    from dask_expr.io.io import IOResourceBarrier
     from dask_expr.io.parquet import (
         ReadParquetFSSpec,
         ReadParquetPyarrowFS,
@@ -5415,6 +5417,9 @@ def read_parquet(
             col, op, val = filter
             if op == "in" and not isinstance(val, (set, list, tuple)):
                 raise TypeError("Value of 'in' filter must be a list, set or tuple.")
+
+    if resources is not None:
+        resources = IOResourceBarrier(resources)
 
     if (
         isinstance(filesystem, pa_fs.FileSystem)
@@ -5465,6 +5470,7 @@ def read_parquet(
                 pyarrow_strings_enabled=pyarrow_strings_enabled(),
                 kwargs=kwargs,
                 _series=isinstance(columns, str),
+                resource_requirement=resources,
             )
         )
 
@@ -5487,6 +5493,7 @@ def read_parquet(
             engine=_set_parquet_engine(engine),
             kwargs=kwargs,
             _series=isinstance(columns, str),
+            resource_requirement=resources,
         )
     )
 
