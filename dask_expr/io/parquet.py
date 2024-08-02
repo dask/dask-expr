@@ -1100,7 +1100,7 @@ class ReadParquetPyarrowFS(ReadParquet):
             return
         if isinstance(parent, FusedParquetIO):
             return
-        return parent.substitute(self, FusedParquetIO(self))
+        return parent.substitute(self, FusedParquetIO(self, self.resource_requirement))
 
     @cached_property
     def fragments(self):

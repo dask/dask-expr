@@ -39,6 +39,9 @@ class IOResourceBarrier(ResourceBarrier):
     def _resources(self):
         return self.resource_spec
 
+    def _layer(self):
+        return {}
+
 
 class FromGraph(IO):
     """A DataFrame created from an opaque Dask task graph
@@ -158,7 +161,8 @@ class FusedIO(BlockwiseIO):
 
 
 class FusedParquetIO(FusedIO):
-    _parameters = ["_expr"]
+    _parameters = ["_expr", "resource_requirement"]
+    _defaults = {"resource_requirement": None}
 
     @functools.cached_property
     def _name(self):
@@ -167,6 +171,10 @@ class FusedParquetIO(FusedIO):
             + "-fused-parq-"
             + _tokenize_deterministic(*self.operands)
         )
+
+    def dependencies(self):
+        dep = self.resource_requirement
+        return [] if dep is None else [dep]
 
     @staticmethod
     def _load_multiple_files(
