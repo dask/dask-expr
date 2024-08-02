@@ -738,6 +738,42 @@ class Expr:
 
             yield node
 
+    def collect_task_resources(self) -> dict:
+        from dask_expr._expr import ResourceBarrier
+
+        if not self.find_operations(ResourceBarrier):
+            return {}
+
+        resources_annotation = {}
+        known_resources = {self._name: None}
+        stack = [self]
+        seen = set()
+        while stack:
+            node = stack.pop()
+            if node._name in seen:
+                continue
+            seen.add(node._name)
+
+            if isinstance(node, ResourceBarrier):
+                known_resources[node._name] = node.resources
+            resources = known_resources[node._name]
+
+            if resources:
+                resources_annotation.update(
+                    {
+                        k: (resources(k) if callable(resources) else resources)
+                        for k in node._layer().keys()
+                    }
+                )
+
+            for dep in node.dependencies():
+                if not isinstance(dep, ResourceBarrier):
+                    # TODO: Protect against conflicting resources
+                    known_resources[dep._name] = resources
+                stack.append(dep)
+
+        return resources_annotation
+
     def find_operations(self, operation: type | tuple[type]) -> Generator[Expr]:
         """Search the expression graph for a specific operation type
 

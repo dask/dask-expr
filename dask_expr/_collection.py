@@ -474,7 +474,11 @@ Expr={expr}"""
         if not isinstance(out, Scalar):
             out = out.repartition(npartitions=1)
         out = out.optimize(fuse=fuse)
-        return DaskMethodsMixin.compute(out, **kwargs)
+        return DaskMethodsMixin.compute(
+            out,
+            task_resources=out.expr.collect_task_resources(),
+            **kwargs,
+        )
 
     def analyze(self, filename: str | None = None, format: str | None = None) -> None:
         """Outputs statistics about every node in the expression.
@@ -2493,6 +2497,9 @@ Expr={expr}"""
         dask_expr.from_delayed
         """
         return self.to_legacy_dataframe().to_delayed(optimize_graph=optimize_graph)
+
+    def resource_barrier(self, resources):
+        return new_collection(expr.ResourceBarrier(self.expr, resources))
 
     def to_backend(self, backend: str | None = None, **kwargs):
         """Move to a new DataFrame backend

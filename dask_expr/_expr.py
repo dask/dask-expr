@@ -1303,6 +1303,23 @@ class _DeepCopy(Elemwise):
         return df.copy(deep=True)
 
 
+class ResourceBarrier(Elemwise):
+    _parameters = ["frame", "resources"]
+    _projection_passthrough = True
+    _filter_passthrough = True
+    _preserves_partitioning_information = True
+
+    def _task(self, index: int):
+        return (self.frame._name, index)
+
+    @property
+    def _meta(self):
+        return self.frame._meta
+
+    def _divisions(self):
+        return self.frame.divisions
+
+
 class RenameSeries(Elemwise):
     _parameters = ["frame", "index", "sorted_index"]
     _defaults = {"sorted_index": False}
@@ -3128,7 +3145,7 @@ def are_co_aligned(*exprs):
 
 def is_valid_blockwise_op(expr):
     return isinstance(expr, Blockwise) and not isinstance(
-        expr, (FromPandas, FromArray, FromDelayed)
+        expr, (FromPandas, FromArray, FromDelayed, ResourceBarrier)
     )
 
 
