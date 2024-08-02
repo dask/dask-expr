@@ -445,7 +445,11 @@ Expr={expr}"""
 
     def persist(self, fuse=True, **kwargs):
         out = self.optimize(fuse=fuse)
-        return DaskMethodsMixin.persist(out, **kwargs)
+        return DaskMethodsMixin.persist(
+            out,
+            task_resources=out.expr.collect_task_resources(),
+            **kwargs,
+        )
 
     def compute(self, fuse=True, **kwargs):
         """Compute this DataFrame.
