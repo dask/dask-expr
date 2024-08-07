@@ -121,6 +121,7 @@ from dask_expr._shuffle import (
 )
 from dask_expr._str_accessor import StringAccessor
 from dask_expr._util import (
+    PANDAS_GE_300,
     _BackendData,
     _convert_to_list,
     _get_shuffle_preferring_order,
@@ -400,7 +401,7 @@ class FrameBase(DaskMethodsMixin):
             if (
                 self.ndim == 2
                 and is_integer_slice
-                and not is_float_dtype(self.index.dtype)
+                and (not is_float_dtype(self.index.dtype) or PANDAS_GE_300)
             ):
                 return self.iloc[other]
             else:
@@ -1570,6 +1571,8 @@ Expr={expr}"""
                     )
                 else:
                     needs_time_conversion = True
+                    if axis == 1:
+                        numeric_dd = numeric_dd.astype(f"datetime64[{meta.array.unit}]")
                     for col in time_cols:
                         numeric_dd[col] = _convert_to_numeric(numeric_dd[col], skipna)
         else:
@@ -1577,7 +1580,16 @@ Expr={expr}"""
             if needs_time_conversion:
                 numeric_dd = _convert_to_numeric(self, skipna)
 
+        units = None
+        if needs_time_conversion and time_cols is not None:
+            units = [getattr(self._meta[c].array, "unit", None) for c in time_cols]
+
         if axis == 1:
+            _kwargs = (
+                {}
+                if not needs_time_conversion
+                else {"unit": meta.array.unit, "dtype": meta.dtype}
+            )
             return numeric_dd.map_partitions(
                 M.std if not needs_time_conversion else _sqrt_and_convert_to_timedelta,
                 meta=meta,
@@ -1586,6 +1598,7 @@ Expr={expr}"""
                 ddof=ddof,
                 enforce_metadata=False,
                 numeric_only=numeric_only,
+                **_kwargs,
             )
 
         result = numeric_dd.var(
@@ -1598,6 +1611,8 @@ Expr={expr}"""
                 "time_cols": time_cols,
                 "axis": axis,
                 "dtype": getattr(meta, "dtype", None),
+                "unit": getattr(meta, "unit", None),
+                "units": units,
             }
             sqrt_func = _sqrt_and_convert_to_timedelta
         else:
