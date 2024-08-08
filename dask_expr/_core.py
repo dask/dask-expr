@@ -61,6 +61,11 @@ class Expr:
         Expr._instances[_name] = inst
         return inst
 
+    def __exec__(self):
+        raise NotImplementedError(
+            f"Backend exec is not yet supported for {type(self)}."
+        )
+
     def _tune_down(self):
         return None
 
