@@ -828,6 +828,7 @@ class ReadParquetPyarrowFS(ReadParquet):
         "arrow_to_pandas",
         "pyarrow_strings_enabled",
         "kwargs",
+        "resource_requirement",
         "_partitions",
         "_series",
         "_dataset_info_cache",
@@ -844,6 +845,7 @@ class ReadParquetPyarrowFS(ReadParquet):
         "arrow_to_pandas": None,
         "pyarrow_strings_enabled": True,
         "kwargs": None,
+        "resource_requirement": None,
         "_partitions": None,
         "_series": False,
         "_dataset_info_cache": None,
@@ -1098,7 +1100,7 @@ class ReadParquetPyarrowFS(ReadParquet):
             return
         if isinstance(parent, FusedParquetIO):
             return
-        return parent.substitute(self, FusedParquetIO(self))
+        return parent.substitute(self, FusedParquetIO(self, self.resource_requirement))
 
     @cached_property
     def fragments(self):
@@ -1253,6 +1255,7 @@ class ReadParquetFSSpec(ReadParquet):
         "filesystem",
         "engine",
         "kwargs",
+        "resource_requirement",
         "_partitions",
         "_series",
         "_dataset_info_cache",
@@ -1273,6 +1276,7 @@ class ReadParquetFSSpec(ReadParquet):
         "filesystem": "fsspec",
         "engine": "pyarrow",
         "kwargs": None,
+        "resource_requirement": None,
         "_partitions": None,
         "_series": False,
         "_dataset_info_cache": None,
