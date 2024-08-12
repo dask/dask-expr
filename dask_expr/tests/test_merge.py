@@ -1047,7 +1047,7 @@ def test_mismatching_meta():
     result = df1.join(df2)
     assert_eq(result, df1.compute().join(df2.compute()), check_index=False)
 
-    
+
 def test_merge_tuple_left_on():
     df = pd.DataFrame(
         {
