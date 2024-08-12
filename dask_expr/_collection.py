@@ -4,10 +4,10 @@ import datetime
 import functools
 import inspect
 import warnings
-from collections.abc import Callable, Hashable, Mapping
+from collections.abc import Callable, Hashable, Iterable, Mapping
 from functools import wraps
 from numbers import Integral, Number
-from typing import Any, ClassVar, Iterable, Literal
+from typing import Any, ClassVar, Literal
 
 import dask.array as da
 import dask.dataframe.methods as methods
@@ -5700,6 +5700,11 @@ def merge(
 
     if on and not left_on and not right_on:
         left_on = right_on = on
+
+    if pd.api.types.is_list_like(left_on) and not isinstance(left_on, FrameBase):
+        left_on = list(left_on)
+    if pd.api.types.is_list_like(right_on) and not isinstance(right_on, FrameBase):
+        right_on = list(right_on)
 
     supported_how = ("left", "right", "outer", "inner", "leftsemi")
     if how not in supported_how:

@@ -2,8 +2,9 @@ import warnings
 
 import numpy as np
 import pytest
+from dask import delayed
 
-from dask_expr import Merge, from_pandas, merge, repartition
+from dask_expr import Merge, from_delayed, from_pandas, merge, repartition
 from dask_expr._expr import Filter, Projection
 from dask_expr._merge import BroadcastJoin
 from dask_expr._shuffle import Shuffle
@@ -1029,3 +1030,40 @@ def test_merge_after_rename(index):
     expected = pleft.merge(right, how="inner")
     result = left.merge(right, how="inner")
     assert_eq(result, expected, check_index=False)
+
+
+def test_mismatching_meta():
+    df1 = from_pandas(pd.DataFrame({"value": [1, 2, 3]}))
+
+    def creator(i):
+        return pd.DataFrame(
+            {"value2": [1, 2, 3]}, index=pd.Index([1, 2, 3], name="index")
+        )
+
+    df2 = from_delayed(
+        [delayed(creator)(i) for i in range(3)],
+        meta=pd.DataFrame({"value2": [1, 2, 3]}),
+    )
+    result = df1.join(df2)
+    assert_eq(result, df1.compute().join(df2.compute()), check_index=False)
+
+
+def test_merge_tuple_left_on():
+    df = pd.DataFrame(
+        {
+            "a": [1, 2, 3] * 5,
+            "b": [1, 2, 3] * 5,
+            "c": ["A"] * 15,
+        },
+    )
+    ddf = from_pandas(df, npartitions=2)
+    assert_eq(
+        ddf.merge(ddf, left_on=("a",), right_on=("a",)),
+        df.merge(df, left_on=("a",), right_on=("a",)),
+        check_index=False,
+    )
+    assert_eq(
+        ddf.merge(ddf, on=("a",)),
+        df.merge(df, on=("a",)),
+        check_index=False,
+    )
