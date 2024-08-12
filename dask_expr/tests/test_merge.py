@@ -1032,7 +1032,7 @@ def test_merge_after_rename(index):
     assert_eq(result, expected, check_index=False)
 
 
-def test_missmatching_meta():
+def test_mismatching_meta():
     df1 = from_pandas(pd.DataFrame({"value": [1, 2, 3]}))
 
     def creator(i):
