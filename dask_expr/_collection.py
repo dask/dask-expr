@@ -5106,7 +5106,6 @@ def read_csv(
     header="infer",
     dtype_backend=None,
     storage_options=None,
-    _legacy_dataframe_backend="pandas",
     **kwargs,
 ):
     from dask_expr.io.csv import ReadCSV
@@ -5120,7 +5119,7 @@ def read_csv(
             storage_options=storage_options,
             kwargs=kwargs,
             header=header,
-            dataframe_backend=_legacy_dataframe_backend,
+            dataframe_backend="pandas",
         )
     )
 
