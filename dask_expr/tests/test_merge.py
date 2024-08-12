@@ -853,6 +853,7 @@ def test_join_consistent_index_names():
     assert result.index.name is None
     assert result._meta.index.name is None
     assert result.partitions[0].compute().index.name is None
+    assert expected.index.name is None
 
 
 @pytest.mark.parametrize("how", ["left", "inner", "right", "outer"])
