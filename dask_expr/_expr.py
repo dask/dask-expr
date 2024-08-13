@@ -1304,14 +1304,11 @@ class _DeepCopy(Elemwise):
 
 
 class ToBackend(Elemwise):
+    operation = None
     _parameters = ["frame", "options"]
     _projection_passthrough = True
     _filter_passthrough = True
     _preserves_partitioning_information = True
-
-    @staticmethod
-    def operation(df, options):
-        raise NotImplementedError()
 
 
 class RenameSeries(Elemwise):

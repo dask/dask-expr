@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from dask.backends import CreationDispatch
 from dask.dataframe.backends import DataFrameBackendEntrypoint
+from dask.dataframe.dispatch import to_pandas_dispatch
 
 from dask_expr._dispatch import get_collection_type
 from dask_expr._expr import ToBackend
@@ -36,8 +37,6 @@ dataframe_creation_dispatch = CreationDispatch(
 class ToPandasBackend(ToBackend):
     @staticmethod
     def operation(df, options):
-        from dask.dataframe.dispatch import to_pandas_dispatch
-
         return to_pandas_dispatch(df, **options)
 
     def _simplify_down(self):
