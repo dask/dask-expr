@@ -738,6 +738,30 @@ class Expr:
 
             yield node
 
+    def collect_task_resources(self) -> dict:
+        resources_annotation = {}
+        stack = [self]
+        seen = set()
+        while stack:
+            node = stack.pop()
+            if node._name in seen:
+                continue
+            seen.add(node._name)
+
+            resources = node._resources
+            if resources is not None:
+                resources_annotation.update(
+                    {
+                        k: (resources(k) if callable(resources) else resources)
+                        for k in node._layer().keys()
+                    }
+                )
+
+            for dep in node.dependencies():
+                stack.append(dep)
+
+        return resources_annotation
+
     def find_operations(self, operation: type | tuple[type]) -> Generator[Expr]:
         """Search the expression graph for a specific operation type
 
