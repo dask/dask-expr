@@ -4,17 +4,17 @@ import datetime
 import functools
 import inspect
 import warnings
-from collections.abc import Callable, Hashable, Mapping
+from collections.abc import Callable, Hashable, Iterable, Mapping
 from functools import wraps
 from numbers import Integral, Number
-from typing import Any, ClassVar, Iterable, Literal
+from typing import Any, ClassVar, Literal
 
 import dask.array as da
 import dask.dataframe.methods as methods
 import numpy as np
 import pandas as pd
 import pyarrow as pa
-from dask import compute, config, get_annotations
+from dask import compute, get_annotations
 from dask.array import Array
 from dask.base import DaskMethodsMixin, is_dask_collection, named_schedulers
 from dask.core import flatten
@@ -5099,6 +5099,7 @@ def from_dask_array(x, columns=None, index=None, meta=None):
     return from_legacy_dataframe(df, optimize=True)
 
 
+@dataframe_creation_dispatch.register_inplace("pandas")
 def read_csv(
     path,
     *args,
@@ -5109,7 +5110,6 @@ def read_csv(
 ):
     from dask_expr.io.csv import ReadCSV
 
-    dataframe_backend = config.get("dataframe.backend", "pandas")
     if not isinstance(path, str):
         path = stringify_path(path)
     return new_collection(
@@ -5119,7 +5119,7 @@ def read_csv(
             storage_options=storage_options,
             kwargs=kwargs,
             header=header,
-            dataframe_backend=dataframe_backend,
+            dataframe_backend="pandas",
         )
     )
 
@@ -5174,6 +5174,7 @@ def read_fwf(
     )
 
 
+@dataframe_creation_dispatch.register_inplace("pandas")
 def read_parquet(
     path=None,
     columns=None,
@@ -5658,6 +5659,11 @@ def merge(
     if on and not left_on and not right_on:
         left_on = right_on = on
 
+    if pd.api.types.is_list_like(left_on) and not isinstance(left_on, FrameBase):
+        left_on = list(left_on)
+    if pd.api.types.is_list_like(right_on) and not isinstance(right_on, FrameBase):
+        right_on = list(right_on)
+
     supported_how = ("left", "right", "outer", "inner", "leftsemi")
     if how not in supported_how:
         raise ValueError(
@@ -5697,7 +5703,7 @@ def merge(
     if left_on and right_on:
         warn_dtype_mismatch(left, right, left_on, right_on)
 
-    return new_collection(
+    result = new_collection(
         Merge(
             left,
             right,
@@ -5713,6 +5719,10 @@ def merge(
             broadcast=broadcast,
         )
     )
+    if left._meta.index.name != right._meta.index.name:
+        return result.rename_axis(index=result._meta.index.name)
+    else:
+        return result
 
 
 @wraps(pd.merge_asof)
