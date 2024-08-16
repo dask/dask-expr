@@ -550,5 +550,5 @@ def test_cat_value_counts_large_unknown_categories():
 
     df = from_pandas(pdf, npartitions=50)
     result = df.x.value_counts()
-    assert result.npartitions == 2  # known but large
+    assert result.npartitions == 3  # known but large
     assert_eq(result, expected, check_index=False, check_dtype=False)

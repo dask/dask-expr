@@ -4237,7 +4237,7 @@ class Series(FrameBase):
             if isinstance(self.dtype, CategoricalDtype):
                 # unobserved or huge categories will lead to oom errors
                 if self.cat.known:
-                    split_out = max(len(self.dtype.categories) // 100_000, 1)
+                    split_out = 1 + len(self.dtype.categories) // 100_000
                 else:
                     split_out = True
             else:
