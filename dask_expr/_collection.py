@@ -907,6 +907,7 @@ Expr={expr}"""
                 for index_col in on
                 if (index_col not in self.columns) and (index_col != self.index.name)
             ]
+
             if bad_cols:
                 raise KeyError(
                     f"Cannot shuffle on {bad_cols}, column(s) not in dataframe to shuffle"
