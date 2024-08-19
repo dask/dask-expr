@@ -1,9 +1,12 @@
+import pytest
 from dask.utils import tmpfile
 
 from dask_expr import from_pandas, read_sql_table
 from dask_expr.tests._util import _backend_library, assert_eq
 
 pd = _backend_library()
+
+pytest.importorskip("sqlalchemy")
 
 
 def test_shuffle_after_read_sql():
