@@ -358,7 +358,7 @@ class ConcatUnindexed(Blockwise):
 
     @staticmethod
     def operation(*args, ignore_order, _kwargs, axis, join):
-        return concat_and_check(args, ignore_order=ignore_order, join=join)
+        return concat_and_check(args, ignore_order=ignore_order)
 
 
 class ConcatIndexed(ConcatUnindexed):
