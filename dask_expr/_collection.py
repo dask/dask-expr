@@ -3650,13 +3650,47 @@ class DataFrame(FrameBase):
         return new_collection(Query(self, expr, kwargs))
 
     @derived_from(pd.DataFrame)
-    def mode(self, dropna=True, split_every=False, numeric_only=False):
-        modes = []
-        for _, col in self.items():
-            if numeric_only and not pd.api.types.is_numeric_dtype(col.dtype):
-                continue
-            modes.append(col.mode(dropna=dropna, split_every=split_every))
-        return concat(modes, axis=1)
+    # GH#11389 - Dask issue related to adding row-wise mode functionality
+    # GH#1136 - Dask-Expr specific implementation for row-wise mode functionality
+    # Contributor: @thyripian
+    def mode(self, axis=0, numeric_only=False, dropna=True, split_every=False):
+        if axis == 0:
+            # Existing logic for axis=0 (column-wise mode)
+            modes = []
+            for _, col in self.items():
+                if numeric_only and not pd.api.types.is_numeric_dtype(col.dtype):
+                    continue
+                modes.append(col.mode(dropna=dropna, split_every=split_every))
+            return concat(modes, axis=1)
+        elif axis == 1:
+            # Implement axis=1 (row-wise mode)
+            num_columns = len(self.columns)  # Maximum possible number of modes per row
+
+            def row_wise_mode(df):
+                result = df.mode(axis=1, numeric_only=numeric_only, dropna=dropna)
+                # Ensure consistent number of columns across all partitions
+                if result.shape[1] < num_columns:
+                    # Pad with NaN columns
+                    for i in range(result.shape[1], num_columns):
+                        result[i] = np.nan
+                elif result.shape[1] > num_columns:
+                    # Trim extra columns
+                    result = result.iloc[:, :num_columns]
+                # Reindex columns to ensure consistent order
+                result = result.reindex(columns=range(num_columns))
+                # Set column data types to float64 to accommodate NaN values
+                result = result.astype('float64')
+                return result
+
+            # Create metadata with the correct number of columns and float64 dtype
+            meta = pd.DataFrame({i: pd.Series(dtype='float64') for i in range(num_columns)})
+
+            return self.map_partitions(
+                row_wise_mode,
+                meta=meta
+            )
+        else:
+            raise ValueError(f"No axis named {axis} for object type {type(self)}")
 
     @derived_from(pd.DataFrame)
     def add_prefix(self, prefix):
