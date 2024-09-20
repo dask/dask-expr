@@ -5428,13 +5428,14 @@ def read_parquet(
             raise NotImplementedError(
                 "split_row_groups is not supported when using the pyarrow filesystem."
             )
-        if blocksize is not None and blocksize != "default":
+        if blocksize is not None and blocksize != "default" and calculate_divisions:
             raise NotImplementedError(
-                "blocksize is not supported when using the pyarrow filesystem."
+                "blocksize is not supported when using the pyarrow filesystem "
+                "if calculate_divisions is set to True."
             )
-        if aggregate_files is not None:
+        if aggregate_files not in (None, True, False):
             raise NotImplementedError(
-                "aggregate_files is not supported when using the pyarrow filesystem."
+                "aggregate_files must be bool or None when using the pyarrow filesystem."
             )
         if parquet_file_extension != (".parq", ".parquet", ".pq"):
             raise NotImplementedError(
@@ -5459,6 +5460,8 @@ def read_parquet(
                 arrow_to_pandas=arrow_to_pandas,
                 pyarrow_strings_enabled=pyarrow_strings_enabled(),
                 kwargs=kwargs,
+                blocksize=blocksize,
+                aggregate_files=aggregate_files,
                 _series=isinstance(columns, str),
             )
         )

@@ -829,10 +829,11 @@ class ReadParquetPyarrowFS(ReadParquet):
         "arrow_to_pandas",
         "pyarrow_strings_enabled",
         "kwargs",
+        "blocksize",
+        "aggregate_files",
         "_partitions",
         "_series",
         "_dataset_info_cache",
-        "_blocksize",
     ]
     _defaults = {
         "columns": None,
@@ -846,13 +847,28 @@ class ReadParquetPyarrowFS(ReadParquet):
         "arrow_to_pandas": None,
         "pyarrow_strings_enabled": True,
         "kwargs": None,
+        "blocksize": None,
+        "aggregate_files": None,
         "_partitions": None,
         "_series": False,
         "_dataset_info_cache": None,
-        "_blocksize": "256MiB",
     }
     _absorb_projections = True
     _filter_passthrough = True
+
+    @cached_property
+    def _blocksize(self):
+        if self.blocksize == "default":
+            if self.calculate_divisions:
+                # Not supported yet
+                return None
+            return "256MiB"
+        return self.blocksize
+
+    @property
+    def _aggregate_files(self):
+        # Allow file aggregation by default
+        return self.aggregate_files is not None
 
     @cached_property
     def normalized_path(self):
@@ -1102,7 +1118,9 @@ class ReadParquetPyarrowFS(ReadParquet):
             if isinstance(parent, SplitParquetIO):
                 return
             return parent.substitute(self, SplitParquetIO(self))
-        if not self._aggregate_files or self._fusion_compression_factor >= 1:
+        if not self._aggregate_files:
+            return
+        if self._fusion_compression_factor >= 1:
             return
         if isinstance(parent, FusedParquetIO):
             return
@@ -1156,7 +1174,12 @@ class ReadParquetPyarrowFS(ReadParquet):
             dask.config.get("dataframe.parquet.minimum-partition-size")
         )
         total_uncompressed = max(total_uncompressed, min_size)
-        return max(after_projection / total_uncompressed, 0.001)
+        ratio = after_projection / total_uncompressed
+
+        if self._blocksize:
+            ratio *= total_uncompressed / parse_bytes(self._blocksize)
+
+        return max(ratio, 0.001)
 
     @property
     def _split_division_factor(self) -> int:
