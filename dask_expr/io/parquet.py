@@ -859,16 +859,13 @@ class ReadParquetPyarrowFS(ReadParquet):
     @cached_property
     def _blocksize(self):
         if self.blocksize == "default":
-            if self.calculate_divisions:
-                # Not supported yet
-                return None
-            return "256MiB"
+            return None
         return self.blocksize
 
     @property
     def _aggregate_files(self):
         # Allow file aggregation by default
-        return self.aggregate_files is not None
+        return self.aggregate_files is not False
 
     @cached_property
     def normalized_path(self):
@@ -1173,11 +1170,14 @@ class ReadParquetPyarrowFS(ReadParquet):
         min_size = parse_bytes(
             dask.config.get("dataframe.parquet.minimum-partition-size")
         )
-        total_uncompressed = max(total_uncompressed, min_size)
-        ratio = after_projection / total_uncompressed
-
         if self._blocksize:
-            ratio *= total_uncompressed / parse_bytes(self._blocksize)
+            # Use blocksize to calculate the compression factor
+            blocksize = max(parse_bytes(self._blocksize), min_size)
+            ratio = after_projection / blocksize
+        else:
+            # Aggregate files to preserve un-projected partition size
+            total_uncompressed = max(total_uncompressed, min_size)
+            ratio = after_projection / total_uncompressed
 
         return max(ratio, 0.001)
 
