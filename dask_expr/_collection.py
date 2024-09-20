@@ -3679,16 +3679,15 @@ class DataFrame(FrameBase):
                 # Reindex columns to ensure consistent order
                 result = result.reindex(columns=range(num_columns))
                 # Set column data types to float64 to accommodate NaN values
-                result = result.astype('float64')
+                result = result.astype("float64")
                 return result
 
             # Create metadata with the correct number of columns and float64 dtype
-            meta = pd.DataFrame({i: pd.Series(dtype='float64') for i in range(num_columns)})
-
-            return self.map_partitions(
-                row_wise_mode,
-                meta=meta
+            meta = pd.DataFrame(
+                {i: pd.Series(dtype="float64") for i in range(num_columns)}
             )
+
+            return self.map_partitions(row_wise_mode, meta=meta)
         else:
             raise ValueError(f"No axis named {axis} for object type {type(self)}")
 
