@@ -865,7 +865,7 @@ class ReadParquetPyarrowFS(ReadParquet):
     def _blocksize(self):
         if self.blocksize == "default":
             return None
-        return self.blocksize
+        return parse_bytes(self.blocksize)
 
     @property
     def _aggregate_files(self):
@@ -1187,7 +1187,7 @@ class ReadParquetPyarrowFS(ReadParquet):
             if col["path_in_schema"] in col_op:
                 after_projection += col["total_uncompressed_size"]
 
-        max_size = parse_bytes(self._blocksize)
+        max_size = self._blocksize
         max_splits = max(math.floor(approx_stats["num_row_groups"]), 1)
         if after_projection <= max_size:
             return 1
