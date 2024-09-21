@@ -1172,19 +1172,11 @@ class ReadParquetPyarrowFS(ReadParquet):
             if col["path_in_schema"] in col_op:
                 after_projection += col["total_uncompressed_size"]
 
-        min_size = parse_bytes(
+        target_size = self._blocksize or parse_bytes(
             dask.config.get("dataframe.parquet.minimum-partition-size")
         )
-        if self._blocksize:
-            # Use blocksize to calculate the compression factor
-            blocksize = max(parse_bytes(self._blocksize), min_size)
-            ratio = after_projection / blocksize
-        else:
-            # Aggregate files to preserve un-projected partition size
-            total_uncompressed = max(total_uncompressed, min_size)
-            ratio = after_projection / total_uncompressed
-
-        return max(ratio, 0.001)
+        total_uncompressed = max(total_uncompressed, target_size)
+        return max(after_projection / total_uncompressed, 0.001)
 
     @property
     def _split_division_factor(self) -> int:
