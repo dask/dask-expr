@@ -5209,12 +5209,15 @@ def read_parquet(
     .. note::
         Dask automatically resizes partitions to ensure that each partition is of
         adequate size. The optimizer uses the ratio of selected columns to total
-        columns to squash multiple files into one partition.
+        columns to squash multiple files into one partition. If the ``blocksize``
+        argument is specified,
 
         Additionally, the Optimizer uses a minimum size per partition (default 75MB)
         to avoid too many small partitions. This configuration can be set with
 
         >>> dask.config.set({"dataframe.parquet.minimum-partition-size": "100MB"})
+
+        To disable file aggregation, set ``aggregate_files=False`` explicitly.
 
     .. note::
         Specifying ``filesystem="arrow"`` leverages a complete reimplementation of
@@ -5313,9 +5316,20 @@ def read_parquet(
         set the default value of ``split_row_groups`` (using row-group metadata
         from a single file), and will be ignored if ``split_row_groups`` is not
         set to 'infer' or 'adaptive'. Default is 256 MiB.
+
+        .. note::
+          If ``filesystem="arrow"`` is specified, the ``blocksize`` value will
+          be used to split files at optimization time, and the default will
+          be ``None``.
+
     aggregate_files : bool or str, default None
         WARNING: Passing a string argument to ``aggregate_files`` will result
         in experimental behavior. This behavior may change in the future.
+
+        .. note::
+          If ``filesystem="arrow"`` is specified, ``aggregate_files`` will be
+          ``True`` by default, and file aggregation will occur at optimization
+          time only.
 
         Whether distinct file paths may be aggregated into the same output
         partition. This parameter is only used when `split_row_groups` is set to

@@ -814,6 +814,11 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             len(_convert_to_list(self.operand("columns"))) / nr_original_columns, 0.001
         )
 
+    def _tune_up(self, parent):
+        if self.aggregate_files is False:
+            return
+        return super()._tune_up(parent)
+
 
 class ReadParquetPyarrowFS(ReadParquet):
     _parameters = [
@@ -1115,7 +1120,7 @@ class ReadParquetPyarrowFS(ReadParquet):
             if isinstance(parent, SplitParquetIO):
                 return
             return parent.substitute(self, SplitParquetIO(self))
-        if not self._aggregate_files:
+        if self._aggregate_files is False:
             return
         if self._fusion_compression_factor >= 1:
             return
