@@ -5428,7 +5428,7 @@ def read_parquet(
             raise NotImplementedError(
                 "split_row_groups is not supported when using the pyarrow filesystem."
             )
-        if blocksize is not None and blocksize != "default" and calculate_divisions:
+        if blocksize not in (None, "default") and calculate_divisions:
             raise NotImplementedError(
                 "blocksize is not supported when using the pyarrow filesystem "
                 "if calculate_divisions is set to True."
