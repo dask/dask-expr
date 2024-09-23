@@ -5216,6 +5216,12 @@ def read_parquet(
 
         >>> dask.config.set({"dataframe.parquet.minimum-partition-size": "100MB"})
 
+        When ``filesystem="arrow"``, the Optimizer will also use a maximum size
+        per partition (default 256MB) to avoid over-sized partitions. This
+        configuration can be set with
+
+        >>> dask.config.set({"dataframe.parquet.maximum-partition-size": "512MB"})
+
     .. note::
         Specifying ``filesystem="arrow"`` leverages a complete reimplementation of
         the Parquet reader that is solely based on PyArrow. It is significantly faster
@@ -5313,12 +5319,6 @@ def read_parquet(
         set the default value of ``split_row_groups`` (using row-group metadata
         from a single file), and will be ignored if ``split_row_groups`` is not
         set to 'infer' or 'adaptive'. Default is 256 MiB.
-
-        .. note::
-          If ``filesystem="arrow"`` is specified, the ``blocksize`` value will
-          be used to split files at optimization time, and the default will
-          be ``None``.
-
     aggregate_files : bool or str, default None
         WARNING: Passing a string argument to ``aggregate_files`` will result
         in experimental behavior. This behavior may change in the future.
@@ -5434,14 +5434,15 @@ def read_parquet(
             raise NotImplementedError(
                 "split_row_groups is not supported when using the pyarrow filesystem."
             )
-        if blocksize not in (None, "default") and calculate_divisions:
+        if blocksize is not None and blocksize != "default":
             raise NotImplementedError(
-                "blocksize is not supported when using the pyarrow filesystem "
-                "if calculate_divisions is set to True."
+                "blocksize is not supported when using the pyarrow filesystem. "
+                "Please use the 'dataframe.parquet.maximim-partition-size' config."
             )
         if aggregate_files is not None:
             raise NotImplementedError(
-                "aggregate_files is not supported when using the pyarrow filesystem."
+                "aggregate_files is not supported when using the pyarrow filesystem. "
+                "Please use the 'dataframe.parquet.minimim-partition-size' config."
             )
         if parquet_file_extension != (".parq", ".parquet", ".pq"):
             raise NotImplementedError(
@@ -5466,7 +5467,6 @@ def read_parquet(
                 arrow_to_pandas=arrow_to_pandas,
                 pyarrow_strings_enabled=pyarrow_strings_enabled(),
                 kwargs=kwargs,
-                blocksize=blocksize,
                 _series=isinstance(columns, str),
             )
         )

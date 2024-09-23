@@ -829,7 +829,6 @@ class ReadParquetPyarrowFS(ReadParquet):
         "arrow_to_pandas",
         "pyarrow_strings_enabled",
         "kwargs",
-        "blocksize",
         "_partitions",
         "_series",
         "_dataset_info_cache",
@@ -846,19 +845,12 @@ class ReadParquetPyarrowFS(ReadParquet):
         "arrow_to_pandas": None,
         "pyarrow_strings_enabled": True,
         "kwargs": None,
-        "blocksize": None,
         "_partitions": None,
         "_series": False,
         "_dataset_info_cache": None,
     }
     _absorb_projections = True
     _filter_passthrough = True
-
-    @cached_property
-    def _blocksize(self):
-        if self.blocksize == "default":
-            return None
-        return parse_bytes(self.blocksize)
 
     @cached_property
     def normalized_path(self):
@@ -1104,15 +1096,13 @@ class ReadParquetPyarrowFS(ReadParquet):
         return self._division_from_stats[0]
 
     def _tune_up(self, parent):
-        if self._blocksize is not None and self._split_division_factor > 1:
-            if isinstance(parent, SplitParquetIO):
-                return
+        if isinstance(parent, (FusedParquetIO, SplitParquetIO)):
+            return
+        if self._split_division_factor > 1:
             return parent.substitute(self, SplitParquetIO(self))
-        if self._fusion_compression_factor >= 1:
-            return
-        if isinstance(parent, FusedParquetIO):
-            return
-        return parent.substitute(self, FusedParquetIO(self))
+        if self._fusion_compression_factor < 1:
+            return parent.substitute(self, FusedParquetIO(self))
+        return
 
     @cached_property
     def fragments(self):
@@ -1158,10 +1148,10 @@ class ReadParquetPyarrowFS(ReadParquet):
             if col["path_in_schema"] in col_op:
                 after_projection += col["total_uncompressed_size"]
 
-        target_size = self._blocksize or parse_bytes(
+        min_size = parse_bytes(
             dask.config.get("dataframe.parquet.minimum-partition-size")
         )
-        total_uncompressed = max(total_uncompressed, target_size)
+        total_uncompressed = max(total_uncompressed, min_size)
         return max(after_projection / total_uncompressed, 0.001)
 
     @property
@@ -1173,12 +1163,14 @@ class ReadParquetPyarrowFS(ReadParquet):
             if col["path_in_schema"] in col_op:
                 after_projection += col["total_uncompressed_size"]
 
-        max_size = self._blocksize
-        max_splits = max(math.floor(approx_stats["num_row_groups"]), 1)
+        max_size = parse_bytes(
+            dask.config.get("dataframe.parquet.maximum-partition-size", "256 MB")
+        )
         if after_projection <= max_size:
             return 1
-        else:
-            return min(math.ceil(after_projection / max_size), max_splits)
+
+        max_splits = max(math.floor(approx_stats["num_row_groups"]), 1)
+        return min(math.ceil(after_projection / max_size), max_splits)
 
     def _filtered_task(self, index: int):
         columns = self.columns.copy()
