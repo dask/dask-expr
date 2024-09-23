@@ -5209,15 +5209,12 @@ def read_parquet(
     .. note::
         Dask automatically resizes partitions to ensure that each partition is of
         adequate size. The optimizer uses the ratio of selected columns to total
-        columns to squash multiple files into one partition. If the ``blocksize``
-        argument is specified,
+        columns to squash multiple files into one partition.
 
         Additionally, the Optimizer uses a minimum size per partition (default 75MB)
         to avoid too many small partitions. This configuration can be set with
 
         >>> dask.config.set({"dataframe.parquet.minimum-partition-size": "100MB"})
-
-        To disable file aggregation, set ``aggregate_files=False`` explicitly.
 
     .. note::
         Specifying ``filesystem="arrow"`` leverages a complete reimplementation of
@@ -5325,11 +5322,6 @@ def read_parquet(
     aggregate_files : bool or str, default None
         WARNING: Passing a string argument to ``aggregate_files`` will result
         in experimental behavior. This behavior may change in the future.
-
-        .. note::
-          If ``filesystem="arrow"`` is specified, ``aggregate_files`` will be
-          ``True`` by default, and file aggregation will occur at optimization
-          time only.
 
         Whether distinct file paths may be aggregated into the same output
         partition. This parameter is only used when `split_row_groups` is set to
@@ -5447,9 +5439,9 @@ def read_parquet(
                 "blocksize is not supported when using the pyarrow filesystem "
                 "if calculate_divisions is set to True."
             )
-        if aggregate_files not in (None, True, False):
+        if aggregate_files is not None:
             raise NotImplementedError(
-                "aggregate_files must be bool or None when using the pyarrow filesystem."
+                "aggregate_files is not supported when using the pyarrow filesystem."
             )
         if parquet_file_extension != (".parq", ".parquet", ".pq"):
             raise NotImplementedError(
@@ -5475,7 +5467,6 @@ def read_parquet(
                 pyarrow_strings_enabled=pyarrow_strings_enabled(),
                 kwargs=kwargs,
                 blocksize=blocksize,
-                aggregate_files=aggregate_files,
                 _series=isinstance(columns, str),
             )
         )

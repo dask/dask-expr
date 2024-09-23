@@ -133,27 +133,6 @@ def test_pyarrow_filesystem_blocksize(tmpdir):
     assert_eq(df, pdf, check_index=False)
 
 
-@pytest.mark.parametrize("aggregate_files", [True, False])
-def test_pyarrow_filesystem_aggregate_files(tmpdir, aggregate_files):
-    df0 = from_pandas(
-        pd.DataFrame({c: range(0, 20) for c in "abcde"}),
-        npartitions=2,
-    )
-    path = tmpdir + "aggregate.parquet"
-    df0.to_parquet(path)
-    df = read_parquet(
-        path,
-        filesystem="pyarrow",
-        blocksize="1MiB",
-        aggregate_files=aggregate_files,
-    )
-
-    # Trigger "_tune_up" optimization
-    df = df.map_partitions(lambda x: x)
-    assert df.optimize().npartitions == 1 if aggregate_files else 2
-    assert_eq(df, df0, check_index=False, check_divisions=False)
-
-
 @pytest.mark.parametrize("dtype_backend", ["pyarrow", "numpy_nullable", None])
 def test_pyarrow_filesystem_dtype_backend(parquet_file, dtype_backend):
     filesystem = fs.LocalFileSystem()

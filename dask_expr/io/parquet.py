@@ -814,11 +814,6 @@ class ReadParquet(PartitionsFiltered, BlockwiseIO):
             len(_convert_to_list(self.operand("columns"))) / nr_original_columns, 0.001
         )
 
-    def _tune_up(self, parent):
-        if self.aggregate_files is False:
-            return
-        return super()._tune_up(parent)
-
 
 class ReadParquetPyarrowFS(ReadParquet):
     _parameters = [
@@ -835,7 +830,6 @@ class ReadParquetPyarrowFS(ReadParquet):
         "pyarrow_strings_enabled",
         "kwargs",
         "blocksize",
-        "aggregate_files",
         "_partitions",
         "_series",
         "_dataset_info_cache",
@@ -853,7 +847,6 @@ class ReadParquetPyarrowFS(ReadParquet):
         "pyarrow_strings_enabled": True,
         "kwargs": None,
         "blocksize": None,
-        "aggregate_files": None,
         "_partitions": None,
         "_series": False,
         "_dataset_info_cache": None,
@@ -866,11 +859,6 @@ class ReadParquetPyarrowFS(ReadParquet):
         if self.blocksize == "default":
             return None
         return parse_bytes(self.blocksize)
-
-    @property
-    def _aggregate_files(self):
-        # Allow file aggregation by default
-        return self.aggregate_files is not False
 
     @cached_property
     def normalized_path(self):
@@ -1120,8 +1108,6 @@ class ReadParquetPyarrowFS(ReadParquet):
             if isinstance(parent, SplitParquetIO):
                 return
             return parent.substitute(self, SplitParquetIO(self))
-        if self._aggregate_files is False:
-            return
         if self._fusion_compression_factor >= 1:
             return
         if isinstance(parent, FusedParquetIO):
