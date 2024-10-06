@@ -3664,19 +3664,22 @@ class DataFrame(FrameBase):
             return concat(modes, axis=1)
         elif axis == 1:
             # Use self._meta_nonempty to generate meta
-            meta = self._meta_nonempty.mode(axis=1, numeric_only=numeric_only, dropna=dropna)
-            
+            meta = self._meta_nonempty.mode(
+                axis=1, numeric_only=numeric_only, dropna=dropna
+            )
+
             # Determine the maximum number of modes any row can have
             max_modes = len(self.columns)
-            
+
             # Reindex meta to have the maximum number of columns
             meta = meta.reindex(columns=range(max_modes))
-            
+
             # Apply map_partitions using pandas' mode function directly
             return self.map_partitions(
-                lambda df: df.mode(axis=1, numeric_only=numeric_only, dropna=dropna)
-                            .reindex(columns=range(max_modes)),
-                meta=meta
+                lambda df: df.mode(
+                    axis=1, numeric_only=numeric_only, dropna=dropna
+                ).reindex(columns=range(max_modes)),
+                meta=meta,
             )
         else:
             raise ValueError(f"No axis named {axis} for object type {type(self)}")
