@@ -1269,9 +1269,11 @@ class RenameFrame(Elemwise):
             columns = _convert_to_list(columns)
             frame_columns = set(self.frame.columns)
             columns = [
-                reverse_mapping[col]
-                if col in reverse_mapping and reverse_mapping[col] in frame_columns
-                else col
+                (
+                    reverse_mapping[col]
+                    if col in reverse_mapping and reverse_mapping[col] in frame_columns
+                    else col
+                )
                 for col in columns
             ]
             columns = [col for col in self.frame.columns if col in columns]
@@ -2342,9 +2344,11 @@ class AddPrefix(Elemwise):
     @functools.cached_property
     def unique_partition_mapping_columns_from_shuffle(self):
         return {
-            f"{self.prefix}{c}"
-            if not isinstance(c, tuple)
-            else tuple(self.prefix + t for t in c)
+            (
+                f"{self.prefix}{c}"
+                if not isinstance(c, tuple)
+                else tuple(self.prefix + t for t in c)
+            )
             for c in self.frame.unique_partition_mapping_columns_from_shuffle
         }
 
@@ -2373,9 +2377,11 @@ class AddSuffix(AddPrefix):
     @functools.cached_property
     def unique_partition_mapping_columns_from_shuffle(self):
         return {
-            f"{c}{self.suffix}"
-            if not isinstance(c, tuple)
-            else tuple(t + self.suffix for t in c)
+            (
+                f"{c}{self.suffix}"
+                if not isinstance(c, tuple)
+                else tuple(t + self.suffix for t in c)
+            )
             for c in self.frame.unique_partition_mapping_columns_from_shuffle
         }
 
@@ -2421,9 +2427,11 @@ class Head(Expr):
     def _simplify_down(self):
         if isinstance(self.frame, Elemwise):
             operands = [
-                Head(op, self.n, self.operand("npartitions"))
-                if isinstance(op, Expr) and not isinstance(op, _DelayedExpr)
-                else op
+                (
+                    Head(op, self.n, self.operand("npartitions"))
+                    if isinstance(op, Expr) and not isinstance(op, _DelayedExpr)
+                    else op
+                )
                 for op in self.frame.operands
             ]
             return type(self.frame)(*operands)
