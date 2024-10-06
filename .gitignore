@@ -10,3 +10,4 @@ bench/shakespeare.txt
 .idea/
 .ipynb_checkpoints/
 coverage.xml
+venv/
