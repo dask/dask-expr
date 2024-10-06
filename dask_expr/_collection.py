@@ -3663,31 +3663,21 @@ class DataFrame(FrameBase):
                 modes.append(col.mode(dropna=dropna, split_every=split_every))
             return concat(modes, axis=1)
         elif axis == 1:
-            # Implement axis=1 (row-wise mode)
-            num_columns = len(self.columns)  # Maximum possible number of modes per row
+            # The maximum possible number of modes per row is equal to the number of columns
+            num_columns = len(self.columns)
 
-            def row_wise_mode(df):
-                result = df.mode(axis=1, numeric_only=numeric_only, dropna=dropna)
-                # Ensure consistent number of columns across all partitions
-                if result.shape[1] < num_columns:
-                    # Pad with NaN columns
-                    for i in range(result.shape[1], num_columns):
-                        result[i] = np.nan
-                elif result.shape[1] > num_columns:
-                    # Trim extra columns
-                    result = result.iloc[:, :num_columns]
-                # Reindex columns to ensure consistent order
-                result = result.reindex(columns=range(num_columns))
-                # Set column data types to float64 to accommodate NaN values
-                result = result.astype("float64")
-                return result
+            # Create metadata DataFrame with the correct number of columns
+            # Use the first column's dtype as a representative dtype
+            mode_dtype = self._meta.dtypes[0] if len(self.columns) > 0 else float
+            meta = pd.DataFrame(columns=range(num_columns), dtype=mode_dtype)
 
-            # Create metadata with the correct number of columns and float64 dtype
-            meta = pd.DataFrame(
-                {i: pd.Series(dtype="float64") for i in range(num_columns)}
+            # Apply map_partitions and reindex to ensure consistent columns
+            return self.map_partitions(
+                lambda df: df.mode(
+                    axis=1, numeric_only=numeric_only, dropna=dropna
+                ).reindex(columns=range(num_columns), fill_value=np.nan),
+                meta=meta,
             )
-
-            return self.map_partitions(row_wise_mode, meta=meta)
         else:
             raise ValueError(f"No axis named {axis} for object type {type(self)}")
 
