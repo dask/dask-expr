@@ -3663,20 +3663,20 @@ class DataFrame(FrameBase):
                 modes.append(col.mode(dropna=dropna, split_every=split_every))
             return concat(modes, axis=1)
         elif axis == 1:
-            # The maximum possible number of modes per row is equal to the number of columns
-            num_columns = len(self.columns)
-
-            # Create metadata DataFrame with the correct number of columns
-            # Use the first column's dtype as a representative dtype
-            mode_dtype = self._meta.dtypes[0] if len(self.columns) > 0 else float
-            meta = pd.DataFrame(columns=range(num_columns), dtype=mode_dtype)
-
-            # Apply map_partitions and reindex to ensure consistent columns
+            # Use self._meta_nonempty to generate meta
+            meta = self._meta_nonempty.mode(axis=1, numeric_only=numeric_only, dropna=dropna)
+            
+            # Determine the maximum number of modes any row can have
+            max_modes = len(self.columns)
+            
+            # Reindex meta to have the maximum number of columns
+            meta = meta.reindex(columns=range(max_modes))
+            
+            # Apply map_partitions using pandas' mode function directly
             return self.map_partitions(
-                lambda df: df.mode(
-                    axis=1, numeric_only=numeric_only, dropna=dropna
-                ).reindex(columns=range(num_columns), fill_value=np.nan),
-                meta=meta,
+                lambda df: df.mode(axis=1, numeric_only=numeric_only, dropna=dropna)
+                            .reindex(columns=range(max_modes)),
+                meta=meta
             )
         else:
             raise ValueError(f"No axis named {axis} for object type {type(self)}")
