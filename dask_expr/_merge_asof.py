@@ -120,7 +120,7 @@ class MergeAsof(Merge):
 
         if left.npartitions == right.npartitions == 1:
             return MapPartitions(
-                left,
+                self.left,
                 pd.merge_asof,
                 self._meta,
                 True,
@@ -130,7 +130,7 @@ class MergeAsof(Merge):
                 None,
                 None,
                 self._kwargs,
-                right,
+                self.right,
             )
 
         if all(map(pd.isnull, left.divisions)):
