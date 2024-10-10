@@ -129,7 +129,7 @@ class MergeAsof(Merge):
                 True,
                 None,
                 None,
-                {"left_index": True, "right_index": True, "direction": self.direction},
+                self._kwargs,
                 right,
             )
 
