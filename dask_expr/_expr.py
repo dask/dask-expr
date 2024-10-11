@@ -2624,12 +2624,7 @@ class Binop(Elemwise):
         return [self.left, self.right]
 
     def _divisions(self):
-        if self._broadcastable and len(self.dependencies()) == 2:
-            if self.left.ndim < self.right.ndim:
-                return self.right.divisions
-            else:
-                return self.left.divisions
-        elif is_index_like(self._meta):
+        if is_index_like(self._meta):
             left_divisions = (
                 pd.Series(self.left.divisions)
                 if isinstance(self.left, Expr)
@@ -2642,6 +2637,11 @@ class Binop(Elemwise):
             )
 
             return tuple(self.operation(left_divisions, right_divisions))
+        elif self._broadcastable and len(self.dependencies()) == 2:
+            if self.left.ndim < self.right.ndim:
+                return self.right.divisions
+            else:
+                return self.left.divisions
         else:
             return super()._divisions()
 
