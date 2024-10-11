@@ -2580,6 +2580,17 @@ class BlockwiseTailIndex(BlockwiseTail):
 class Binop(Elemwise):
     _parameters = ["left", "right"]
 
+    @functools.cached_property
+    def _broadcastable(self):
+        deps = self.dependencies()
+        return (
+            1 in {dep.npartitions for dep in deps}
+            and len({dep.ndim for dep in deps}) == 2
+        )
+
+    def _broadcast_dep(self, dep: Expr):
+        return self._broadcastable
+
     def __str__(self):
         return f"{self.left} {self._operator_repr} {self.right}"
 
