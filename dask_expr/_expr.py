@@ -2588,9 +2588,6 @@ class Binop(Elemwise):
             and len({dep.ndim for dep in deps}) == 2
         )
 
-    def _broadcast_dep(self, dep: Expr):
-        return self._broadcastable
-
     def __str__(self):
         return f"{self.left} {self._operator_repr} {self.right}"
 
@@ -2627,7 +2624,12 @@ class Binop(Elemwise):
         return [self.left, self.right]
 
     def _divisions(self):
-        if is_index_like(self._meta):
+        if self._broadcastable and len(self.dependencies()) == 2:
+            if self.left.ndim < self.right.ndim:
+                return self.right.divisions
+            else:
+                return self.left.divisions
+        elif is_index_like(self._meta):
             left_divisions = (
                 pd.Series(self.left.divisions)
                 if isinstance(self.left, Expr)
