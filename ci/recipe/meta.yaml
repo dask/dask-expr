@@ -24,7 +24,7 @@ requirements:
     - dask-core {{ dask_version }}
     - versioneer =0.28
     - setuptools >=62.6
-    - tomli
+    - tomli # [py<311]
   run:
     - python >=3.10
     - {{ pin_compatible('dask-core', max_pin='x.x.x.x') }}
