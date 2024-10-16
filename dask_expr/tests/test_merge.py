@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from dask import delayed
 
-from dask_expr import Merge, from_delayed, from_pandas, merge, repartition
+from dask_expr import Merge, from_delayed, from_dict, from_pandas, merge, repartition
 from dask_expr._expr import Filter, Projection
 from dask_expr._merge import BroadcastJoin
 from dask_expr._shuffle import Shuffle
@@ -1083,3 +1083,17 @@ def test_merge_tuple_left_on():
         df.merge(df, on=("a",)),
         check_index=False,
     )
+
+
+def test_merged_partitions_filtered():
+    a = from_dict({"x": range(1000), "y": [1, 2, 3, 4] * 250}, npartitions=10)
+    b = from_dict({"xx": range(100), "yy": [1, 2] * 50}, npartitions=3)
+
+    result = a.partitions[:5].merge(
+        b, left_on=["y"], right_on=["yy"], how="inner", broadcast=True
+    )
+    expr = result.optimize(fuse=False).expr
+    assert not expr._filtered
+    assert expr.left._filtered
+    assert expr.divisions == expr._divisions()
+    assert len(expr.divisions) == 6

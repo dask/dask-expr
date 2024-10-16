@@ -9,7 +9,7 @@ from dask.dataframe.utils import assert_eq
 from dask.utils import key_split
 from pyarrow import fs
 
-from dask_expr import from_array, from_dict, from_graph, from_pandas, read_parquet
+from dask_expr import from_array, from_graph, from_pandas, read_parquet
 from dask_expr._expr import Filter, Lengths, Literal
 from dask_expr._reductions import Len
 from dask_expr.io import FusedParquetIO, ReadParquet
@@ -592,16 +592,3 @@ def test_read_parquet_index_projection(tmpdir):
     expected = expected.assign(dts=expected.index - expected.tsprv)
 
     assert_eq(result.dts.min(), expected.dts.min())
-
-
-def test_parquet_partitions_slice(tmpdir, filesystem):
-    with dask.config.set({"dataframe.parquet.minimum-partition-size": "1B"}):
-        a = from_dict(
-            {"x": range(1000), "y": [1, 2, 3, 4] * 250},
-            npartitions=10,
-        )
-        b = read_parquet(_make_file(tmpdir, df=a), filesystem=filesystem).partitions[:5]
-        assert len(b.divisions) == 6
-        assert len(b.optimize().divisions) == 6
-        assert b.divisions == b.expr._divisions()
-        assert b.optimize().divisions == b.optimize().expr._divisions()
