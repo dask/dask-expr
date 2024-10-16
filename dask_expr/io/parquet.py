@@ -1091,7 +1091,12 @@ class ReadParquetPyarrowFS(ReadParquet):
         return self._division_from_stats[1]
 
     def _divisions(self):
-        return self._division_from_stats[0]
+        _from_stats = self._division_from_stats[0]
+        if (_partitions := self.operand("_partitions")) is not None:
+            return tuple(
+                _from_stats[i] for i in _partitions
+            ) + (_from_stats[_partitions[-1] + 1],)
+        return _from_stats
 
     def _tune_up(self, parent):
         if self._fusion_compression_factor >= 1:
@@ -1286,6 +1291,11 @@ class ReadParquetFSSpec(ReadParquet):
         return _engine
 
     def _divisions(self):
+        if (_partitions := self.operand("_partitions")) is not None:
+            _plan = self._plan["divisions"]
+            return tuple(
+                _plan[i] for i in _partitions
+            ) + (_plan[_partitions[-1] + 1],)
         return self._plan["divisions"]
 
     @property
