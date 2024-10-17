@@ -252,7 +252,6 @@ class Merge(Expr):
             meta_index_names = set(self._meta.index.names)
             if (
                 self.broadcast_side == "left"
-                and self.right_index
                 and set(self.right._meta.index.names) == meta_index_names
             ):
                 if self.right_index:
