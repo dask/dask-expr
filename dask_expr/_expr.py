@@ -2645,6 +2645,9 @@ class Binop(Elemwise):
         else:
             return super()._divisions()
 
+    def _broadcast_dep(self, dep: Expr):
+        return dep.npartitions == 1
+
 
 class Add(Binop):
     operation = operator.add
