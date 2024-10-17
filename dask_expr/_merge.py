@@ -252,15 +252,21 @@ class Merge(Expr):
             meta_index_names = set(self._meta.index.names)
             if (
                 self.broadcast_side == "left"
+                and self.right_index
                 and set(self.right._meta.index.names) == meta_index_names
             ):
-                return self._bcast_right.divisions
+                if self.right_index:
+                    return self._bcast_right.divisions
+                _npartitions = self._bcast_right.npartitions
             elif (
                 self.broadcast_side == "right"
                 and set(self.left._meta.index.names) == meta_index_names
             ):
-                return self._bcast_left.divisions
-            _npartitions = max(self.left.npartitions, self.right.npartitions)
+                if self.left_index:
+                    return self._bcast_left.divisions
+                _npartitions = self._bcast_left.npartitions
+            else:
+                _npartitions = max(self.left.npartitions, self.right.npartitions)
 
         else:
             _npartitions = self._npartitions
@@ -718,8 +724,14 @@ class BroadcastJoin(Merge, PartitionsFiltered):
 
     def _divisions(self):
         if self.broadcast_side == "left":
-            return self.right.divisions
-        return self.left.divisions
+            if self.right_index:
+                return self.right.divisions
+            npartitions = self.right.npartitions
+        else:
+            if self.left_index:
+                return self.left.divisions
+            npartitions = self.left.npartitions
+        return (None,) * (npartitions + 1)
 
     def _simplify_up(self, parent, dependents):
         return
