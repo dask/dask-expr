@@ -200,6 +200,92 @@ class FusedParquetIO(FusedIO):
         )
 
 
+class SplitParquetIO(PartitionsFiltered, BlockwiseIO):
+    _parameters = ["_expr", "_partitions"]
+    _defaults = {"_partitions": None}
+
+    @functools.cached_property
+    def _name(self):
+        return (
+            self.operand("_expr")._funcname
+            + "-split-"
+            + _tokenize_deterministic(*self.operands)
+        )
+
+    @functools.cached_property
+    def _meta(self):
+        return self.operand("_expr")._meta
+
+    def dependencies(self):
+        return []
+
+    @property
+    def npartitions(self):
+        if self._filtered:
+            return len(self._partitions)
+        return len(self._split_mapping)
+
+    def _divisions(self):
+        # TODO: Handle this?
+        return (None,) * (len(self._split_mapping) + 1)
+
+    @staticmethod
+    def _load_partial_fragment(
+        local_split_index,
+        local_split_count,
+        frag,
+        filter,
+        columns,
+        schema,
+        *to_pandas_args,
+    ):
+        from dask_expr.io.parquet import ReadParquetPyarrowFS
+
+        return ReadParquetPyarrowFS._table_to_pandas(
+            ReadParquetPyarrowFS._partial_fragment_to_table(
+                frag,
+                local_split_index,
+                local_split_count,
+                filter,
+                columns,
+                schema,
+            ),
+            *to_pandas_args,
+        )
+
+    def _filtered_task(self, index: int):
+        expr = self.operand("_expr")
+        original_index, local_split_index = self._split_mapping[index]
+        _, frag_to_table, *to_pandas_args = expr._task(original_index)
+        return (
+            self._load_partial_fragment,
+            local_split_index,
+            self._local_split_count,
+            frag_to_table[1],  # frag
+            frag_to_table[2],  # filter
+            frag_to_table[3],  # columns
+            frag_to_table[4],  # schema
+            *to_pandas_args,
+        )
+
+    @functools.cached_property
+    def _local_split_count(self):
+        return self.operand("_expr")._split_division_factor
+
+    @functools.cached_property
+    def _split_mapping(self):
+        count = 0
+        mapping = {}
+        for op in self.operand("_expr")._partitions:
+            for s in range(self._local_split_count):
+                mapping[count] = (op, s)  # original partition id, local split index
+                count += 1
+        return mapping
+
+    def _tune_up(self, parent):
+        return
+
+
 class FromMap(PartitionsFiltered, BlockwiseIO):
     _parameters = [
         "func",
