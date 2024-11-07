@@ -5220,6 +5220,12 @@ def read_parquet(
 
         >>> dask.config.set({"dataframe.parquet.minimum-partition-size": "100MB"})
 
+        When ``filesystem="arrow"``, the Optimizer will also use a maximum size
+        per partition (default 256MB) to avoid over-sized partitions. This
+        configuration can be set with
+
+        >>> dask.config.set({"dataframe.parquet.maximum-partition-size": "512MB"})
+
     .. note::
         Specifying ``filesystem="arrow"`` leverages a complete reimplementation of
         the Parquet reader that is solely based on PyArrow. It is significantly faster
@@ -5434,11 +5440,13 @@ def read_parquet(
             )
         if blocksize is not None and blocksize != "default":
             raise NotImplementedError(
-                "blocksize is not supported when using the pyarrow filesystem."
+                "blocksize is not supported when using the pyarrow filesystem. "
+                "Please use the 'dataframe.parquet.maximim-partition-size' config."
             )
         if aggregate_files is not None:
             raise NotImplementedError(
-                "aggregate_files is not supported when using the pyarrow filesystem."
+                "aggregate_files is not supported when using the pyarrow filesystem. "
+                "Please use the 'dataframe.parquet.minimim-partition-size' config."
             )
         if parquet_file_extension != (".parq", ".parquet", ".pq"):
             raise NotImplementedError(

@@ -119,7 +119,19 @@ def test_pyarrow_filesystem(parquet_file):
 
     df_pa = read_parquet(parquet_file, filesystem=filesystem)
     df = read_parquet(parquet_file)
-    assert assert_eq(df, df_pa)
+    assert_eq(df, df_pa)
+
+
+def test_pyarrow_filesystem_max_partition_size(tmpdir):
+    with dask.config.set({"dataframe.parquet.maximum-partition-size": 1}):
+        pdf = pd.DataFrame({c: range(10) for c in "abcde"})
+        fn = _make_file(tmpdir, df=pdf, engine="pyarrow", row_group_size=1)
+        df = read_parquet(fn, filesystem="pyarrow")
+
+        # Trigger "_tune_up" optimization
+        df = df.map_partitions(lambda x: x)
+        assert df.optimize().npartitions == len(pdf)
+        assert_eq(df, pdf, check_index=False)
 
 
 @pytest.mark.parametrize("dtype_backend", ["pyarrow", "numpy_nullable", None])

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import itertools
+import math
 import operator
 import os
 import pickle
@@ -60,7 +61,7 @@ from dask_expr._expr import (
 from dask_expr._reductions import Len
 from dask_expr._util import _convert_to_list, _tokenize_deterministic
 from dask_expr.io import BlockwiseIO, PartitionsFiltered
-from dask_expr.io.io import FusedParquetIO
+from dask_expr.io.io import FusedParquetIO, SplitParquetIO
 
 
 @normalize_token.register(pa.fs.FileInfo)
@@ -1037,6 +1038,7 @@ class ReadParquetPyarrowFS(ReadParquet):
                 dataset_info["using_metadata_file"] = True
                 dataset_info["fragments"] = _frags = list(dataset.get_fragments())
                 dataset_info["file_sizes"] = [None for fi in _frags]
+                dataset_info["all_files"] = all_files
 
         if checksum is None:
             checksum = tokenize(all_files)
@@ -1094,11 +1096,13 @@ class ReadParquetPyarrowFS(ReadParquet):
         return self._division_from_stats[0]
 
     def _tune_up(self, parent):
-        if self._fusion_compression_factor >= 1:
+        if isinstance(parent, (FusedParquetIO, SplitParquetIO)):
             return
-        if isinstance(parent, FusedParquetIO):
-            return
-        return parent.substitute(self, FusedParquetIO(self))
+        if self._split_division_factor > 1:
+            return parent.substitute(self, SplitParquetIO(self))
+        if self._fusion_compression_factor < 1:
+            return parent.substitute(self, FusedParquetIO(self))
+        return
 
     @cached_property
     def fragments(self):
@@ -1150,6 +1154,24 @@ class ReadParquetPyarrowFS(ReadParquet):
         total_uncompressed = max(total_uncompressed, min_size)
         return max(after_projection / total_uncompressed, 0.001)
 
+    @property
+    def _split_division_factor(self) -> int:
+        approx_stats = self.approx_statistics()
+        after_projection = 0
+        col_op = self.operand("columns") or self.columns
+        for col in approx_stats["columns"]:
+            if col["path_in_schema"] in col_op:
+                after_projection += col["total_uncompressed_size"]
+
+        max_size = parse_bytes(
+            dask.config.get("dataframe.parquet.maximum-partition-size", "256 MB")
+        )
+        if after_projection <= max_size:
+            return 1
+
+        max_splits = max(math.floor(approx_stats["num_row_groups"]), 1)
+        return min(math.ceil(after_projection / max_size), max_splits)
+
     def _filtered_task(self, index: int):
         columns = self.columns.copy()
         index_name = self.index.name
@@ -1174,6 +1196,35 @@ class ReadParquetPyarrowFS(ReadParquet):
             self.kwargs.get("dtype_backend"),
             self.pyarrow_strings_enabled,
         )
+
+    @classmethod
+    def _partial_fragment_to_table(
+        cls,
+        fragment_wrapper,
+        local_split_index,
+        local_split_count,
+        filters,
+        columns,
+        schema,
+    ):
+        if isinstance(fragment_wrapper, FragmentWrapper):
+            fragment = fragment_wrapper.fragment
+        else:
+            fragment = fragment_wrapper
+
+        num_row_groups = fragment.num_row_groups
+        stride = max(math.floor(num_row_groups / local_split_count), 1)
+        offset = local_split_index * stride
+        row_groups = list(range(offset, min(offset + stride, num_row_groups)))
+        assert row_groups  # TODO: Handle empty partition case
+        fragment = fragment.format.make_fragment(
+            fragment.path,
+            fragment.filesystem,
+            fragment.partition_expression,
+            row_groups=row_groups,
+        )
+
+        return cls._fragment_to_table(fragment, filters, columns, schema)
 
     @staticmethod
     def _fragment_to_table(fragment_wrapper, filters, columns, schema):
