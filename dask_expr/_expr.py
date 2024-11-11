@@ -3780,19 +3780,13 @@ class Fused(Blockwise):
             seen_keys.add(subname)
             external_deps.update(t.dependencies)
         external_deps -= seen_keys
-        dependencies = {
-            dep: TaskRef(dep)
-            # Note: the method dependencies isn't strictly needed here. We could
-            # also get the list of external dependencies when iterating over the
-            # subgraphs above.
-            for dep in external_deps
-        }
+        dependencies = {dep: TaskRef(dep) for dep in external_deps}
         t = Task(
             name,
             Fused._execute_internal_graph,
             # Wrap the actual subgraph as a data node such that the tasks are
             # not erroneously parsed. The external task would otherwise carry
-            # the internal keys as dependencies which is satisfiable
+            # the internal keys as dependencies which is not satisfiable
             DataNode(None, internal_tasks),
             dependencies,
             (self.exprs[0]._name, index),
