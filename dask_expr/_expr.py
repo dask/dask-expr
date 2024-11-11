@@ -3776,11 +3776,15 @@ class Fused(Blockwise):
 
             assert t.key == subname
             internal_tasks[t.key] = t
+        # The above is ambiguous and we have to cull to get an unambiguous graph
         outkey = (self.exprs[0]._name, index)
         work = [outkey]
         internal_tasks_culled = []
         while work:
             tkey = work.pop()
+            if tkey not in internal_tasks:
+                # External dependency
+                continue
             t = internal_tasks[tkey]
             internal_tasks_culled.append(t)
             work.extend(t.dependencies)
