@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping
 
 import numpy as np
 import pandas as pd
-from dask._task_spec import Alias, DataNode, Task, TaskRef
+from dask._task_spec import Alias, DataNode, Task, TaskRef, execute_graph
 from dask.array import Array
 from dask.core import flatten
 from dask.dataframe import methods
@@ -3777,8 +3777,18 @@ class Fused(Blockwise):
         for i, dep in enumerate(self.dependencies()):
             subgraphs[self._blockwise_arg(dep, index)] = "_" + str(i)
 
-        result = subgraphs.pop((self.exprs[0]._name, index))
-        return result.inline(subgraphs)
+        return Task(
+            name,
+            Fused._execute_subgraph,
+            DataNode(None, subgraphs),
+            (self.exprs[0]._name, index),
+        )
+
+    @staticmethod
+    def _execute_subgraph(dsk, outkey):
+        dsk = dict(dsk)
+        res = execute_graph(dsk, keys=[outkey])
+        return res[outkey]
 
 
 # Used for sorting with None
