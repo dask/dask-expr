@@ -3765,7 +3765,7 @@ class Fused(Blockwise):
         return dep.npartitions == 1
 
     def _task(self, name: Key, index: int) -> Task:
-        internal_tasks = {}
+        internal_tasks = []
         for _expr in self.exprs:
             if self._broadcast_dep(_expr):
                 subname = (_expr._name, 0)
@@ -3774,20 +3774,8 @@ class Fused(Blockwise):
             t = _expr._task(subname, subname[1])
 
             assert t.key == subname
-            internal_tasks[t.key] = t
-        # The above is ambiguous and we have to cull to get an unambiguous graph
-        outkey = (self.exprs[0]._name, index)
-        work = [outkey]
-        internal_tasks_culled = []
-        while work:
-            tkey = work.pop()
-            if tkey not in internal_tasks:
-                # External dependency
-                continue
-            t = internal_tasks[tkey]
-            internal_tasks_culled.append(t)
-            work.extend(t.dependencies)
-        return Task.fuse(*internal_tasks_culled, key=name)
+            internal_tasks.append(t)
+        return Task.fuse(*internal_tasks, key=name)
 
     @staticmethod
     def _execute_internal_graph(internal_tasks, dependencies, outkey):
