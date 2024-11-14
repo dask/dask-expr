@@ -1,6 +1,3 @@
-import rootutils
-rootutils.setup_root(__file__, indicator='.project-root', pythonpath=True)
-
 import fsspec
 import dask.dataframe as dd
 import zipfile
