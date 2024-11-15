@@ -170,7 +170,7 @@ def to_json(
     from dask.dataframe.io.json import to_json
 
     return to_json(
-        df.to_legacy_dataframe(),
+        df,
         url_path,
         orient=orient,
         lines=lines,

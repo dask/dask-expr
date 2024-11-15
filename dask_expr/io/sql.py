@@ -348,7 +348,7 @@ def to_sql(
     from dask.dataframe.io.sql import to_sql as _to_sql
 
     return _to_sql(
-        df.to_legacy_dataframe(),
+        df,
         name=name,
         uri=uri,
         schema=schema,

@@ -70,7 +70,7 @@ def to_orc(
     from dask.dataframe.io import to_orc as _to_orc
 
     return _to_orc(
-        df.to_legacy_dataframe(),
+        df.optimize(),
         path,
         engine=engine,
         write_index=write_index,

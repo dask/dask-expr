@@ -126,7 +126,7 @@ def to_hdf(
     from dask.dataframe.io import to_hdf as _to_hdf
 
     return _to_hdf(
-        df.to_legacy_dataframe(),
+        df.optimize(),
         path,
         key,
         mode=mode,
