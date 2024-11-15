@@ -4826,6 +4826,9 @@ class Scalar(FrameBase):
     def dtype(self):
         return pd.Series(self._meta).dtype
 
+    def to_delayed(self, optimize_graph=True):
+        return super().to_delayed(optimize_graph=optimize_graph)[0]
+
 
 def new_collection(expr):
     """Create new collection from an expr"""
