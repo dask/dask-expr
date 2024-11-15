@@ -230,7 +230,8 @@ def test_parquet_complex_filters(tmpdir):
 @pytest.mark.parametrize("optimize", [True, False])
 def test_from_legacy_dataframe(optimize):
     ddf = dd.from_dict({"a": range(100)}, npartitions=10)
-    df = from_legacy_dataframe(ddf, optimize=optimize)
+    with pytest.warns(FutureWarning, match="is deprecated"):
+        df = from_legacy_dataframe(ddf, optimize=optimize)
     assert isinstance(df.expr, Expr)
     assert_eq(df, ddf)
 

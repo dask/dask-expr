@@ -1,7 +1,6 @@
 import pandas as pd
 from dask.dataframe.utils import insert_meta_param_description
 
-from dask_expr import from_legacy_dataframe
 from dask_expr._backends import dataframe_creation_dispatch
 
 
@@ -98,7 +97,7 @@ def read_json(
     """
     from dask.dataframe.io.json import read_json
 
-    df = read_json(
+    return read_json(
         url_path,
         orient=orient,
         lines=lines,
@@ -114,7 +113,6 @@ def read_json(
         path_converter=path_converter,
         **kwargs,
     )
-    return from_legacy_dataframe(df)
 
 
 def to_json(

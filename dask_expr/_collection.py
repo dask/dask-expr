@@ -5028,6 +5028,12 @@ def from_legacy_dataframe(ddf: _Frame, optimize: bool = True) -> FrameBase:
     optimize
         Whether to optimize the graph before conversion.
     """
+    warnings.warn(
+        "from_legacy_dataframe is deprecated and will be removed in a future release. "
+        "The legacy implementation as a whole is deprecated and will be removed, making "
+        "this method unnecessary.",
+        FutureWarning,
+    )
     graph = ddf.dask
     if optimize:
         graph = ddf.__dask_optimize__(graph, ddf.__dask_keys__())
@@ -5087,8 +5093,7 @@ def from_dask_array(x, columns=None, index=None, meta=None):
         index = index.to_legacy_dataframe()
     if columns is not None and isinstance(columns, list) and not len(columns):
         columns = None
-    df = from_dask_array(x, columns=columns, index=index, meta=meta)
-    return from_legacy_dataframe(df, optimize=True)
+    return from_dask_array(x, columns=columns, index=index, meta=meta)
 
 
 @dataframe_creation_dispatch.register_inplace("pandas")
