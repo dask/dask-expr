@@ -1,6 +1,6 @@
-import fsspec
-import dask.dataframe as dd
 import zipfile
+
+import dask.dataframe as dd
 import fsspec
 from fsspec.archive import AbstractArchiveFileSystem
 
@@ -14,10 +14,10 @@ class ZipFileSystem(AbstractArchiveFileSystem):
         **kwargs,
     ):
         super().__init__(self, **kwargs)
-        fo = fsspec.open(fo, mode='rb')
+        fo = fsspec.open(fo, mode="rb")
         self.of = fo
         self.fo = fo.__enter__()
-        self.zip = zipfile.ZipFile(self.fo, mode='r')
+        self.zip = zipfile.ZipFile(self.fo, mode="r")
         self.dir_cache = None
 
     @classmethod
@@ -38,11 +38,12 @@ class ZipFileSystem(AbstractArchiveFileSystem):
         **kwargs,
     ):
         path = self._strip_protocol(path)
-        out = self.zip.open(path, 'r')
+        out = self.zip.open(path, "r")
         return out
 
-fsspec.register_implementation('tzip', ZipFileSystem)
-with fsspec.open('tzip://a.csv', fo='a.zip') as f:
+
+fsspec.register_implementation("tzip", ZipFileSystem)
+with fsspec.open("tzip://a.csv", fo="a.zip") as f:
     print(f.read(1))
-df = dd.read_csv('tzip://a.csv', storage_options={'fo':'a.zip'})
+df = dd.read_csv("tzip://a.csv", storage_options={"fo": "a.zip"})
 print(df.head())
