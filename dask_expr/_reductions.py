@@ -219,7 +219,7 @@ class ShuffleReduce(Expr):
             ignore_index = not self.shuffle_by_index
         shuffle_npartitions = max(
             chunked.npartitions // split_every,
-            self.split_out,  #
+            self.split_out,
         )
         if self.sort:
             shuffled = SortValues(
