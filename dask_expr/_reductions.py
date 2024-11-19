@@ -219,7 +219,7 @@ class ShuffleReduce(Expr):
             ignore_index = not self.shuffle_by_index
         shuffle_npartitions = max(
             chunked.npartitions // split_every,
-            self.split_out,
+            self.split_out,  #
         )
         if self.sort:
             shuffled = SortValues(
@@ -244,7 +244,8 @@ class ShuffleReduce(Expr):
 
         # Reset the index if we we used it for shuffling
         if split_by_index:
-            shuffled = SetIndexBlockwise(shuffled, split_by, True, None)
+            idx = list(self._meta.index.names) if split_by != ["index"] else split_by
+            shuffled = SetIndexBlockwise(shuffled, idx, True, None)
 
         # Convert back to Series if necessary
         if self.shuffle_by_index is not False:
