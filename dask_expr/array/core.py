@@ -12,14 +12,22 @@ from dask.array.core import (
     getter,
     getter_inline,
     getter_nofancy,
-    graph_from_arraylike,
     normalize_chunks,
     slices_from_chunks,
 )
 from dask.array.utils import meta_from_array
 from dask.base import DaskMethodsMixin, named_schedulers
+from dask.blockwise import blockwise as core_blockwise
 from dask.core import flatten
-from dask.utils import SerializableLock, cached_cumsum, cached_property, key_split
+from dask.highlevelgraph import HighLevelGraph, MaterializedLayer
+from dask.layers import ArraySliceDep
+from dask.utils import (
+    SerializableLock,
+    cached_cumsum,
+    cached_property,
+    has_keyword,
+    key_split,
+)
 from toolz import reduce
 
 from dask_expr import _core as core
@@ -468,6 +476,92 @@ class IO(Array):
     pass
 
 
+def _graph_from_arraylike(
+    arr,  # Any array-like which supports slicing
+    chunks,
+    shape,
+    name,
+    getitem=getter,
+    lock=False,
+    asarray=True,
+    dtype=None,
+    inline_array=False,
+) -> HighLevelGraph:
+    """
+    HighLevelGraph for slicing chunks from an array-like according to a chunk pattern.
+
+    If ``inline_array`` is True, this make a Blockwise layer of slicing tasks where the
+    array-like is embedded into every task.,
+
+    If ``inline_array`` is False, this inserts the array-like as a standalone value in
+    a MaterializedLayer, then generates a Blockwise layer of slicing tasks that refer
+    to it.
+
+    >>> dict(graph_from_arraylike(arr, chunks=(2, 3), shape=(4, 6), name="X", inline_array=True))  # doctest: +SKIP
+    {(arr, 0, 0): (getter, arr, (slice(0, 2), slice(0, 3))),
+     (arr, 1, 0): (getter, arr, (slice(2, 4), slice(0, 3))),
+     (arr, 1, 1): (getter, arr, (slice(2, 4), slice(3, 6))),
+     (arr, 0, 1): (getter, arr, (slice(0, 2), slice(3, 6)))}
+
+    >>> dict(  # doctest: +SKIP
+            graph_from_arraylike(arr, chunks=((2, 2), (3, 3)), shape=(4,6), name="X", inline_array=False)
+        )
+    {"original-X": arr,
+     ('X', 0, 0): (getter, 'original-X', (slice(0, 2), slice(0, 3))),
+     ('X', 1, 0): (getter, 'original-X', (slice(2, 4), slice(0, 3))),
+     ('X', 1, 1): (getter, 'original-X', (slice(2, 4), slice(3, 6))),
+     ('X', 0, 1): (getter, 'original-X', (slice(0, 2), slice(3, 6)))}
+    """
+    chunks = normalize_chunks(chunks, shape, dtype=dtype)
+    out_ind = tuple(range(len(shape)))
+
+    if (
+        has_keyword(getitem, "asarray")
+        and has_keyword(getitem, "lock")
+        and (not asarray or lock)
+    ):
+        kwargs = {"asarray": asarray, "lock": lock}
+    else:
+        # Common case, drop extra parameters
+        kwargs = {}
+
+    if inline_array:
+        layer = core_blockwise(
+            getitem,
+            name,
+            out_ind,
+            arr,
+            None,
+            ArraySliceDep(chunks),
+            out_ind,
+            numblocks={},
+            **kwargs,
+        )
+        return HighLevelGraph.from_collections(name, layer)
+    else:
+        original_name = "original-" + name
+
+        layers = {}
+        layers[original_name] = MaterializedLayer({original_name: arr})
+        layers[name] = core_blockwise(
+            getitem,
+            name,
+            out_ind,
+            original_name,
+            None,
+            ArraySliceDep(chunks),
+            out_ind,
+            numblocks={},
+            **kwargs,
+        )
+
+        deps = {
+            original_name: set(),
+            name: {original_name},
+        }
+        return HighLevelGraph(layers, deps)
+
+
 class FromArray(IO):
     _parameters = [
         "array",
@@ -533,7 +627,7 @@ class FromArray(IO):
                 else:
                     getitem = getter_nofancy
 
-            dsk = graph_from_arraylike(
+            dsk = _graph_from_arraylike(
                 self.array,
                 chunks=self.chunks,
                 shape=self.array.shape,
