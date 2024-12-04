@@ -17,8 +17,8 @@ from dask.array.core import (
 )
 from dask.array.utils import compute_meta
 from dask.base import is_dask_collection
-from dask.blockwise import blockwise as core_blockwise
 from dask.blockwise import _blockwise_unpack_collections_task_spec
+from dask.blockwise import blockwise as core_blockwise
 from dask.tokenize import tokenize
 from dask.utils import cached_property, funcname
 
