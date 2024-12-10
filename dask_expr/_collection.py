@@ -5508,6 +5508,34 @@ def read_parquet(
     )
 
 
+def from_arrow_dataset(
+    dataset,
+    columns=None,
+    filters=None,
+    blocksize="default",
+):
+    """Read a PyArrow Dataset into a Dask DataFrame"""
+    import pyarrow.parquet as pq
+
+    from dask_expr.io.arrow import FromArrowDataset
+
+    if filters is not None:
+        filters = pq.filters_to_expression(filters)
+
+    if blocksize == "default":
+        blocksize = None
+
+    return new_collection(
+        FromArrowDataset(
+            dataset,
+            columns=_convert_to_list(columns),
+            filters=filters,
+            blocksize=blocksize,
+            _series=isinstance(columns, str),
+        )
+    )
+
+
 def concat(
     dfs,
     axis=0,
