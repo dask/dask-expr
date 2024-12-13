@@ -190,22 +190,25 @@ class FromArrowDataset(PartitionsFiltered, BlockwiseIO):
         table_to_dataframe_options = table_to_dataframe_options or {}
         if custom_backend_options:
             raise ValueError(f"Unsupported options: {custom_backend_options}")
+        tables = [
+            cls._fragment_to_table(
+                fragment,
+                filters=filters,
+                columns=columns,
+                schema=schema,
+                split_range=split_range,
+                path_column=path_column,
+                **fragment_to_table_options,
+            )
+            for fragment in fragments
+        ]
         return cls._table_to_dataframe(
             pa.concat_tables(
-                [
-                    cls._fragment_to_table(
-                        fragment,
-                        filters=filters,
-                        columns=columns,
-                        schema=schema,
-                        split_range=split_range,
-                        path_column=path_column,
-                        **fragment_to_table_options,
-                    )
-                    for fragment in fragments
-                ],
+                tables,
                 promote_options="permissive",
-            ),
+            )
+            if len(tables) > 1
+            else tables,
             **table_to_dataframe_options,
         )
 
