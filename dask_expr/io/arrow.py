@@ -66,7 +66,7 @@ class FromArrowDataset(PartitionsFiltered, BlockwiseIO):
         "blocksize",
         "path_column",
         "fragment_to_table_options",
-        "table_to_pandas_options",
+        "table_to_dataframe_options",
         "custom_backend_options",
         "_partitions",
         "_series",
@@ -77,7 +77,7 @@ class FromArrowDataset(PartitionsFiltered, BlockwiseIO):
         "blocksize": None,
         "path_column": None,
         "fragment_to_table_options": None,
-        "table_to_pandas_options": None,
+        "table_to_dataframe_options": None,
         "custom_backend_options": None,
         "_partitions": None,
         "_series": False,
@@ -162,8 +162,8 @@ class FromArrowDataset(PartitionsFiltered, BlockwiseIO):
     def _divisions(self):
         return (None,) * (self._plan.count + 1)
 
-    @staticmethod
-    def _table_to_pandas(table):
+    @classmethod
+    def _table_to_dataframe(cls, table):
         return table.to_pandas()
 
     @cached_property
@@ -181,16 +181,16 @@ class FromArrowDataset(PartitionsFiltered, BlockwiseIO):
         schema,
         path_column,
         fragment_to_table_options,
-        table_to_pandas_options,
+        table_to_dataframe_options,
         custom_backend_options,
         split_range,
     ):
         """Read list of fragments into DataFrame partitions."""
         fragment_to_table_options = fragment_to_table_options or {}
-        table_to_pandas_options = table_to_pandas_options or {}
+        table_to_dataframe_options = table_to_dataframe_options or {}
         if custom_backend_options:
             raise ValueError(f"Unsupported options: {custom_backend_options}")
-        return cls._table_to_pandas(
+        return cls._table_to_dataframe(
             pa.concat_tables(
                 [
                     cls._fragment_to_table(
@@ -206,7 +206,7 @@ class FromArrowDataset(PartitionsFiltered, BlockwiseIO):
                 ],
                 promote_options="permissive",
             ),
-            **table_to_pandas_options,
+            **table_to_dataframe_options,
         )
 
     def _filtered_task(self, name: Key, index: int) -> Task:
@@ -231,9 +231,34 @@ class FromArrowDataset(PartitionsFiltered, BlockwiseIO):
             schema=schema,
             path_column=self.path_column,
             fragment_to_table_options=self.fragment_to_table_options,
-            table_to_pandas_options=self.table_to_pandas_options,
+            table_to_dataframe_options=self.table_to_dataframe_options,
             custom_backend_options=self.custom_backend_options,
             split_range=split_range,
+        )
+
+    @classmethod
+    def _partial_fragment_to_table(
+        cls,
+        fragment,
+        schema,
+        filters,
+        split_index,
+        split_count,
+        options,
+    ):
+        # Partial-file read (default/catch-all logic)
+        filters = _pa_filters(filters)
+        total_rows = fragment.count_rows(filter=filters)
+        n_rows = int(total_rows / split_count)
+        skip_rows = n_rows * split_index
+        if split_index == (split_count - 1):
+            end = total_rows
+        else:
+            end = skip_rows + n_rows
+        return fragment.take(
+            range(skip_rows, end),
+            filter=filters,
+            **options,
         )
 
     @classmethod
@@ -254,27 +279,23 @@ class FromArrowDataset(PartitionsFiltered, BlockwiseIO):
                 if path_column is None
                 else [c for c in columns if c != path_column]
             ),
-            "filter": _pa_filters(filters),
             "batch_size": 10_000_000,
             "fragment_scan_options": cls._scan_options,
             "use_threads": True,
         }
         options.update(fragment_to_table_options)
         if split_range:
-            total_rows = fragment.count_rows(filter=filters)
-            n_rows = int(total_rows / split_range[1])
-            skip_rows = n_rows * split_range[0]
-            if split_range[0] == (split_range[1] - 1):
-                end = total_rows
-            else:
-                end = skip_rows + n_rows
-            table = fragment.take(
-                range(skip_rows, end),
-                **options,
+            table = cls._partial_fragment_to_table(
+                fragment,
+                schema,
+                filters,
+                *split_range,
+                options,
             )
         else:
             table = fragment.to_table(
                 schema=schema,
+                filter=_pa_filters(filters),
                 **options,
             )
         if path_column is None:
@@ -317,3 +338,46 @@ class FromArrowDatasetParquet(FromArrowDataset):
             range_size_limit=parse_bytes("32.00 MiB"),
         ),
     )
+
+    @classmethod
+    def _partial_fragment_to_table(
+        cls,
+        fragment,
+        filters,
+        schema,
+        split_index,
+        split_count,
+        options,
+    ):
+        # Parquet-specific partial read.
+        # (try to align reads with row-groups)
+        total_row_groups = fragment.num_row_groups
+        if total_row_groups < split_count:
+            # Cannot align with row-groups.
+            # Use catch-all logic
+            return FromArrowDataset._partial_fragment_to_table(
+                fragment,
+                filters,
+                schema,
+                split_index,
+                split_count,
+                options,
+            )
+
+        # Align with row-groups
+        rg_stride = total_row_groups // split_count
+        skip_rgs = rg_stride * split_index
+        rgs = list(range(total_row_groups))
+        new_rgs = rgs[skip_rgs : skip_rgs + rg_stride]
+        if split_index == (split_count - 1):
+            new_rgs = rgs[skip_rgs:]
+        filters = _pa_filters(filters)
+        return fragment.subset(
+            fiter=filters,
+            schema=schema,
+            row_group_ids=new_rgs,
+        ).to_table(
+            schema=schema,
+            filter=filters,
+            **options,
+        )
