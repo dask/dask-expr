@@ -5513,24 +5513,24 @@ def from_arrow_dataset(
     columns=None,
     filters=None,
     blocksize="default",
+    path_column=None,
+    fragment_to_table_options=None,
+    table_to_pandas_options=None,
+    custom_backend_options=None,
 ):
     """Read a PyArrow Dataset into a Dask DataFrame"""
-    import pyarrow.parquet as pq
-
     from dask_expr.io.arrow import FromArrowDataset
-
-    if filters is not None:
-        filters = pq.filters_to_expression(filters)
-
-    if blocksize == "default":
-        blocksize = None
 
     return new_collection(
         FromArrowDataset(
             dataset,
             columns=_convert_to_list(columns),
             filters=filters,
-            blocksize=blocksize,
+            blocksize=(None if blocksize == "default" else blocksize),
+            path_column=path_column,
+            fragment_to_table_options=fragment_to_table_options,
+            table_to_pandas_options=table_to_pandas_options,
+            custom_backend_options=custom_backend_options,
             _series=isinstance(columns, str),
         )
     )
