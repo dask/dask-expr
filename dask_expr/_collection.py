@@ -23,6 +23,7 @@ from dask.dataframe.accessor import CachedAccessor
 from dask.dataframe.core import (
     _concat,
     _convert_to_numeric,
+    _Frame,
     _repr_data_series,
     _sqrt_and_convert_to_timedelta,
     check_divisions,
