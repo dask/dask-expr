@@ -11,6 +11,7 @@ import pyarrow.parquet as pq
 from dask._task_spec import Task
 from dask.typing import Key
 from dask.utils import funcname, parse_bytes
+from fsspec.utils import read_block
 
 from dask_expr._expr import Index, Projection, determine_column_projection
 from dask_expr._util import _convert_to_list, _tokenize_deterministic
@@ -208,7 +209,7 @@ class FromArrowDataset(PartitionsFiltered, BlockwiseIO):
                 promote_options="permissive",
             )
             if len(tables) > 1
-            else tables,
+            else tables[0],
             **table_to_dataframe_options,
         )
 
@@ -329,8 +330,105 @@ class FromArrowDataset(PartitionsFiltered, BlockwiseIO):
 
     def _simplify_down(self):
         file_format = self.dataset.format.default_extname
-        if file_format == "parquet":
+        if file_format == "csv":
+            return FromArrowDatasetCSV(*self.operands)
+        elif file_format == "json":
+            return FromArrowDatasetJSON(*self.operands)
+        elif file_format == "parquet":
             return FromArrowDatasetParquet(*self.operands)
+
+
+class FromArrowDatasetCSV(FromArrowDataset):
+    @classmethod
+    def _partial_fragment_to_table(
+        cls,
+        fragment,
+        schema,
+        filters,
+        split_index,
+        split_count,
+        options,
+    ):
+        # Calculate byte range for this read
+        path = fragment.path
+        filesystem = fragment.filesystem
+        size = filesystem.get_file_info(path).size
+        nbytes = size // split_count
+        offset = nbytes * split_index
+        if split_index == (split_count - 1):
+            nbytes = size - offset
+
+        # Handle header and delimiter
+        add_header = b""
+        row_delimiter = b"\n"
+        scan_options = fragment.format.default_fragment_scan_options
+        column_names = scan_options.column_names
+        skip_rows = scan_options.skip_rows
+        if split_index:
+            if not column_names and not skip_rows:
+                add_header = _read_byte_block(
+                    path,
+                    filesystem,
+                    0,
+                    1,
+                    delimiter=row_delimiter,
+                )
+            for _ in range(skip_rows):
+                add_header += row_delimiter
+
+        # Read partial fragment
+        return fragment.format.make_fragment(
+            pa.py_buffer(
+                add_header
+                + _read_byte_block(
+                    path,
+                    filesystem,
+                    offset,
+                    nbytes,
+                    delimiter=row_delimiter,
+                )
+            )
+        ).to_table(
+            filter=filters,
+            **options,
+        )
+
+
+class FromArrowDatasetJSON(FromArrowDataset):
+    @classmethod
+    def _partial_fragment_to_table(
+        cls,
+        fragment,
+        schema,
+        filters,
+        split_index,
+        split_count,
+        options,
+    ):
+        # Calculate byte range for this read
+        path = fragment.path
+        filesystem = fragment.filesystem
+        size = filesystem.get_file_info(path).size
+        nbytes = size // split_count
+        offset = nbytes * split_index
+        if split_index == (split_count - 1):
+            nbytes = size - offset
+
+        # Read partial fragment
+        return fragment.format.make_fragment(
+            pa.py_buffer(
+                _read_byte_block(
+                    path,
+                    filesystem,
+                    offset,
+                    nbytes,
+                    delimiter=b"\n",
+                )
+            )
+        ).to_table(
+            filter=filters,
+            **options,
+        )
 
 
 class FromArrowDatasetParquet(FromArrowDataset):
@@ -384,3 +482,21 @@ class FromArrowDatasetParquet(FromArrowDataset):
             filter=filters,
             **options,
         )
+
+
+def _read_byte_block(
+    path,
+    filesystem,
+    offset,
+    nbytes,
+    delimiter=None,
+):
+    # Use fsspec to read in a delimited byte range
+    with filesystem.open_input_file(path) as f:
+        block = read_block(
+            f,
+            offset,
+            nbytes,
+            delimiter,
+        )
+    return block
