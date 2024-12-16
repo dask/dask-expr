@@ -6522,8 +6522,3 @@ def _compute_partition_stats(
         return (mins, maxes, lens)
     else:
         return (non_empty_mins, non_empty_maxes, lens)
-
-
-@get_parallel_type.register(FrameBase)
-def get_parallel_type_frame(o):
-    return get_parallel_type(o._meta)
