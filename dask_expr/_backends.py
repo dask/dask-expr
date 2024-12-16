@@ -4,8 +4,9 @@ import numpy as np
 import pandas as pd
 from dask.backends import CreationDispatch
 from dask.dataframe.backends import DataFrameBackendEntrypoint
-from dask.dataframe.dispatch import to_pandas_dispatch
+from dask.dataframe.dispatch import get_parallel_type, to_pandas_dispatch
 
+from dask_expr import FrameBase
 from dask_expr._dispatch import get_collection_type
 from dask_expr._expr import ToBackend
 
@@ -130,3 +131,8 @@ def get_collection_type_object(_):
 @get_collection_type.register_lazy("cudf")
 def _register_cudf():
     import dask_cudf  # noqa: F401
+
+
+@get_parallel_type.register(FrameBase)
+def get_parallel_type_frame(o):
+    return get_parallel_type(o._meta)
