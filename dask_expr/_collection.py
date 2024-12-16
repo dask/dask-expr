@@ -32,7 +32,12 @@ from dask.dataframe.core import (
     is_series_like,
     meta_warning,
 )
-from dask.dataframe.dispatch import is_categorical_dtype, make_meta, meta_nonempty
+from dask.dataframe.dispatch import (
+    get_parallel_type,
+    is_categorical_dtype,
+    make_meta,
+    meta_nonempty,
+)
 from dask.dataframe.multi import warn_dtype_mismatch
 from dask.dataframe.utils import (
     AttributeNotImplementedError,
@@ -6517,3 +6522,8 @@ def _compute_partition_stats(
         return (mins, maxes, lens)
     else:
         return (non_empty_mins, non_empty_maxes, lens)
+
+
+@get_parallel_type.register(FrameBase)
+def get_parallel_type_frame(o):
+    return get_parallel_type(o._meta)
