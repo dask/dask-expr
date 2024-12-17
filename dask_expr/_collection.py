@@ -23,7 +23,6 @@ from dask.dataframe.accessor import CachedAccessor
 from dask.dataframe.core import (
     _concat,
     _convert_to_numeric,
-    _Frame,
     _repr_data_series,
     _sqrt_and_convert_to_timedelta,
     check_divisions,
@@ -5772,7 +5771,7 @@ def merge_asof(
     del kwargs["on"]
 
     for o in [left_on, right_on]:
-        if isinstance(o, _Frame):
+        if isinstance(o, FrameBase):
             raise NotImplementedError(
                 "Dask collections not currently allowed in merge columns"
             )
