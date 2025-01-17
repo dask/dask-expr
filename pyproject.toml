@@ -26,15 +26,10 @@ classifiers = [
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "dask == 2024.12.1",
-    "pyarrow>=14.0.1",
-    "pandas >= 2",
+    "dask >= 2025.1.0",
 ]
 
 dynamic = ["version"]
-
-[project.optional-dependencies]
-analyze = ["crick", "distributed", "graphviz"]
 
 [project.urls]
 "Source code" = "https://github.com/dask-contrib/dask-expr/"
