@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=62.6", "versioneer[toml]==0.28"]
+requires = ["setuptools>=62.6"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -25,16 +25,12 @@ classifiers = [
 ]
 readme = "README.md"
 requires-python = ">=3.10"
+version = "2.0.0"
 dependencies = [
-    "dask == 2024.12.1",
-    "pyarrow>=14.0.1",
-    "pandas >= 2",
+    "dask >= 2025.1.0",
 ]
 
-dynamic = ["version"]
-
-[project.optional-dependencies]
-analyze = ["crick", "distributed", "graphviz"]
+dynamic = []
 
 [project.urls]
 "Source code" = "https://github.com/dask-contrib/dask-expr/"
@@ -57,14 +53,6 @@ exclude_lines = [
     "raise NotImplementedError",
 ]
 ignore_errors = true
-
-[tool.versioneer]
-VCS = "git"
-style = "pep440"
-versionfile_source = "dask_expr/_version.py"
-versionfile_build = "dask_expr/_version.py"
-tag_prefix = "v"
-parentdir_prefix = "dask_expr-"
 
 
 [tool.pytest.ini_options]
