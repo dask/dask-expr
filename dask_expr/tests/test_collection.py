@@ -2762,3 +2762,32 @@ def test_to_backend_simplify():
         assert str(df2.expr) != str(df[["y"]].expr)
         df3 = df2.simplify()
         assert str(df3.expr) == str(df[["y"]].expr)
+
+
+def test_add_different_index_one_partition():
+    pdf1 = pd.DataFrame(
+        {
+            "prediction_probability": [1.0] * 2,
+            "prediction": [1, 1],
+            "num_runs": [1, 1],
+            "Idx": [1, 4],
+        }
+    ).set_index("Idx")
+
+    pdf2 = pd.DataFrame(
+        {
+            "prediction_probability": [1.0] * 2,
+            "prediction": [1, 1],
+            "num_runs": [
+                1,
+                1,
+            ],
+            "Idx": [1, 4],
+        }
+    ).set_index("Idx")
+
+    df1 = from_pandas(pdf1)
+    df2 = from_pandas(pdf2)
+    df1["prediction"] = df1.prediction.add(df2.prediction, fill_value=0)
+    pdf1["prediction"] = pdf1.prediction.add(pdf2.prediction, fill_value=0)
+    assert_eq(df1, pdf1)
