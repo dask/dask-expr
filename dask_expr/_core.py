@@ -507,8 +507,6 @@ class Expr:
             if key in _parameters:
                 idx = _parameters.index(key)
                 return self.operands[idx]
-            if is_dataframe_like(self._meta) and key in self._meta.columns:
-                return self[key]
 
             link = "https://github.com/dask-contrib/dask-expr/blob/main/README.md#api-coverage"
             raise AttributeError(
