@@ -3667,13 +3667,39 @@ class DataFrame(FrameBase):
         return new_collection(Query(self, expr, kwargs))
 
     @derived_from(pd.DataFrame)
-    def mode(self, dropna=True, split_every=False, numeric_only=False):
-        modes = []
-        for _, col in self.items():
-            if numeric_only and not pd.api.types.is_numeric_dtype(col.dtype):
-                continue
-            modes.append(col.mode(dropna=dropna, split_every=split_every))
-        return concat(modes, axis=1)
+    # GH#11389 - Dask issue related to adding row-wise mode functionality
+    # GH#1136 - Dask-Expr specific implementation for row-wise mode functionality
+    # Contributor: @thyripian
+    def mode(self, axis=0, numeric_only=False, dropna=True, split_every=False):
+        if axis == 0:
+            # Existing logic for axis=0 (column-wise mode)
+            modes = []
+            for _, col in self.items():
+                if numeric_only and not pd.api.types.is_numeric_dtype(col.dtype):
+                    continue
+                modes.append(col.mode(dropna=dropna, split_every=split_every))
+            return concat(modes, axis=1)
+        elif axis == 1:
+            # Use self._meta_nonempty to generate meta
+            meta = self._meta_nonempty.mode(
+                axis=1, numeric_only=numeric_only, dropna=dropna
+            )
+
+            # Determine the maximum number of modes any row can have
+            max_modes = len(self.columns)
+
+            # Reindex meta to have the maximum number of columns
+            meta = meta.reindex(columns=range(max_modes))
+
+            # Apply map_partitions using pandas' mode function directly
+            return self.map_partitions(
+                lambda df: df.mode(
+                    axis=1, numeric_only=numeric_only, dropna=dropna
+                ).reindex(columns=range(max_modes)),
+                meta=meta,
+            )
+        else:
+            raise ValueError(f"No axis named {axis} for object type {type(self)}")
 
     @derived_from(pd.DataFrame)
     def add_prefix(self, prefix):
